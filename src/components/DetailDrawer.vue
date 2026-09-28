@@ -219,10 +219,9 @@ function downloadJson(text: string | undefined, suffix: string) {
         </div>
         <div v-else class="notice">
           未检测到 ComfyUI / A1111 生成元数据
-          <br />
-          <span style="font-size: 12px; color: var(--text-faint)">
-            这可能不是 AI 生图软件直接导出的原图，或元数据已被裁剪 / 压缩工具清除。
-          </span>
+          <ul v-if="item.raw.hints?.length" class="hints">
+            <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
+          </ul>
         </div>
       </div>
     </div>

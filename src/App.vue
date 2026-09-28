@@ -44,6 +44,15 @@ watch(
 )
 const visibleItems = computed(() => filteredItems.value.slice(0, shown.value))
 const remaining = computed(() => filteredItems.value.length - visibleItems.value.length)
+// 被“来源 / 搜索 / 模型”筛选挡住的已解析图片数量（用于空状态引导）
+const hiddenCount = computed(
+  () => store.items.filter((i) => i.status === 'done').length - filteredItems.value.length,
+)
+function showAll() {
+  store.sourceFilter = 'all'
+  store.search = ''
+  store.modelFilter = null
+}
 
 /* ---------- 详情 ---------- */
 const current = ref<ImageItem | null>(null)
@@ -143,7 +152,7 @@ async function onDrop(e: DragEvent) {
               @open="open(it)"
             />
           </div>
-          <EmptyState v-else :filtered="store.items.length > 0" />
+          <EmptyState v-else :filtered="store.items.length > 0" :hidden-count="hiddenCount" @show-all="showAll" />
           <div v-if="remaining > 0" class="more-row">
             <NButton size="small" secondary @click="shown += PAGE">
               加载更多（还有 {{ remaining }} 张）

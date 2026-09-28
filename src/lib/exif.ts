@@ -76,21 +76,23 @@ export function extractUserCommentFromTiff(tiff: Uint8Array): Uint8Array | null 
   return null
 }
 
-/** 从 JPEG 字节中找到 Exif APP1 段内的 TIFF 数据 */
-export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
-  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+const XMP_JPEG_PREFIX = 'http://ns.adobe.com/xap/1.0/\u0000'
+
+/** JPEG 段扫描：EXIF TIFF 数据 + 是否含 Adobe XMP（用于诊断） */
+export function scanJpeg(bytes: Uint8Array): { exifTiff: Uint8Array | null; hasXmp: boolean } {
+  const out: { exifTiff: Uint8Array | null; hasXmp: boolean } = { exifTiff: null, hasXmp: false }
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return out
   let pos = 2
   while (pos + 4 <= bytes.length) {
-    if (bytes[pos] !== 0xff) return null
+    if (bytes[pos] !== 0xff) return out
     const marker = bytes[pos + 1]
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       pos += 2
       continue
     }
-    if (marker === 0xda) return null // 扫描数据开始，之后不会再有 EXIF
-    if (pos + 4 > bytes.length) return null
+    if (marker === 0xda) return out // 扫描数据开始，之后不会再有元数据
     const segLen = (bytes[pos + 2] << 8) | bytes[pos + 3]
-    if (segLen < 2) return null
+    if (segLen < 2) return out
     if (marker === 0xe1) {
       const seg = bytes.subarray(pos + 4, pos + 2 + segLen)
       if (
@@ -102,29 +104,88 @@ export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
         seg[4] === 0 &&
         seg[5] === 0
       ) {
-        return seg.subarray(6)
+        if (!out.exifTiff) out.exifTiff = seg.subarray(6)
+      } else if (seg.length > XMP_JPEG_PREFIX.length) {
+        let isXmp = true
+        for (let i = 0; i < XMP_JPEG_PREFIX.length; i++) {
+          if (seg[i] !== XMP_JPEG_PREFIX.charCodeAt(i)) {
+            isXmp = false
+            break
+          }
+        }
+        if (isXmp) out.hasXmp = true
       }
     }
     pos += 2 + segLen
   }
-  return null
+  return out
 }
 
-/** 从 WebP（RIFF 容器）字节中找到 EXIF chunk 内的 TIFF 数据 */
-export function findWebpExifTiff(bytes: Uint8Array): Uint8Array | null {
-  if (bytes.length < 12) return null
+export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
+  return scanJpeg(bytes).exifTiff
+}
+
+/** WebP（RIFF 容器）扫描：EXIF chunk（剥离 APP1 风格前缀）+ XMP chunk 检测 */
+export function scanWebp(bytes: Uint8Array): { exifTiff: Uint8Array | null; hasXmp: boolean } {
+  const out: { exifTiff: Uint8Array | null; hasXmp: boolean } = { exifTiff: null, hasXmp: false }
+  if (bytes.length < 12) return out
   const fourcc = (off: number) => String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
-  if (fourcc(0) !== 'RIFF' || fourcc(8) !== 'WEBP') return null
+  if (fourcc(0) !== 'RIFF' || fourcc(8) !== 'WEBP') return out
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let pos = 12
   while (pos + 8 <= bytes.length) {
     const id = fourcc(pos)
     const size = view.getUint32(pos + 4, true)
-    if (id === 'EXIF') {
-      if (pos + 8 + size > bytes.length) return null
-      return bytes.subarray(pos + 8, pos + 8 + size)
+    if (pos + 8 + size > bytes.length) return out
+    if (id === 'EXIF' && !out.exifTiff) {
+      let data = bytes.subarray(pos + 8, pos + 8 + size)
+      // 部分写入端在 EXIF chunk 里保留 APP1 风格的 "Exif\0\0" 前缀
+      if (
+        data.length > 6 &&
+        data[0] === 0x45 &&
+        data[1] === 0x78 &&
+        data[2] === 0x69 &&
+        data[3] === 0x66 &&
+        data[4] === 0 &&
+        data[5] === 0
+      ) {
+        data = data.subarray(6)
+      }
+      out.exifTiff = data
+    } else if (id === 'XMP ') {
+      out.hasXmp = true
     }
     pos += 8 + size + (size % 2)
+  }
+  return out
+}
+
+export function findWebpExifTiff(bytes: Uint8Array): Uint8Array | null {
+  return scanWebp(bytes).exifTiff
+}
+
+/** 读取 TIFF IFD0 中的 ASCII 字符串标签（如 Software 0x0131），用于诊断提示 */
+export function extractTiffAsciiTag(tiff: Uint8Array, wantTag: number): string | null {
+  if (tiff.length < 8) return null
+  const order = String.fromCharCode(tiff[0], tiff[1])
+  const little = order === 'II'
+  if (!little && order !== 'MM') return null
+  const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength)
+  if (view.getUint16(2, little) !== 42) return null
+  const ifd0 = view.getUint32(4, little)
+  if (ifd0 + 2 > tiff.byteLength) return null
+  const count = view.getUint16(ifd0, little)
+  for (let i = 0; i < count; i++) {
+    const entry = ifd0 + 2 + i * 12
+    if (entry + 12 > tiff.byteLength) break
+    const tag = view.getUint16(entry, little)
+    if (tag !== wantTag) continue
+    const type = view.getUint16(entry + 2, little)
+    const cnt = view.getUint32(entry + 4, little)
+    let off = entry + 8
+    if (cnt > 4) off = view.getUint32(entry + 8, little)
+    if (type !== 2 || off + cnt > tiff.byteLength) return null
+    return new TextDecoder('latin1').decode(tiff.subarray(off, off + cnt)).replace(/\0.*$/, '')
   }
   return null
 }

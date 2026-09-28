@@ -8,6 +8,8 @@ export interface RawMetadata {
   workflow?: string
   /** A1111 / WebUI 格式参数文本 */
   parameters?: string
+  /** 未识别出参数时给出检测线索，帮助用户判断原因 */
+  hints?: string[]
 }
 
 export interface SamplerInfo {

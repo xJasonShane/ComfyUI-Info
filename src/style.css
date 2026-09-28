@@ -342,6 +342,10 @@ body {
   line-height: 1.7;
 }
 
+.empty p b {
+  color: var(--accent);
+}
+
 .empty .chips {
   display: flex;
   gap: 8px;
@@ -358,6 +362,28 @@ body {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text-dim);
+}
+
+.empty .show-all {
+  margin-top: 10px;
+  padding: 9px 22px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.empty .show-all:hover {
+  background: var(--accent);
+  color: #14100b;
+  transform: translateY(-1px);
 }
 
 /* ============ 拖拽遮罩 ============ */
@@ -583,4 +609,28 @@ body {
   color: var(--text-dim);
   font-size: 13px;
   line-height: 1.8;
+}
+
+.notice .hints {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.notice .hints li {
+  padding: 5px 0 5px 14px;
+  position: relative;
+  line-height: 1.6;
+  word-break: break-all;
+  border-top: 1px dashed var(--border);
+}
+
+.notice .hints li::before {
+  content: '›';
+  position: absolute;
+  left: 2px;
+  color: var(--accent);
 }

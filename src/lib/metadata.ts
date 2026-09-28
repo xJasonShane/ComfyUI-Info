@@ -1,15 +1,17 @@
 /**
  * 图片元数据读取入口：根据扩展名选择解析路径，并判定图片来源。
  * 只读取文件头部切片即可拿到元数据，避免把整张大图读进内存。
+ * 识别不出参数时收集诊断线索（XMP / EXIF 软件字段等），帮助用户判断原因。
  */
 import type { RawMetadata } from '../types'
 import { readPngTexts } from './png'
 import {
+  extractTiffAsciiTag,
   extractUserCommentFromTiff,
   decodeUserComment,
   extractJsonSubstring,
-  findJpegExifTiff,
-  findWebpExifTiff,
+  scanJpeg,
+  scanWebp,
 } from './exif'
 
 const HEAD_BYTES = 4 * 1024 * 1024
@@ -28,51 +30,108 @@ async function readHead(file: File, size: number): Promise<Uint8Array> {
   return new Uint8Array(buf)
 }
 
-async function readUserCommentText(file: File, ext: string): Promise<string | null> {
-  const head = await readHead(file, HEAD_BYTES)
-  const tiff = ext === 'webp' ? findWebpExifTiff(head) : findJpegExifTiff(head)
-  if (!tiff) return null
-  const raw = extractUserCommentFromTiff(tiff)
-  if (!raw) return null
-  return decodeUserComment(raw)
+/** UserComment 文本 → 来源判定：JSON 即 ComfyUI，否则按 A1111 参数文本处理 */
+function judgeUserCommentText(text: string): RawMetadata | null {
+  const json = extractJsonSubstring(text)
+  if (json) {
+    try {
+      const obj: unknown = JSON.parse(json)
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        return { source: 'comfyui', prompt: json }
+      }
+    } catch {
+      // 含花括号但不是 JSON，继续按 A1111 参数文本判断
+    }
+  }
+  return judgeParametersText(text)
+}
+
+/**
+ * A1111 参数文本判定。部分 ComfyUI 生态的保存节点（Civitai 兼容模式）会把
+ * workflow JSON 内嵌在参数文本尾部——检测到节点结构关键字时升级为 ComfyUI 解析。
+ */
+function judgeParametersText(text: string): RawMetadata {
+  if (/"(?:class_type|nodes)"\s*:/.test(text)) {
+    const json = extractJsonSubstring(text)
+    if (json) {
+      try {
+        const obj: unknown = JSON.parse(json)
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+          return { source: 'comfyui', prompt: json }
+        }
+      } catch {
+        // 关键字出现在普通提示词里且无合法 JSON，按 A1111 处理
+      }
+    }
+  }
+  return { source: 'a1111', parameters: text }
+}
+
+/** PNG / JPEG / WebP 均无生成参数时，给出诊断线索 */
+function diagnoseNone(scan: { hasExif: boolean; hasXmp: boolean; textKeys: string[] }): RawMetadata {
+  const hints: string[] = []
+  if (scan.hasXmp) {
+    hints.push('图片包含 Adobe XMP 编辑信息（Photoshop / Lightroom 处理痕迹），生成参数在处理或转存时被清除')
+  }
+  if (scan.textKeys.length) {
+    hints.push(`检测到 PNG 文本块: ${scan.textKeys.join('、')}`)
+  }
+  if (scan.hasExif) {
+    hints.push('检测到 EXIF 元数据，但没有生成参数（UserComment）')
+  }
+  if (!hints.length) {
+    hints.push('图片不含任何生成参数元数据')
+  }
+  hints.push('请使用 ComfyUI output 目录中直接生成的原图测试（未经 Photoshop / 网络转存的版本才保留参数）')
+  return { source: 'none', hints }
 }
 
 export async function readImageMetadata(file: File): Promise<RawMetadata> {
   const ext = extOf(file.name)
 
   if (ext === 'png') {
-    let { texts, complete } = await readPngTexts(await readHead(file, HEAD_BYTES))
-    if (!complete && file.size > HEAD_BYTES) {
+    let r = await readPngTexts(await readHead(file, HEAD_BYTES))
+    if (!r.complete && file.size > HEAD_BYTES) {
       // 头部切片恰好截断在文本块区域，整文件重读一次
-      ;({ texts, complete } = await readPngTexts(await readHead(file, file.size)))
+      r = await readPngTexts(await readHead(file, file.size))
     }
+    const { texts, chunks } = r
     if (texts['prompt'] || texts['workflow']) {
       return { source: 'comfyui', prompt: texts['prompt'], workflow: texts['workflow'] }
     }
     if (texts['parameters']) {
-      return { source: 'a1111', parameters: texts['parameters'] }
+      return judgeParametersText(texts['parameters'])
     }
-    return { source: 'none' }
+    // PNG eXIf 块（部分工具把 EXIF 存在独立块里）
+    const exifChunk = chunks.find((c) => c.type === 'eXIf')
+    if (exifChunk) {
+      const raw = extractUserCommentFromTiff(exifChunk.data)
+      const text = raw ? decodeUserComment(raw) : null
+      if (text) {
+        const m = judgeUserCommentText(text)
+        if (m) return m
+      }
+      const software = extractTiffAsciiTag(exifChunk.data, 0x0131)
+      return diagnoseNone({ hasExif: true, hasXmp: /xmp/i.test(Object.keys(texts).join(' ')), textKeys: Object.keys(texts).concat(software ? [`EXIF 软件: ${software}`] : []) })
+    }
+    return diagnoseNone({ hasExif: false, hasXmp: Object.keys(texts).some((k) => /xmp/i.test(k)), textKeys: Object.keys(texts) })
   }
 
   if (ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
-    const text = await readUserCommentText(file, ext)
-    if (text) {
-      const json = extractJsonSubstring(text)
-      if (json) {
-        try {
-          const obj: unknown = JSON.parse(json)
-          if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-            return { source: 'comfyui', prompt: json }
-          }
-        } catch {
-          // 含花括号但不是 JSON，按 A1111 参数文本处理
-        }
+    const head = await readHead(file, HEAD_BYTES)
+    const scan = ext === 'webp' ? scanWebp(head) : scanJpeg(head)
+    if (scan.exifTiff) {
+      const raw = extractUserCommentFromTiff(scan.exifTiff)
+      const text = raw ? decodeUserComment(raw) : null
+      if (text) {
+        const m = judgeUserCommentText(text)
+        if (m) return m
       }
-      return { source: 'a1111', parameters: text }
+      const software = extractTiffAsciiTag(scan.exifTiff, 0x0131)
+      return diagnoseNone({ hasExif: true, hasXmp: scan.hasXmp, textKeys: software ? [`EXIF 软件: ${software}`] : [] })
     }
-    return { source: 'none' }
+    return diagnoseNone({ hasExif: false, hasXmp: scan.hasXmp, textKeys: [] })
   }
 
-  return { source: 'none' }
+  return { source: 'none', hints: ['不支持的图片格式，请使用 PNG / JPEG / WebP'] }
 }

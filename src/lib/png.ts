@@ -57,6 +57,7 @@ const utf8 = new TextDecoder('utf-8')
 
 export interface PngTexts {
   texts: Record<string, string>
+  chunks: PngChunk[]
   complete: boolean
 }
 
@@ -96,5 +97,5 @@ export async function readPngTexts(bytes: Uint8Array): Promise<PngTexts> {
       // 单个块损坏时忽略，不影响其余块
     }
   }
-  return { texts, complete }
+  return { texts, chunks, complete }
 }

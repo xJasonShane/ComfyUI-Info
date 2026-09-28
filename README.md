@@ -8,6 +8,7 @@
 
 - **三种添加方式**：单张 / 多张（文件选择器）、整个文件夹（递归扫描）、直接拖拽文件或文件夹到窗口
 - **自动识别来源**：自动区分 ComfyUI 原图、A1111/WebUI 图片和无元数据的普通图片，默认只显示 ComfyUI 原图，可切换
+- **无元数据诊断**：识别不出参数时，详情页会显示检测线索（如「包含 Adobe XMP 编辑信息，生成参数已被 Photoshop 处理清除」），一眼看出原因
 - **完整参数解析**：
   - 正向 / 负向提示词（沿工作流连线自动回溯，兼容常见组合节点）
   - 模型（checkpoint / unet）、LoRA 及强度
@@ -38,8 +39,10 @@ Vue 3 + TypeScript + Vite + Naive UI，零运行时依赖的元数据解析（�
 ## 元数据存储原理（参考）
 
 - **PNG**：ComfyUI 通过 PIL 把 `prompt`（API 格式工作流 JSON）和 `workflow`（UI 格式工作流 JSON）写入 `tEXt` / `iTXt` 块，含非 Latin-1 字符（如中文）时 PIL 自动改用 zlib 压缩的 `iTXt`
-- **JPEG / WebP**：prompt JSON 写入 EXIF 的 `UserComment`（0x9286）；A1111 的 `parameters` 文本同样在此
+- **JPEG / WebP**：EXIF `UserComment`（0x9286）；A1111 的 `parameters` 文本同样在此（ComfyUI 内置节点只输出带元数据的 PNG，JPEG/WebP 需要自定义保存节点）
 - 解析时只读取文件头部切片（元数据位于图像数据之前），扫描大量图片也很快
+
+> **提示**：只有 ComfyUI 直接生成的原图才带参数。图片经过 Photoshop / Lightroom 处理、微信/QQ 传输或网页转存后，生成参数通常会被剥离——这类图会显示「无元数据」并附检测线索。`tests/fixtures/real-samples/` 里有真实样例可对照。
 
 ## 项目结构
 
