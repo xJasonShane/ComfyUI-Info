@@ -63,7 +63,8 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
   const resolveNodeText = (id: unknown, depth = 0): string | null => {
     const node = map[String(id)]
     if (!node || depth > 8) return null
-    const direct = asText(node.inputs?.text)
+    // 字符串原语节点（PrimitiveString / PrimitiveStringMultiline 等）把文本存在 `string` 输入槽
+    const direct = asText(node.inputs?.text) ?? asText(node.inputs?.string)
     if (direct) return direct
     for (const v of Object.values(node.inputs || {})) {
       if (isLink(v)) {
