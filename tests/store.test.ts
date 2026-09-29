@@ -4,7 +4,9 @@ import type { ImageItem } from '../src/types'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
 vi.mock('../src/lib/metadata', () => ({
-  isSupportedImage: () => true,
+  // 与真实实现一致：按扩展名放行，无扩展名走嗅探
+  isSupportedImage: (f: File) => /\.(png|jpe?g|webp)$/i.test(f.name),
+  hasSupportedSignature: async () => true,
   clearInternPool: () => {},
 }))
 vi.mock('../src/lib/parser', () => ({
@@ -283,6 +285,56 @@ it('toRecord / fromRecord：列表项与存档记录往返', async () => {
   expect(restored.params?.models).toEqual(['m1'])
 
   expect(toRecord({ ...item, status: 'parsing' })).toBeNull() // 解析中的项不入库
+})
+
+it('无扩展名文件经嗅探确认后异步入列', async () => {
+  api.addFiles([{ file: new File([new Uint8Array([1, 2, 3])], 'noext', { lastModified: 1 }) }])
+  expect(api.store.items.length).toBe(0) // 同步阶段不加入
+  await new Promise((r) => setTimeout(r, 5))
+  expect(api.store.items.length).toBe(1) // 嗅探通过后入列（hasSupportedSignature mock 为 true）
+})
+
+it('parseQuery 拆分字段限定与普通关键词', () => {
+  expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
+    terms: ['cat'],
+    model: ['majic'],
+    lora: [],
+    seed: ['123'],
+    path: [],
+  })
+  expect(api.parseQuery('   ')).toEqual({ terms: [], model: [], lora: [], seed: [], path: [] })
+})
+
+it('结构化搜索：字段限定与多条件 AND', async () => {
+  const add = (name: string, parameters: string, path?: string) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }), path }])
+  }
+  add(
+    'a.png',
+    'cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 111222333, Model: majicMIX',
+    'v1/a.png',
+  )
+  add('b.png', 'dog\nSteps: 30, Sampler: DPM++ 2M, Seed: 444555616, Model: dreamshaper', 'v2/b.png')
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  expect(names('seed:111222')).toEqual(['a.png'])
+  expect(names('seed:1')).toEqual(['a.png', 'b.png']) // 种子按子串部分匹配
+  expect(names('model:majic')).toEqual(['a.png'])
+  expect(names('path:v2')).toEqual(['b.png'])
+  expect(names('model:dreamshaper seed:444555616')).toEqual(['b.png']) // 字段之间 AND
+  expect(names('cat model:majic')).toEqual(['a.png']) // 普通词 + 字段
+  expect(names('cat seed:444555666')).toEqual([]) // 条件不相交
+  expect(names('lora:nothing')).toEqual([]) // 无 LoRA 不命中
+  api.store.search = ''
 })
 
 it('排序模式：按文件时间新旧排列，失败项始终靠后', async () => {

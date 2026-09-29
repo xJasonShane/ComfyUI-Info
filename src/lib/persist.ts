@@ -7,8 +7,9 @@
 import type { ImageItem, ImageSource, ParsedParams, RawMetadata } from '../types'
 
 const DB_NAME = 'comfyui-info'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = 'items'
+const HANDLE_STORE = 'handles'
 
 /** IndexedDB 中的单条存档；主键与列表去重指纹同一构造 */
 export interface PersistRecord {
@@ -86,6 +87,10 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) {
         req.result.createObjectStore(STORE, { keyPath: 'key' })
+      }
+      if (!req.result.objectStoreNames.contains(HANDLE_STORE)) {
+        // 记住「最近扫描目录」的句柄（File System Access API，仅 Chromium 系支持并可结构化克隆）
+        req.result.createObjectStore(HANDLE_STORE, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -172,6 +177,47 @@ export async function clearPersisted(): Promise<void> {
   try {
     const tx = db.transaction(STORE, 'readwrite')
     tx.objectStore(STORE).clear()
+    await settled(tx)
+  } finally {
+    db.close()
+  }
+}
+
+/* ---------- 目录句柄（一键重扫的书签，不随清空列表删除） ---------- */
+
+/** 保存目录句柄；浏览器不支持结构化克隆句柄时抛错，由调用方降级为仅本会话有效 */
+export async function saveHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await openDb()
+  try {
+    const tx = db.transaction(HANDLE_STORE, 'readwrite')
+    tx.objectStore(HANDLE_STORE).put({ id: 'last', handle, savedAt: Date.now() })
+    await settled(tx)
+  } finally {
+    db.close()
+  }
+}
+
+export async function loadHandle(): Promise<FileSystemDirectoryHandle | null> {
+  const db = await openDb()
+  try {
+    const req = db.transaction(HANDLE_STORE).objectStore(HANDLE_STORE).get('last')
+    const row = await new Promise<{ id: string; handle?: FileSystemDirectoryHandle } | undefined>(
+      (resolve, reject) => {
+        req.onsuccess = () => resolve(req.result)
+        req.onerror = () => reject(req.error ?? new Error('读取目录句柄失败'))
+      },
+    )
+    return row?.handle ?? null
+  } finally {
+    db.close()
+  }
+}
+
+export async function clearHandle(): Promise<void> {
+  const db = await openDb()
+  try {
+    const tx = db.transaction(HANDLE_STORE, 'readwrite')
+    tx.objectStore(HANDLE_STORE).delete('last')
     await settled(tx)
   } finally {
     db.close()

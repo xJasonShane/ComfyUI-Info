@@ -15,10 +15,11 @@ import type { GlobalThemeOverrides } from 'naive-ui'
 import TopBar from './components/TopBar.vue'
 import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
+import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
 import { addFiles, filteredItems, parsing, rangeIds, removeItem, stats, store } from './composables/store'
-import { buildExportCsv, buildExportJson } from './lib/export'
-import { copyText, downloadText } from './lib/utils'
+import { buildExportCsv, buildExportJson, buildWorkflowZip } from './lib/export'
+import { copyText, downloadBinary, downloadText } from './lib/utils'
 import type { ImageItem, IncomingFile } from './types'
 
 /* ---------- 主题 ---------- */
@@ -135,6 +136,7 @@ async function batchCopyPrompts() {
 const exportOptions = [
   { label: '导出 JSON', key: 'json' },
   { label: '导出 CSV (Excel)', key: 'csv' },
+  { label: '导出工作流 (ZIP)', key: 'zip' },
 ]
 
 function batchExport(key: string | number) {
@@ -149,7 +151,26 @@ function batchExport(key: string | number) {
   }
   const stamp = new Date().toISOString().slice(0, 10)
   if (key === 'csv') downloadText(`comfyui-info-selected-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-  else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
+  else if (key === 'zip') {
+    const zip = buildWorkflowZip(items)
+    if (zip) downloadBinary(`comfyui-info-selected-${stamp}.zip`, zip)
+  } else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
+}
+
+/* ---------- 参数对比（选中恰好 2 张已解析图片） ---------- */
+const comparePair = ref<[ImageItem, ImageItem] | null>(null)
+const showCompare = ref(false)
+const canCompare = computed(
+  () =>
+    selectedItems.value.length === 2 &&
+    selectedItems.value.every((i) => i.status === 'done' && i.params),
+)
+
+function openCompare() {
+  const [a, b] = selectedItems.value
+  if (!a || !b || !canCompare.value) return
+  comparePair.value = [a, b]
+  showCompare.value = true
 }
 
 /* ---------- 键盘导航（抽屉打开时 ←/→ 沿当前筛选顺序浏览） ---------- */
@@ -331,6 +352,16 @@ async function onDrop(e: DragEvent) {
         <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
           <span class="sel-count">已选 <b>{{ selectedItems.length }}</b> 张</span>
           <NButton size="tiny" secondary @click="selectAllFiltered">全选筛选结果</NButton>
+          <NButton
+            v-if="selectedItems.length === 2"
+            size="tiny"
+            secondary
+            :disabled="!canCompare"
+            title="两张图需都已解析出参数"
+            @click="openCompare"
+          >
+            对比
+          </NButton>
           <NButton size="tiny" secondary @click="batchCopyPrompts">复制提示词</NButton>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
             <NButton size="tiny" secondary>导出选中</NButton>
@@ -345,6 +376,8 @@ async function onDrop(e: DragEvent) {
         </div>
 
         <DetailDrawer v-model:show="showDetail" :item="current" />
+
+        <CompareDrawer v-model:show="showCompare" :a="comparePair?.[0] ?? null" :b="comparePair?.[1] ?? null" />
 
         <div v-if="dragging" class="drop-overlay">
           <div class="inner">松开以添加图片 / 文件夹</div>

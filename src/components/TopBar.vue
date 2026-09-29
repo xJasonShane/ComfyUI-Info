@@ -6,20 +6,27 @@ import {
   addFiles,
   clearAll,
   filteredItems,
+  forgetRescanHandle,
   modelOptions,
   parsing,
+  rescanDirectory,
   scanProgress,
+  setRescanHandle,
   sortOptions,
   sourceOptions,
   store,
   toggleDark,
 } from '../composables/store'
-import { buildExportCsv, buildExportJson } from '../lib/export'
-import { downloadText } from '../lib/utils'
+import { buildExportCsv, buildExportJson, buildWorkflowZip } from '../lib/export'
+import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
+import { downloadBinary, downloadText } from '../lib/utils'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
 const message = useMessage()
+// Chromium 系走 File System Access 选择器（可记住目录、一键重扫），其余回退 webkitdirectory
+const fsPickSupported = supportsDirectoryPicker()
+const scanning = ref(false)
 
 /** webkitRelativePath 仅在目录选择时有值，普通多选为空串——退回 undefined 让去重退化为文件名 */
 function onPick(e: Event) {
@@ -35,9 +42,46 @@ function onPick(e: Event) {
   input.value = ''
 }
 
+async function onPickFolder() {
+  if (!fsPickSupported) {
+    dirInput.value?.click()
+    return
+  }
+  const handle = await pickDirectory()
+  if (!handle) return
+  scanning.value = true
+  try {
+    const incoming = await collectDirectoryFiles(handle)
+    if (!incoming.length) {
+      message.warning(`目录「${handle.name}」中没有找到图片文件`)
+      return
+    }
+    addFiles(incoming)
+    await setRescanHandle(handle)
+  } finally {
+    scanning.value = false
+  }
+}
+
+async function onRescan() {
+  const ok = await rescanDirectory()
+  if (!ok) {
+    message.warning('未能获得目录读取权限，无法重扫')
+    return
+  }
+  if (parsing.value) message.success(`正在重新扫描「${store.rescanName}」…`)
+  else message.info(`「${store.rescanName}」没有新增图片，列表保持不变`)
+}
+
+function onForgetRescan() {
+  forgetRescanHandle()
+  message.success('已不再记住该目录')
+}
+
 const exportOptions = [
   { label: '导出 JSON', key: 'json' },
   { label: '导出 CSV (Excel)', key: 'csv' },
+  { label: '导出工作流 (ZIP)', key: 'zip' },
 ]
 
 function exportAs(key: string | number) {
@@ -50,7 +94,10 @@ function exportAs(key: string | number) {
   if (!items.length) return
   const stamp = new Date().toISOString().slice(0, 10)
   if (key === 'csv') downloadText(`comfyui-info-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-  else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
+  else if (key === 'zip') {
+    const zip = buildWorkflowZip(items)
+    if (zip) downloadBinary(`comfyui-info-workflows-${stamp}.zip`, zip)
+  } else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
 }
 </script>
 
@@ -70,10 +117,37 @@ function exportAs(key: string | number) {
       <template #icon><Icon name="image-plus" /></template>
       添加图片
     </NButton>
-    <NButton size="small" secondary @click="dirInput?.click()">
+    <NButton
+      size="small"
+      secondary
+      :loading="scanning"
+      :title="
+        fsPickSupported
+          ? '选择目录（将记住该目录，可一键重扫增量更新）'
+          : '选择目录（递归扫描子文件夹）'
+      "
+      @click="onPickFolder"
+    >
       <template #icon><Icon name="folder-plus" /></template>
       添加文件夹
     </NButton>
+    <NTooltip v-if="store.rescanName">
+      <template #trigger>
+        <NButton size="small" secondary @click="onRescan">
+          <template #icon><Icon name="refresh" /></template>
+          重扫
+        </NButton>
+      </template>
+      重新扫描记住的目录「{{ store.rescanName }}」，只添加新文件，已有图片按指纹回挂去重
+    </NTooltip>
+    <NPopconfirm v-if="store.rescanName" @positive-click="onForgetRescan">
+      <template #trigger>
+        <NButton size="small" quaternary aria-label="不再记住该目录" title="不再记住该目录">
+          <template #icon><Icon name="x" /></template>
+        </NButton>
+      </template>
+      确定不再记住目录「{{ store.rescanName }}」？
+    </NPopconfirm>
     <NDropdown
       v-if="store.items.length > 0"
       trigger="click"

@@ -12,6 +12,7 @@ import {
 } from '../src/lib/exif'
 import {
   clearInternPool,
+  hasSupportedSignature,
   internParseResult,
   readImageMetadata,
   extractParams,
@@ -431,6 +432,28 @@ describe('readImageMetadata 端到端', () => {
     const png = buildPng([])
     const meta = await readImageMetadata(new File([png], 'plain.png'))
     expect(meta.source).toBe('none')
+  })
+
+  it('无扩展名文件按文件头魔数识别（PNG）', async () => {
+    const png = buildPng([textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
+    const meta = await readImageMetadata(new File([png], 'download')) // 无扩展名
+    expect(meta.source).toBe('comfyui')
+    expect(meta.prompt).toBe(COMFY_PROMPT_ASCII)
+  })
+
+  it('内容不是受支持图片时返回不支持提示', async () => {
+    const meta = await readImageMetadata(
+      new File([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])], 'file.bin'),
+    )
+    expect(meta.source).toBe('none')
+    expect(meta.hints?.[0]).toContain('不支持')
+  })
+
+  it('hasSupportedSignature 按魔数判断内容格式', async () => {
+    expect(await hasSupportedSignature(new File([buildPng([])], 'x'))).toBe(true)
+    const jpeg = buildJpegWithExif(buildTiff(new Uint8Array(asciiUserComment('hello'))))
+    expect(await hasSupportedSignature(new File([jpeg], 'x'))).toBe(true)
+    expect(await hasSupportedSignature(new File([new Uint8Array([1, 2, 3])], 'x'))).toBe(false)
   })
 })
 

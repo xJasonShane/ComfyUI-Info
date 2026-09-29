@@ -4,7 +4,7 @@
  * 识别不出参数时收集诊断线索（XMP / EXIF 软件字段等），帮助用户判断原因。
  */
 import type { ParseResult, ParsedParams, RawMetadata } from '../types'
-import { readPngTexts, parsePngChunks } from './png'
+import { readPngTexts, parsePngChunks, isPng } from './png'
 import { extractComfyParams } from './comfyExtract'
 import { parseA1111Parameters } from './a1111'
 import {
@@ -142,10 +142,49 @@ export function clearInternPool() {
   internPool.clear()
 }
 
-export async function readImageMetadata(file: File): Promise<RawMetadata> {
-  const ext = extOf(file.name)
+export type ImageKind = 'png' | 'jpeg' | 'webp'
 
-  if (ext === 'png') {
+const SIGNATURE_BYTES = 16
+
+/** 读文件头魔数判定真实格式：PNG 签名 / JPEG(FF D8 FF) / WebP(RIFF…WEBP) */
+export async function sniffKind(file: File): Promise<ImageKind | null> {
+  const head = new Uint8Array(await file.slice(0, SIGNATURE_BYTES).arrayBuffer())
+  if (isPng(head)) return 'png'
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpeg'
+  if (
+    head.length >= 12 &&
+    head[0] === 0x52 /* R */ &&
+    head[1] === 0x49 /* I */ &&
+    head[2] === 0x46 /* F */ &&
+    head[3] === 0x46 /* F */ &&
+    head[8] === 0x57 /* W */ &&
+    head[9] === 0x45 /* E */ &&
+    head[10] === 0x42 /* B */ &&
+    head[11] === 0x50 /* P */
+  ) {
+    return 'webp'
+  }
+  return null
+}
+
+/** 内容嗅探是否为受支持图片（无扩展名文件入列前的把关） */
+export async function hasSupportedSignature(file: File): Promise<boolean> {
+  return (await sniffKind(file)) !== null
+}
+
+/** 扩展名优先，扩展名缺失 / 生僻时回退文件头嗅探 */
+async function detectKind(file: File): Promise<ImageKind | null> {
+  const ext = extOf(file.name)
+  if (ext === 'png') return 'png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'jpeg'
+  if (ext === 'webp') return 'webp'
+  return sniffKind(file)
+}
+
+export async function readImageMetadata(file: File): Promise<RawMetadata> {
+  const kind = await detectKind(file)
+
+  if (kind === 'png') {
     // PNG：文本块 / eXIf 都在 IDAT 之前，读到 IDAT 即为完整；切片截断在文本块区则逐级放大
     const bytes = await readHeadUntil(file, (b) => parsePngChunks(b).complete)
     const { texts, chunks } = await readPngTexts(bytes)
@@ -178,8 +217,8 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
     })
   }
 
-  if (ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
-    const isWebp = ext === 'webp'
+  if (kind === 'jpeg' || kind === 'webp') {
+    const isWebp = kind === 'webp'
     // JPEG：段区截断（未到 SOS / EOI）时逐级放大；WebP：VP8X 声明的 EXIF / XMP 未扫到时逐级放大
     const bytes = await readHeadUntil(file, (b) => !(isWebp ? scanWebp(b) : scanJpeg(b)).needsFullScan)
     const scan = isWebp ? scanWebp(bytes) : scanJpeg(bytes)

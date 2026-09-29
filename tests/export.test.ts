@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildExportCsv, buildExportJson } from '../src/lib/export'
+import { buildExportCsv, buildExportJson, buildWorkflowZip } from '../src/lib/export'
 import type { ImageItem, ParsedParams } from '../src/types'
 
 function makeItem(over: Partial<ImageItem>): ImageItem {
@@ -108,5 +108,40 @@ describe('buildExportCsv', () => {
     const failed = rows[2].split(',')
     expect(failed[3]).toBe('error')
     expect(failed[19]).toBe('boom')
+  })
+})
+
+describe('buildWorkflowZip', () => {
+  it('store 模式 ZIP：本地头、条目数据与 EOCD 可直接解出', () => {
+    const zip = buildWorkflowZip([
+      makeItem({
+        params,
+        raw: { source: 'comfyui', prompt: '{"a":1}', workflow: '{"b":2}' },
+        path: 'sets/v1/a.png',
+      }),
+    ])!
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+    expect(dv.getUint32(0, true)).toBe(0x04034b50) // local file header
+    const nameLen = dv.getUint16(26, true)
+    const size = dv.getUint32(18, true)
+    const name = new TextDecoder().decode(zip.subarray(30, 30 + nameLen))
+    expect(name).toBe('sets/v1/a.prompt.json')
+    const data = new TextDecoder().decode(zip.subarray(30 + nameLen, 30 + nameLen + size))
+    expect(data).toBe('{"a":1}')
+
+    const eocd = zip.length - 22
+    expect(dv.getUint32(eocd, true)).toBe(0x06054b50)
+    expect(dv.getUint16(eocd + 10, true)).toBe(3) // prompt + workflow + manifest
+  })
+
+  it('A1111 项打包为 parameters.txt，条目含 manifest；空列表返回 null', () => {
+    const zip = buildWorkflowZip([
+      makeItem({ source: 'a1111', raw: { source: 'a1111', parameters: 'Steps: 20' } }),
+    ])!
+    const text = new TextDecoder().decode(zip)
+    expect(text).toContain('a.parameters.txt')
+    expect(text).toContain('Steps: 20')
+    expect(text).toContain('manifest.json')
+    expect(buildWorkflowZip([])).toBeNull()
   })
 })

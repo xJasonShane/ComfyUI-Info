@@ -1,15 +1,19 @@
 import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile } from '../types'
-import { clearInternPool, isSupportedImage } from '../lib/metadata'
+import { clearInternPool, hasSupportedSignature, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
+import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import {
+  clearHandle,
   clearPersisted,
   deletePersisted,
   fromRecord,
+  loadHandle,
   loadPersisted,
   probePersistence,
   putPersisted,
   recordKey,
+  saveHandle,
   toRecord,
   type PersistRecord,
 } from '../lib/persist'
@@ -27,6 +31,8 @@ interface StoreState {
   dark: boolean
   batchTotal: number
   batchDone: number
+  /** 记住的扫描目录名（句柄本体不进响应式状态，避免被代理后无法结构化克隆回写） */
+  rescanName: string | null
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
@@ -40,6 +46,7 @@ const state = reactive<StoreState>({
   dark: localStorage.getItem('cii:theme') !== 'light',
   batchTotal: 0,
   batchDone: 0,
+  rescanName: null,
 })
 
 watch(
@@ -108,37 +115,59 @@ export function retryItem(item: ImageItem) {
 }
 
 export function addFiles(files: IncomingFile[]) {
+  const deferred: IncomingFile[] = []
   for (const { file, path } of files) {
-    if (!isSupportedImage(file)) continue
-    const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
-    if (seenKeys.has(key)) continue
-    // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
-    const archived = detachedByKey.get(key)
-    if (archived) {
-      archived.file = file
-      archived.url = URL.createObjectURL(file)
-      archived.detached = false
-      seenKeys.add(key)
-      detachedByKey.delete(key)
-      continue
+    if (isSupportedImage(file)) {
+      enqueueFile(file, path)
+    } else {
+      // 无扩展名 / 生僻扩展名：按文件头魔数嗅探，异步确认后再入列
+      deferred.push({ file, path })
     }
+  }
+  pump()
+  for (const incoming of deferred) void acceptBySniff(incoming)
+}
+
+function enqueueFile(file: File, path?: string) {
+  const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
+  if (seenKeys.has(key)) return
+  // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
+  const archived = detachedByKey.get(key)
+  if (archived) {
+    archived.file = file
+    archived.url = URL.createObjectURL(file)
+    archived.detached = false
     seenKeys.add(key)
-    // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
-    const item = reactive<ImageItem>({
-      id: `img-${++seq}`,
-      file,
-      url: URL.createObjectURL(file),
-      name: file.name,
-      path,
-      size: file.size,
-      mtime: file.lastModified,
-      status: 'pending',
-      source: 'none',
-      raw: { source: 'none' },
-    })
-    state.items.push(item)
-    state.batchTotal++
-    queue.push(item)
+    detachedByKey.delete(key)
+    return
+  }
+  seenKeys.add(key)
+  // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
+  const item = reactive<ImageItem>({
+    id: `img-${++seq}`,
+    file,
+    url: URL.createObjectURL(file),
+    name: file.name,
+    path,
+    size: file.size,
+    mtime: file.lastModified,
+    status: 'pending',
+    source: 'none',
+    raw: { source: 'none' },
+  })
+  state.items.push(item)
+  state.batchTotal++
+  queue.push(item)
+}
+
+/** 无扩展名文件的嗅探入列：确认是受支持图片才加入，普通杂项文件维持静默跳过 */
+async function acceptBySniff(incoming: IncomingFile) {
+  try {
+    if (await hasSupportedSignature(incoming.file)) {
+      enqueueFile(incoming.file, incoming.path)
+    }
+  } catch {
+    // 读取失败按不支持处理
   }
   pump()
 }
@@ -182,6 +211,35 @@ export function clearAll() {
   dirtyItems.clear()
   deletedKeys.clear()
   if (persistAvailable) void clearPersisted().catch(() => {})
+}
+
+/* ---------- 目录句柄（File System Access，一键重扫） ---------- */
+// 句柄不放进 reactive 状态：代理对象无法结构化克隆回写 IndexedDB，界面只依赖 rescanName
+let rescanHandle: FileSystemDirectoryHandle | null = null
+
+export async function setRescanHandle(handle: FileSystemDirectoryHandle) {
+  rescanHandle = handle
+  state.rescanName = handle.name
+  try {
+    // 句柄持久化不可用的浏览器（不支持结构化克隆）仅本次会话有效
+    if (persistAvailable) await saveHandle(handle)
+  } catch {
+    // 忽略：重扫按钮仍在本会话可用
+  }
+}
+
+export function forgetRescanHandle() {
+  rescanHandle = null
+  state.rescanName = null
+  if (persistAvailable) void clearHandle().catch(() => {})
+}
+
+/** 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析 */
+export async function rescanDirectory(): Promise<boolean> {
+  if (!rescanHandle) return false
+  if (!(await ensureReadPermission(rescanHandle))) return false
+  addFiles(await collectDirectoryFiles(rescanHandle))
+  return true
 }
 
 /* ---------- 会话持久化（探测失败时静默降级为纯内存） ---------- */
@@ -241,12 +299,17 @@ async function flushPersist() {
   if (dirtyItems.size || deletedKeys.size) schedulePersist() // 写库期间又有变更
 }
 
-/** 启动恢复：探测 IndexedDB 可用性，可用则把历史记录装回列表；失败静默降级纯内存 */
+/** 启动恢复：探测 IndexedDB 可用性，可用则装回历史存档与记住的扫描目录；失败静默降级纯内存 */
 async function hydrate() {
   try {
     persistAvailable = await probePersistence()
     if (!persistAvailable) return
     restoreArchived(await loadPersisted())
+    const handle = await loadHandle()
+    if (handle) {
+      rescanHandle = handle
+      state.rescanName = handle.name
+    }
   } catch {
     persistAvailable = false
   }
@@ -317,8 +380,37 @@ function buildSearchText(it: ImageItem): string {
   return parts.join('\n').toLowerCase()
 }
 
+export interface ParsedQuery {
+  terms: string[]
+  model: string[]
+  lora: string[]
+  seed: string[]
+  path: string[]
+}
+
+const QUERY_FIELD_RE = /^(model|lora|seed|path):(.+)$/i
+
+/**
+ * 解析搜索框语法：`model:xxx` / `lora:xxx` / `seed:123` / `path:目录` 字段限定 +
+ * 普通关键词，全部条件按 AND 组合；字段值不能含空格，大小写不敏感。
+ */
+export function parseQuery(raw: string): ParsedQuery {
+  const out: ParsedQuery = { terms: [], model: [], lora: [], seed: [], path: [] }
+  for (const token of raw.trim().split(/\s+/)) {
+    if (!token) continue
+    const m = token.match(QUERY_FIELD_RE)
+    if (m) {
+      out[m[1]!.toLowerCase() as keyof Omit<ParsedQuery, 'terms'>].push(m[2]!.toLowerCase())
+    } else {
+      out.terms.push(token.toLowerCase())
+    }
+  }
+  return out
+}
+
 export const filteredItems = computed(() => {
   const q = state.search.trim().toLowerCase()
+  const query = q ? parseQuery(q) : null
   return state.items
     .filter((it) => {
       // 解析失败的项不受搜索 / 模型筛选影响，由来源筛选统一控制可见性
@@ -328,14 +420,35 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter === 'error') return false
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
-      if (q) {
-        // 未解析完的项只有文件名可搜，与旧的全量拼接行为一致
-        if (!(it.searchText ?? it.name.toLowerCase()).includes(q)) return false
-      }
+      if (query && !matchQuery(it, query)) return false
       return true
     })
     .sort(sorters[state.sortMode])
 })
+
+/** 搜索匹配：普通词命中搜索串，字段限定各自命中结构化参数，全部条件 AND */
+function matchQuery(it: ImageItem, query: ParsedQuery): boolean {
+  const fallbackHay = it.searchText ?? it.name.toLowerCase()
+  for (const term of query.terms) {
+    if (!fallbackHay.includes(term)) return false
+  }
+  for (const v of query.model) {
+    if (!(it.params?.models ?? []).some((m) => m.toLowerCase().includes(v))) return false
+  }
+  for (const v of query.lora) {
+    const hit = (it.params?.loras ?? []).some(
+      (l) => l.name.toLowerCase().includes(v) || (l.hash ?? '').toLowerCase().includes(v),
+    )
+    if (!hit) return false
+  }
+  for (const v of query.seed) {
+    if (!(it.params?.samplers ?? []).some((s) => (s.seed ?? '').includes(v))) return false
+  }
+  for (const v of query.path) {
+    if (!(it.path ?? it.name).toLowerCase().includes(v)) return false
+  }
+  return true
+}
 
 /**
  * 区间选择：取有序列表中锚点与目标之间（含两端）的全部 id。
