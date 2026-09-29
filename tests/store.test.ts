@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
+import type { ImageItem } from '../src/types'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
 vi.mock('../src/lib/metadata', () => ({
@@ -226,6 +227,62 @@ it('rangeIds 区间选择：锚点到目标的有序区间，锚点失效退化�
   expect(api.rangeIds(list, null, 'b')).toEqual(['b'])
   expect(api.rangeIds(list, 'zz', 'b')).toEqual(['b']) // 锚点不在列表中
   expect(api.rangeIds(list, 'a', 'zz')).toEqual([])
+})
+
+it('重新拖入与存档项同指纹的文件时自动回挂，不重新解析', () => {
+  api.restoreArchived([
+    {
+      key: 'v1/a.png|1|1000',
+      name: 'a.png',
+      path: 'v1/a.png',
+      size: 1,
+      mtime: 1000,
+      status: 'done',
+      source: 'comfyui',
+      raw: { source: 'comfyui' },
+      savedAt: 0,
+    },
+  ])
+  expect(api.store.items.length).toBe(1)
+  expect(api.store.items[0].detached).toBe(true)
+
+  api.addFiles([{ file: new File(['x'], 'a.png', { lastModified: 1000 }), path: 'v1/a.png' }])
+  expect(api.store.items.length).toBe(1)
+  const item = api.store.items[0]
+  expect(item.detached).toBe(false)
+  expect(item.url).toBe('blob:mock')
+  expect(api.store.batchTotal).toBe(0) // 元数据已在库中，不重新排队解析
+})
+
+it('toRecord / fromRecord：列表项与存档记录往返', async () => {
+  const { toRecord, fromRecord } = await import('../src/lib/persist')
+  const parameters = 'x\nSteps: 20, Model: m1'
+  const item: ImageItem = {
+    id: 'img-1',
+    file: new File(['x'], 'a.png'),
+    url: 'blob:x',
+    name: 'a.png',
+    path: 'v1/a.png',
+    size: 5,
+    mtime: 1234,
+    status: 'done',
+    source: 'a1111',
+    raw: { source: 'a1111', parameters },
+    params: parseA1111Parameters(parameters),
+  }
+  const rec = toRecord(item)!
+  expect(rec.key).toBe('v1/a.png|5|1234')
+  expect(rec.source).toBe('a1111')
+
+  const restored = fromRecord(rec)
+  expect(restored.detached).toBe(true)
+  expect(restored.url).toBe('')
+  expect(restored.file).toBeUndefined()
+  expect(restored.mtime).toBe(1234)
+  expect(restored.status).toBe('done')
+  expect(restored.params?.models).toEqual(['m1'])
+
+  expect(toRecord({ ...item, status: 'parsing' })).toBeNull() // 解析中的项不入库
 })
 
 it('排序模式：按文件时间新旧排列，失败项始终靠后', async () => {

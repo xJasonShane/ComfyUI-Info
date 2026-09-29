@@ -36,7 +36,7 @@ export function buildExportJson(items: ImageItem[]): string {
       file: it.name,
       size: it.size,
       source: it.status === 'error' ? 'error' : it.source,
-      mtime: new Date(it.file.lastModified).toISOString(),
+      mtime: new Date(it.mtime).toISOString(),
     }
     if (it.path) rec.path = it.path
     if (it.status === 'error') rec.error = it.error ?? '未知错误'
@@ -94,7 +94,7 @@ export function buildExportCsv(items: ImageItem[]): string {
       it.path,
       it.size,
       it.status === 'error' ? 'error' : it.source,
-      new Date(it.file.lastModified).toISOString(),
+      new Date(it.mtime).toISOString(),
       p?.models.join(' + ') || undefined,
       p?.loras.map(formatLora).join('; ') || undefined,
       s?.sampler,

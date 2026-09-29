@@ -2,6 +2,17 @@ import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile } from '../types'
 import { clearInternPool, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
+import {
+  clearPersisted,
+  deletePersisted,
+  fromRecord,
+  loadPersisted,
+  probePersistence,
+  putPersisted,
+  recordKey,
+  toRecord,
+  type PersistRecord,
+} from '../lib/persist'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
 export type SortMode = 'default' | 'time-desc' | 'time-asc'
@@ -60,7 +71,8 @@ function pump() {
 async function parseItem(item: ImageItem, epoch: number) {
   item.status = 'parsing'
   try {
-    const { raw, params } = await parseImage(item.file)
+    // 入队的都是实文件项（存档项不解析）
+    const { raw, params } = await parseImage(item.file!)
     item.raw = raw
     item.source = raw.source
     item.params = params
@@ -71,6 +83,7 @@ async function parseItem(item: ImageItem, epoch: number) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
   } finally {
+    markDirty(item)
     active--
     if (epoch === batchEpoch) state.batchDone++
     pump()
@@ -79,12 +92,14 @@ async function parseItem(item: ImageItem, epoch: number) {
 
 /* ---------- 添加 / 清空 ---------- */
 let seq = 0
-// 已加载文件的指纹（路径或文件名|size|lastModified），O(1) 查重；增删 items 时必须同步维护
+// 已加载文件的指纹（recordKey：路径或文件名|大小|修改时间），O(1) 查重；增删 items 时必须同步维护
 const seenKeys = new Set<string>()
+// 待回挂的存档项索引（recordKey → item），addFiles 时按指纹自动回挂
+const detachedByKey = new Map<string, ImageItem>()
 
 export function retryItem(item: ImageItem) {
-  // 仅允许重试当前列表中的失败项（列表清空时抽屉会被关闭，这里兜底）
-  if (item.status !== 'error' || !state.items.includes(item)) return
+  // 仅允许重试当前列表中的失败实文件项（存档失败项无文件可读，列表清空时抽屉会被关闭，这里兜底）
+  if (item.status !== 'error' || !item.file || !state.items.includes(item)) return
   item.status = 'pending'
   item.error = undefined
   state.batchTotal++
@@ -92,16 +107,21 @@ export function retryItem(item: ImageItem) {
   pump()
 }
 
-/** 去重指纹：路径（无目录信息时退回文件名）| 大小 | 修改时间——路径参与后，不同目录的同名文件不再被误去重 */
-function fingerprint(it: { path?: string; name: string; size: number; file: File }): string {
-  return `${it.path ?? it.name}|${it.size}|${it.file.lastModified}`
-}
-
 export function addFiles(files: IncomingFile[]) {
   for (const { file, path } of files) {
     if (!isSupportedImage(file)) continue
-    const key = fingerprint({ path, name: file.name, size: file.size, file })
+    const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
     if (seenKeys.has(key)) continue
+    // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
+    const archived = detachedByKey.get(key)
+    if (archived) {
+      archived.file = file
+      archived.url = URL.createObjectURL(file)
+      archived.detached = false
+      seenKeys.add(key)
+      detachedByKey.delete(key)
+      continue
+    }
     seenKeys.add(key)
     // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
     const item = reactive<ImageItem>({
@@ -111,6 +131,7 @@ export function addFiles(files: IncomingFile[]) {
       name: file.name,
       path,
       size: file.size,
+      mtime: file.lastModified,
       status: 'pending',
       source: 'none',
       raw: { source: 'none' },
@@ -126,7 +147,12 @@ export function removeItem(item: ImageItem) {
   const idx = state.items.indexOf(item)
   if (idx < 0) return
   state.items.splice(idx, 1)
-  seenKeys.delete(fingerprint(item))
+  const key = recordKey(item)
+  seenKeys.delete(key)
+  if (item.detached) detachedByKey.delete(key)
+  dirtyItems.delete(key)
+  deletedKeys.add(key)
+  schedulePersist()
   URL.revokeObjectURL(item.url)
   if (item.status === 'pending') {
     // 未开始的直接出队
@@ -146,12 +172,86 @@ export function clearAll() {
   for (const i of state.items) URL.revokeObjectURL(i.url)
   state.items = []
   seenKeys.clear()
+  detachedByKey.clear()
   queue.length = 0
   state.batchTotal = 0
   state.batchDone = 0
   batchEpoch++ // 在途解析完成后不再计入新批次
   clearInternPool() // 在途解析完成时会把结果串重新入池，无碍
+  persistEpoch++ // 作废在途写库批次，历史记录一并清除（所见即所得）
+  dirtyItems.clear()
+  deletedKeys.clear()
+  if (persistAvailable) void clearPersisted().catch(() => {})
 }
+
+/* ---------- 会话持久化（探测失败时静默降级为纯内存） ---------- */
+let persistAvailable = false
+let persistEpoch = 0
+const dirtyItems = new Map<string, ImageItem>()
+const deletedKeys = new Set<string>()
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 把存档记录装回列表（hydrate 与测试共用）：跳过同指纹已存在项
+ * （用户在恢复完成前已拖入同指纹文件时，以实际文件为准）。
+ * 必须以响应式代理入列并用同一代理建回挂索引：addFiles 回挂时改写的是这个代理，
+ * 绕过代理的原始对象不会触发视图更新。
+ */
+export function restoreArchived(records: PersistRecord[]) {
+  for (const rec of records) {
+    if (seenKeys.has(rec.key)) continue
+    const item = reactive<ImageItem>(fromRecord(rec))
+    item.searchText = buildSearchText(item)
+    detachedByKey.set(rec.key, item)
+    state.items.push(item)
+  }
+}
+
+function markDirty(item: ImageItem) {
+  if (!persistAvailable) return
+  const key = recordKey(item)
+  deletedKeys.delete(key)
+  dirtyItems.set(key, item)
+  schedulePersist()
+}
+
+function schedulePersist() {
+  if (!persistAvailable || flushTimer !== null) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    void flushPersist()
+  }, 500)
+}
+
+async function flushPersist() {
+  const epoch = persistEpoch
+  const items = [...dirtyItems.values()]
+  dirtyItems.clear()
+  const keys = [...deletedKeys]
+  deletedKeys.clear()
+  try {
+    // 清空列表会作废本轮写库，避免把已删除的历史写回去
+    if (epoch !== persistEpoch) return
+    const records = items.map(toRecord).filter((r) => r !== null)
+    if (records.length) await putPersisted(records)
+    if (keys.length) await deletePersisted(keys)
+  } catch {
+    // 写库失败（配额 / 环境限制）不影响功能，本轮丢弃
+  }
+  if (dirtyItems.size || deletedKeys.size) schedulePersist() // 写库期间又有变更
+}
+
+/** 启动恢复：探测 IndexedDB 可用性，可用则把历史记录装回列表；失败静默降级纯内存 */
+async function hydrate() {
+  try {
+    persistAvailable = await probePersistence()
+    if (!persistAvailable) return
+    restoreArchived(await loadPersisted())
+  } catch {
+    persistAvailable = false
+  }
+}
+void hydrate()
 
 /* ---------- 派生数据 ---------- */
 export const parsing = computed(() => state.batchDone < state.batchTotal)
@@ -171,10 +271,9 @@ const byName = (a: ImageItem, b: ImageItem) =>
 
 const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
-  'time-desc': (a, b) =>
-    errLast(a) - errLast(b) || b.file.lastModified - a.file.lastModified || byName(a, b),
+  'time-desc': (a, b) => errLast(a) - errLast(b) || b.mtime - a.mtime || byName(a, b),
   'time-asc': (a, b) =>
-    errLast(a) - errLast(b) || a.file.lastModified - b.file.lastModified || byName(a, b),
+    errLast(a) - errLast(b) || a.mtime - b.mtime || byName(a, b),
 }
 
 export const stats = computed(() => {

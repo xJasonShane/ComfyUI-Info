@@ -93,7 +93,7 @@ function exportAs(key: string | number) {
               <template #icon><Icon name="trash" /></template>
             </NButton>
           </template>
-          确定清空当前已加载的全部图片？
+          确定清空当前已加载的全部图片？已持久化的历史记录会一并清除。
         </NPopconfirm>
       </template>
       清空列表

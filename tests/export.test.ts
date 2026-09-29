@@ -9,6 +9,7 @@ function makeItem(over: Partial<ImageItem>): ImageItem {
     url: 'blob:mock',
     name: 'a.png',
     size: 1234,
+    mtime: 1_700_000_000_000,
     status: 'done',
     source: 'comfyui',
     raw: { source: 'comfyui' },
@@ -79,6 +80,18 @@ describe('buildExportCsv', () => {
     const csv = buildExportCsv([makeItem({ params, path: 'sets/v2/a.png' })])
     const line = csv.slice(1).split('\r\n')[1]
     expect(line.startsWith('a.png,sets/v2/a.png,1234')).toBe(true)
+  })
+
+  it('存档项（无 file）导出正常，修改时间取自 mtime', () => {
+    const csv = buildExportCsv([makeItem({ file: undefined, detached: true })])
+    const row = csv.slice(1).split('\r\n')[1]!.split(',')
+    expect(row.slice(0, 5)).toEqual([
+      'a.png',
+      '',
+      '1234',
+      'comfyui',
+      new Date(1_700_000_000_000).toISOString(),
+    ])
   })
 
   it('无参数项参数列留空，错误项带错误列', () => {

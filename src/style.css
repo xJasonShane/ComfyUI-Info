@@ -313,6 +313,23 @@ body {
   font-size: 12px;
 }
 
+.card .archived {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.card .archived .tip {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
 .card .card-remove {
   position: absolute;
   top: 8px;
@@ -626,6 +643,20 @@ body {
   object-fit: contain;
   border-radius: 6px;
   box-shadow: var(--shadow);
+}
+
+.detail-view .detail-noimg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.detail-view .detail-noimg .tip {
+  font-size: 11.5px;
+  opacity: 0.85;
 }
 
 .detail-panel {

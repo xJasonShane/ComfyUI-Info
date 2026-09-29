@@ -24,7 +24,7 @@ const p = computed(() => props.item?.params)
 
 const fileTime = computed(() => {
   if (!props.item) return ''
-  return new Date(props.item.file.lastModified).toLocaleString('zh-CN', {
+  return new Date(props.item.mtime).toLocaleString('zh-CN', {
     hour12: false,
     month: 'numeric',
     day: 'numeric',
@@ -133,13 +133,18 @@ function downloadJson(text: string | undefined, suffix: string) {
   <NDrawer v-model:show="show" :width="drawerWidth" placement="right">
     <div v-if="item" class="detail">
       <div class="detail-view">
-        <img :src="item.url" :alt="item.name" />
+        <img v-if="item.url" :src="item.url" :alt="item.name" />
+        <div v-else class="detail-noimg">
+          <Icon name="image" :size="26" :stroke="1.6" />
+          <span>图片未加载</span>
+          <span class="tip">重新拖入原文件即可回挂预览</span>
+        </div>
       </div>
 
       <div class="detail-panel">
         <div class="fileline">
           <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
-          <span :title="new Date(item.file.lastModified).toLocaleString()">{{ fileTime }}</span>
+          <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
           <NButton size="tiny" quaternary circle aria-label="关闭详情" @click="show = false">
             <template #icon><Icon name="x" :size="13" /></template>
@@ -215,7 +220,7 @@ function downloadJson(text: string | undefined, suffix: string) {
         <div v-else-if="item.status === 'error'" class="notice">
           <span class="notice-title">解析失败</span>
           <p class="err-message">{{ item.error ?? '读取图片元数据时发生未知错误' }}</p>
-          <NButton size="small" secondary @click="retryItem(item)">
+          <NButton v-if="item.file" size="small" secondary @click="retryItem(item)">
             <template #icon><Icon name="refresh" :size="13" /></template>
             重试
           </NButton>

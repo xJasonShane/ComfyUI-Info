@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { deflateSync } from 'node:zlib'
 import { readPngTexts, parsePngChunks } from '../src/lib/png'
 import {
@@ -18,6 +18,9 @@ import {
 } from '../src/lib/metadata'
 import { extractComfyParams } from '../src/lib/comfyExtract'
 import { parseA1111Parameters } from '../src/lib/a1111'
+import { BROKEN, ParsePool, ParseScheduler } from '../src/lib/parser'
+import type { ParseTransport } from '../src/lib/parser'
+import type { ParseResult } from '../types'
 
 const PNG_SIG = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
 
@@ -617,5 +620,140 @@ describe('internParseResult', () => {
     expect(c.params?.rawText).toBe(c.raw.parameters)
     expect(internParseResult({ raw: { source: 'none' } }).raw.prompt).toBeUndefined()
     clearInternPool()
+  })
+})
+
+/* ---------- Worker 池与回退编排（传输注入的假实现，不触碰真实 Worker） ---------- */
+
+/** 可控假传输：post 返回的 promise 由测试手动 resolve / reject */
+function makeFakeTransport() {
+  const jobs: { file: File; resolve: (r: ParseResult) => void; reject: (e: unknown) => void }[] = []
+  const transport: ParseTransport = {
+    broken: false,
+    terminated: false,
+    terminate() {
+      transport.terminated = true
+    },
+    post(file: File) {
+      if (transport.broken) return Promise.reject(BROKEN)
+      return new Promise((resolve, reject) => jobs.push({ file, resolve, reject }))
+    },
+  }
+  return { transport, jobs }
+}
+
+/** 依次吐出给定传输的工厂（闭包内复用同一队列，避免每次调用重建数组） */
+function factoryOf(...transports: ParseTransport[]) {
+  const queue = [...transports]
+  return () => queue.shift()!
+}
+
+describe('ParsePool（传输池）', () => {
+  it('构造任一传输抛错时返回 null，已构造的传输被终止', async () => {
+    const first = makeFakeTransport()
+    let calls = 0
+    const pool = new ParsePool(
+      () => {
+        calls++
+        if (calls === 2) throw new Error('构造失败')
+        return first.transport
+      },
+      2,
+    )
+    expect(await pool.create()).toBeNull()
+    expect(first.transport.terminated).toBe(true)
+  })
+
+  it('健康探测超时返回 null 并终止全部传输', async () => {
+    const a = makeFakeTransport()
+    const b = makeFakeTransport()
+    const pool = new ParsePool(factoryOf(a.transport, b.transport), 2, 20)
+    expect(await pool.create()).toBeNull()
+    expect(a.transport.terminated).toBe(true)
+    expect(b.transport.terminated).toBe(true)
+  })
+
+  it('健康探测被拒绝时返回 null 并终止全部传输', async () => {
+    const a = makeFakeTransport()
+    const b = makeFakeTransport()
+    const pool = new ParsePool(factoryOf(a.transport, b.transport), 2, 100)
+    const creating = pool.create()
+    a.jobs[0]!.reject(new Error('probe boom'))
+    expect(await creating).toBeNull()
+    expect(a.transport.terminated).toBe(true)
+    expect(b.transport.terminated).toBe(true)
+  })
+
+  it('探测通过后按 round-robin 依次派发', async () => {
+    const a = makeFakeTransport()
+    const b = makeFakeTransport()
+    const pool = new ParsePool(factoryOf(a.transport, b.transport), 2, 100)
+    const creating = pool.create()
+    a.jobs[0]!.resolve({ raw: { source: 'none' } })
+    b.jobs[0]!.resolve({ raw: { source: 'none' } })
+    const ok = await creating
+    expect(ok).not.toBeNull()
+
+    void ok!.parse(new File(['x'], '1.png'))
+    void ok!.parse(new File(['x'], '2.png'))
+    void ok!.parse(new File(['x'], '3.png'))
+    expect(b.jobs.map((j) => j.file.name)).toEqual(['probe.png', '1.png', '3.png'])
+    expect(a.jobs.map((j) => j.file.name)).toEqual(['probe.png', '2.png'])
+  })
+})
+
+describe('ParseScheduler（回退编排）', () => {
+  it('池不可用时整体回退主线程解析', async () => {
+    const scheduler = new ParseScheduler(async () => null)
+    const png = buildPng([textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
+    const result = await scheduler.parse(new File([png], 'c.png'))
+    expect(result.raw.source).toBe('comfyui')
+  })
+
+  it('Worker 中途失效：该次解析回退主线程，池被终止且永久不再复用', async () => {
+    const fake = makeFakeTransport()
+    let createCalls = 0
+    const scheduler = new ParseScheduler(() => {
+      createCalls++
+      const pool = new ParsePool(() => fake.transport, 1, 100)
+      const creating = pool.create()
+      // 探测任务在 create() 的同步段已入队，这里直接放行，探测随即通过
+      fake.jobs[0]!.resolve({ raw: { source: 'none' } })
+      return creating
+    })
+    const png = buildPng([textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
+    const file = new File([png], 'c.png')
+
+    const pending = scheduler.parse(file)
+    await vi.waitFor(() => {
+      if (fake.jobs.length < 2) throw new Error('等待解析任务派发')
+    })
+    fake.jobs[1]!.reject(BROKEN) // Worker 解析途中整体失效
+    const result = await pending
+    expect(result.raw.source).toBe('comfyui') // 主线程兜底重新解析了同一文件
+    expect(fake.transport.terminated).toBe(true)
+    expect(createCalls).toBe(1)
+
+    // 后续解析直接走主线程：不再建池，也不再入队新任务（探测 + 首次失败的尝试共 2 条）
+    const again = await scheduler.parse(new File([png], 'c2.png'))
+    expect(again.raw.source).toBe('comfyui')
+    expect(createCalls).toBe(1)
+    expect(fake.jobs).toHaveLength(2)
+  })
+
+  it('非 BROKEN 的解析错误原样向上抛出', async () => {
+    const fake = makeFakeTransport()
+    const scheduler = new ParseScheduler(() => {
+      const pool = new ParsePool(() => fake.transport, 1, 100)
+      const creating = pool.create()
+      fake.jobs[0]!.resolve({ raw: { source: 'none' } })
+      return creating
+    })
+    const pending = scheduler.parse(new File(['x'], 'a.png'))
+    await vi.waitFor(() => {
+      if (fake.jobs.length < 2) throw new Error('等待解析任务派发')
+    })
+    fake.jobs[1]!.reject(new Error('boom'))
+    await expect(pending).rejects.toThrow('boom')
   })
 })

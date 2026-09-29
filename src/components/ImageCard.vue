@@ -70,7 +70,12 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     @keydown.ctrl.space.prevent="$emit('select-toggle')"
     @keydown.meta.space.prevent="$emit('select-toggle')"
   >
-    <img v-if="!broken" :src="item.url" loading="lazy" alt="" @error="broken = true" />
+    <img v-if="!broken && !item.detached" :src="item.url" loading="lazy" alt="" @error="broken = true" />
+    <div v-else-if="item.detached" class="archived">
+      <Icon name="image" :size="20" :stroke="1.8" />
+      <span>已存档</span>
+      <span class="tip">重新拖入原文件可回挂</span>
+    </div>
     <div v-else class="broken">无法预览</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>
     <button

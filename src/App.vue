@@ -195,20 +195,6 @@ watch(
   },
 )
 
-/* ---------- 刷新 / 关闭预警（未做持久化前的止损） ---------- */
-function onBeforeUnload(e: BeforeUnloadEvent) {
-  e.preventDefault()
-  e.returnValue = ''
-}
-// 有已加载图片时才预警，空白页关闭不打扰；提示文案由浏览器统一给出
-watch(
-  () => store.items.length,
-  (len) => {
-    if (len > 0) window.addEventListener('beforeunload', onBeforeUnload)
-    else window.removeEventListener('beforeunload', onBeforeUnload)
-  },
-)
-
 /* ---------- 全窗口拖拽（支持文件夹递归） ---------- */
 const dragging = ref(false)
 let depth = 0

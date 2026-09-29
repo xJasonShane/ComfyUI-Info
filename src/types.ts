@@ -53,17 +53,22 @@ export interface ParseResult {
 
 export interface ImageItem {
   id: string
-  file: File
+  /** 原文件；存档项（detached，由持久化恢复）在重新拖入原文件前没有文件 */
+  file?: File
   url: string
   name: string
   /** 相对路径（含文件名）：目录选择来自 webkitRelativePath，拖拽目录来自 entry.fullPath；单选文件无目录信息时缺省 */
   path?: string
   size: number
+  /** 文件修改时间（毫秒）：新添加取自 file.lastModified，存档项来自持久化记录 */
+  mtime: number
   status: 'pending' | 'parsing' | 'done' | 'error'
   source: ImageSource
   params?: ParsedParams
   raw: RawMetadata
   error?: string
+  /** true = 存档项：历史记录恢复、尚无原文件（无预览），重新拖入同指纹文件即自动回挂 */
+  detached?: boolean
   /** 预构建的小写搜索串（解析完成时生成一次），供筛选热路径直接 includes */
   searchText?: string
 }
