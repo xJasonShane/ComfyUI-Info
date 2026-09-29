@@ -27,6 +27,14 @@
 - **键盘可操作**：Tab 聚焦卡片，Enter / 空格打开详情；抽屉内 ← / → 按当前筛选顺序浏览、Esc 关闭，关闭后焦点返还来源卡片
 - 支持格式：PNG（tEXt / zTXt / iTXt / eXIf 块）、JPEG、WebP（EXIF UserComment）
 
+## 在线使用
+
+GitHub Pages 在线版（与本地单文件版功能一致，数据同样只存浏览器本地）：
+
+**https://xjasonshane.github.io/ComfyUI-Info/**
+
+推送 main 后自动构建部署（`.github/workflows/pages.yml`，含 lint + 单测门禁），也可在仓库 Actions 页手动触发（workflow_dispatch）。首次启用需在仓库 **Settings → Pages → Build and deployment** 把 Source 设为 **GitHub Actions**。
+
 ## 使用
 
 ```bash
