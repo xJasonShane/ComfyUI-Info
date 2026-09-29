@@ -68,8 +68,8 @@ function onPickDir(e: Event) {
       size="small"
       round
       clearable
-      placeholder="搜索提示词 / 文件名"
-      style="width: 190px"
+      placeholder="搜索提示词 / 模型 / LoRA / 文件名"
+      style="width: 210px"
     >
       <template #prefix><Icon name="search" :size="14" /></template>
     </NInput>

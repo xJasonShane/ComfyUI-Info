@@ -147,6 +147,23 @@ export const modelOptions = computed(() => {
     .map((m) => ({ label: m, value: m }))
 })
 
+/** 搜索域：文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数，按任意生成要素定位图片 */
+function searchHaystack(it: ImageItem): string[] {
+  const p = it.params
+  const parts = [it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
+  for (const l of p?.loras ?? []) {
+    parts.push(l.name)
+    if (l.hash) parts.push(l.hash)
+  }
+  for (const s of p?.samplers ?? []) {
+    if (s.sampler) parts.push(s.sampler)
+    if (s.scheduler) parts.push(s.scheduler)
+    if (s.classType) parts.push(s.classType)
+    if (s.seed) parts.push(s.seed)
+  }
+  return parts
+}
+
 export const filteredItems = computed(() => {
   const q = state.search.trim().toLowerCase()
   return state.items
@@ -159,9 +176,7 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (q) {
-        const hay = [it.name, ...(it.params?.positive ?? []), ...(it.params?.negative ?? [])]
-          .join('\n')
-          .toLowerCase()
+        const hay = searchHaystack(it).join('\n').toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
