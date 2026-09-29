@@ -37,7 +37,7 @@ watchEffect(() => {
 const PAGE = 120
 const shown = ref(PAGE)
 watch(
-  () => [store.search, store.modelFilter, store.sourceFilter],
+  () => [store.search, store.modelFilter, store.sourceFilter, store.sortMode],
   () => {
     shown.value = PAGE
   },

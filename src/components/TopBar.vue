@@ -9,6 +9,7 @@ import {
   modelOptions,
   parsing,
   scanProgress,
+  sortOptions,
   sourceOptions,
   store,
   toggleDark,
@@ -114,6 +115,14 @@ function exportAs(key: string | number) {
       :options="sourceOptions"
       :consistent-menu-width="false"
       style="width: 140px"
+    />
+
+    <NSelect
+      v-model:value="store.sortMode"
+      size="small"
+      :options="sortOptions"
+      :consistent-menu-width="false"
+      style="width: 124px"
     />
 
     <NButton

@@ -4,22 +4,28 @@ import { isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
+export type SortMode = 'default' | 'time-desc' | 'time-asc'
+const SORT_MODES: SortMode[] = ['default', 'time-desc', 'time-asc']
 
 interface StoreState {
   items: ImageItem[]
   search: string
   modelFilter: string | null
   sourceFilter: SourceFilter
+  sortMode: SortMode
   dark: boolean
   batchTotal: number
   batchDone: number
 }
+
+const storedSort = localStorage.getItem('cii:sort') as SortMode | null
 
 const state = reactive<StoreState>({
   items: [],
   search: '',
   modelFilter: null,
   sourceFilter: 'comfyui',
+  sortMode: storedSort && SORT_MODES.includes(storedSort) ? storedSort : 'default',
   dark: localStorage.getItem('cii:theme') !== 'light',
   batchTotal: 0,
   batchDone: 0,
@@ -28,6 +34,11 @@ const state = reactive<StoreState>({
 watch(
   () => state.dark,
   (d) => localStorage.setItem('cii:theme', d ? 'dark' : 'light'),
+)
+
+watch(
+  () => state.sortMode,
+  (m) => localStorage.setItem('cii:sort', m),
 )
 
 /* ---------- 解析队列（有限并发） ---------- */
@@ -141,6 +152,17 @@ export const scanProgress = computed(() =>
 
 const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, none: 2 }
 
+const rankBySource = (it: ImageItem) => (it.status === 'error' ? 3 : sourceRank[it.source] ?? 3)
+// 时间模式下失败项始终靠后（它们不属于时间线），时间相同再按文件名兜底
+const errLast = (it: ImageItem) => (it.status === 'error' ? 1 : 0)
+const byName = (a: ImageItem, b: ImageItem) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+
+const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
+  default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
+  'time-desc': (a, b) => errLast(a) - errLast(b) || b.file.lastModified - a.file.lastModified || byName(a, b),
+  'time-asc': (a, b) => errLast(a) - errLast(b) || a.file.lastModified - b.file.lastModified || byName(a, b),
+}
+
 export const stats = computed(() => {
   const c: Record<ImageSource | 'error', number> = { comfyui: 0, a1111: 0, none: 0, error: 0 }
   for (const i of state.items) {
@@ -196,12 +218,7 @@ export const filteredItems = computed(() => {
       }
       return true
     })
-    .sort(
-      (a, b) =>
-        (a.status === 'error' ? 3 : sourceRank[a.source] ?? 3) -
-          (b.status === 'error' ? 3 : sourceRank[b.source] ?? 3) ||
-        a.name.localeCompare(b.name, 'zh-CN', { numeric: true }),
-    )
+    .sort(sorters[state.sortMode])
 })
 
 export const sourceOptions: { label: string; value: SourceFilter }[] = [
@@ -210,6 +227,12 @@ export const sourceOptions: { label: string; value: SourceFilter }[] = [
   { label: '无元数据', value: 'none' },
   { label: '解析失败', value: 'error' },
   { label: '全部图片', value: 'all' },
+]
+
+export const sortOptions: { label: string; value: SortMode }[] = [
+  { label: '默认排序', value: 'default' },
+  { label: '时间 新→旧', value: 'time-desc' },
+  { label: '时间 旧→新', value: 'time-asc' },
 ]
 
 export function toggleDark() {

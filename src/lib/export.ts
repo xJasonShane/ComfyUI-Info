@@ -36,6 +36,7 @@ export function buildExportJson(items: ImageItem[]): string {
       file: it.name,
       size: it.size,
       source: it.status === 'error' ? 'error' : it.source,
+      mtime: new Date(it.file.lastModified).toISOString(),
     }
     if (it.status === 'error') rec.error = it.error ?? '未知错误'
     const p = it.params
@@ -60,6 +61,7 @@ export function buildExportCsv(items: ImageItem[]): string {
     '文件名',
     '大小(字节)',
     '来源',
+    '修改时间',
     '模型',
     'LoRA',
     '采样器',
@@ -84,6 +86,7 @@ export function buildExportCsv(items: ImageItem[]): string {
       it.name,
       it.size,
       it.status === 'error' ? 'error' : it.source,
+      new Date(it.file.lastModified).toISOString(),
       p?.models.join(' + ') || undefined,
       p?.loras.map(formatLora).join('; ') || undefined,
       s?.sampler,

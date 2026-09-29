@@ -21,6 +21,17 @@ const drawerWidth = computed(() => (isNarrow.value ? '100%' : 940))
 
 const p = computed(() => props.item?.params)
 
+const fileTime = computed(() => {
+  if (!props.item) return ''
+  return new Date(props.item.file.lastModified).toLocaleString('zh-CN', {
+    hour12: false,
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+
 const tab = ref('prompt')
 watch(
   () => props.item?.id,
@@ -101,6 +112,7 @@ function downloadJson(text: string | undefined, suffix: string) {
       <div class="detail-panel">
         <div class="fileline">
           <span style="flex: 1">{{ item.name }}</span>
+          <span :title="new Date(item.file.lastModified).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
           <NButton size="tiny" quaternary circle aria-label="关闭详情" @click="show = false">
             <template #icon><Icon name="x" :size="13" /></template>
