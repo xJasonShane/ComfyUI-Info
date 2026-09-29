@@ -14,6 +14,13 @@ interface ComfyNode {
 
 type WorkflowMap = Record<string, ComfyNode>
 
+/** latent 链上收集到的出图信息：宽高与批量可能来自链上不同的节点（如 EmptyLatent → Upscale） */
+interface LatentInfo {
+  width?: number
+  height?: number
+  batch?: number
+}
+
 function isLink(v: unknown): v is [string | number, number] {
   return (
     Array.isArray(v) &&
@@ -75,6 +82,36 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     return null
   }
 
+  // 沿 latent 链向上找出图信息：宽高取链上最近显式声明的节点（最终输出由末端缩放节点决定），
+  // batch_size 独立就近补齐（LatentUpscale 等节点不声明批量，批量保留自上游 EmptyLatentImage）
+  const resolveLatent = (id: unknown, depth = 0): LatentInfo | null => {
+    const node = map[String(id)]
+    if (!node || depth > 8) return null
+    const inputs = (node.inputs || {}) as NodeInputs
+    const info: LatentInfo = {}
+    const w = asNum(inputs.width)
+    const h = asNum(inputs.height)
+    if (w !== undefined && h !== undefined) {
+      info.width = w
+      info.height = h
+    }
+    const batch = asNum(inputs.batch_size)
+    if (batch !== undefined) info.batch = batch
+    if (info.width !== undefined && info.batch !== undefined) return info
+    for (const v of Object.values(inputs)) {
+      if (!isLink(v)) continue
+      const up = resolveLatent(v[0], depth + 1)
+      if (!up) continue
+      if (info.width === undefined && up.width !== undefined) {
+        info.width = up.width
+        info.height = up.height
+      }
+      if (info.batch === undefined && up.batch !== undefined) info.batch = up.batch
+      if (info.width !== undefined && info.batch !== undefined) return info
+    }
+    return info.width !== undefined || info.batch !== undefined ? info : null
+  }
+
   for (const [id, node] of Object.entries(map)) {
     const inputs = (node.inputs || {}) as NodeInputs
     const cls = node.class_type || ''
@@ -124,19 +161,22 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
       }
       if (!out.loras.some((l) => l.name === lora.name)) out.loras.push(lora)
     }
-
-    if (
-      typeof inputs.width === 'number' &&
-      typeof inputs.height === 'number' &&
-      /latent/i.test(cls) &&
-      out.width === undefined
-    ) {
-      out.width = inputs.width
-      out.height = inputs.height
-      out.batch = asNum(inputs.batch_size)
-    }
   }
 
   out.samplers.sort((a, b) => (Number(a.nodeId) || 0) - (Number(b.nodeId) || 0))
+
+  // 出图尺寸：从最后一个采样器的 latent_image 沿链向上回溯（主采样器之后不再有改变尺寸的节点），
+  // 从后往前逐个采样器尝试以兼容分支图；链上找不到显式宽高（如 img2img）时保持未定义
+  for (let i = out.samplers.length - 1; i >= 0 && out.width === undefined; i--) {
+    const node = map[out.samplers[i].nodeId]
+    const latent = ((node?.inputs ?? {}) as NodeInputs).latent_image
+    if (!isLink(latent)) continue
+    const info = resolveLatent(latent[0])
+    if (info?.width !== undefined && info.height !== undefined) {
+      out.width = info.width
+      out.height = info.height
+      out.batch = info.batch
+    }
+  }
   return out
 }
