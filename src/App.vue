@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect, watch } from 'vue'
+import { computed, ref, watchEffect, watch, onMounted, onBeforeUnmount } from 'vue'
 import { NButton, NConfigProvider, NMessageProvider, darkTheme, dateZhCN, zhCN } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import TopBar from './components/TopBar.vue'
@@ -70,6 +70,31 @@ function onRemove(item: ImageItem) {
     current.value = null
   }
 }
+
+/* ---------- 键盘导航（抽屉打开时 ←/→ 沿当前筛选顺序浏览） ---------- */
+function onKeydown(e: KeyboardEvent) {
+  if (!showDetail.value || !current.value) return
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+    return // 焦点在输入框内时方向键属于光标，不切换图片
+  }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  const list = filteredItems.value
+  const idx = list.findIndex((i) => i.id === current.value!.id)
+  const next = idx + (e.key === 'ArrowRight' ? 1 : -1)
+  if (idx < 0 || next < 0 || next >= list.length) return
+  current.value = list[next]
+  e.preventDefault()
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+
+// 抽屉关闭后把焦点返还给来源卡片（对话框关闭的 ARIA 模式）
+watch(showDetail, (v) => {
+  if (!v && current.value) {
+    document.querySelector<HTMLElement>(`[data-item-id="${current.value.id}"]`)?.focus({ preventScroll: true })
+  }
+})
 // 清空列表时收起详情抽屉，避免展示已撤销 URL 的图片
 watch(
   () => store.items.length,
@@ -175,8 +200,12 @@ async function onDrop(e: DragEvent) {
           <span
             v-if="stats.error"
             class="stat-error"
+            role="button"
+            tabindex="0"
             title="点击查看解析失败的图片"
             @click="store.sourceFilter = 'error'"
+            @keydown.enter.prevent="store.sourceFilter = 'error'"
+            @keydown.space.prevent="store.sourceFilter = 'error'"
           >
             <i class="dot" style="background: var(--danger)" /><b>{{ stats.error }}</b> 解析失败
           </span>

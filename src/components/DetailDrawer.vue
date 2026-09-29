@@ -102,7 +102,7 @@ function downloadJson(text: string | undefined, suffix: string) {
         <div class="fileline">
           <span style="flex: 1">{{ item.name }}</span>
           <span>{{ humanBytes(item.size) }}</span>
-          <NButton size="tiny" quaternary circle @click="show = false">
+          <NButton size="tiny" quaternary circle aria-label="关闭详情" @click="show = false">
             <template #icon><Icon name="x" :size="13" /></template>
           </NButton>
         </div>
@@ -234,6 +234,8 @@ function downloadJson(text: string | undefined, suffix: string) {
             <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
           </ul>
         </div>
+
+        <p class="kbd-hint">← / → 切换图片 · Esc 关闭</p>
       </div>
     </div>
   </NDrawer>

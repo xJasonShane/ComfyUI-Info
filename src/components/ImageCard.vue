@@ -42,13 +42,19 @@ const modelShort = computed(() => {
     class="card"
     :class="{ 'card-error': item.status === 'error' }"
     :style="{ '--i': index }"
+    role="button"
+    tabindex="0"
+    :data-item-id="item.id"
+    :aria-label="`${item.name}，查看详情`"
     :title="item.status === 'error' ? `${item.name}（${item.error ?? '解析失败'}）` : item.name"
     @click="$emit('open')"
+    @keydown.enter.prevent="$emit('open')"
+    @keydown.space.prevent="$emit('open')"
   >
     <img v-if="!broken" :src="item.url" loading="lazy" alt="" @error="broken = true" />
     <div v-else class="broken">无法预览</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>
-    <button class="card-remove" type="button" title="从列表移除" @click.stop="$emit('remove')">
+    <button class="card-remove" type="button" title="从列表移除" aria-label="从列表移除这张图片" @click.stop="$emit('remove')">
       <Icon name="x" :size="12" :stroke="2.4" />
     </button>
     <div v-if="modelShort || dims" class="veil">

@@ -76,7 +76,7 @@ function exportAs(key: string | number) {
       <template #trigger>
         <NPopconfirm @positive-click="clearAll">
           <template #trigger>
-            <NButton size="small" quaternary type="error">
+            <NButton size="small" quaternary type="error" aria-label="清空列表">
               <template #icon><Icon name="trash" /></template>
             </NButton>
           </template>
@@ -116,7 +116,14 @@ function exportAs(key: string | number) {
       style="width: 140px"
     />
 
-    <NButton size="small" quaternary circle @click="toggleDark" :title="store.dark ? '切换浅色' : '切换深色'">
+    <NButton
+      size="small"
+      quaternary
+      circle
+      :aria-label="store.dark ? '切换浅色主题' : '切换深色主题'"
+      @click="toggleDark"
+      :title="store.dark ? '切换浅色' : '切换深色'"
+    >
       <template #icon><Icon :name="store.dark ? 'sun' : 'moon'" /></template>
     </NButton>
 
