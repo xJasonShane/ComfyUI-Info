@@ -30,18 +30,13 @@ async function readHead(file: File, size: number): Promise<Uint8Array> {
   return new Uint8Array(buf)
 }
 
-/** UserComment 文本 → 来源判定：JSON 即 ComfyUI，否则按 A1111 参数文本处理 */
+/** UserComment 文本 → 来源判定：内嵌 ComfyUI 工作流 JSON 则升级，否则按 A1111 参数文本处理 */
 function judgeUserCommentText(text: string): RawMetadata | null {
   const json = extractJsonSubstring(text)
-  if (json) {
-    try {
-      const obj: unknown = JSON.parse(json)
-      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-        return { source: 'comfyui', prompt: json }
-      }
-    } catch {
-      // 含花括号但不是 JSON，继续按 A1111 参数文本判断
-    }
+  // JSON 必须像 ComfyUI 工作流（节点带 class_type）——
+  // 排除 A1111 参数行里 Hashes 这类普通 JSON 值把整张图误判成 ComfyUI
+  if (json && /"class_type"\s*:/.test(json)) {
+    return { source: 'comfyui', prompt: json }
   }
   return judgeParametersText(text)
 }
@@ -49,19 +44,13 @@ function judgeUserCommentText(text: string): RawMetadata | null {
 /**
  * A1111 参数文本判定。部分 ComfyUI 生态的保存节点（Civitai 兼容模式）会把
  * workflow JSON 内嵌在参数文本尾部——检测到节点结构关键字时升级为 ComfyUI 解析。
+ * extractJsonSubstring 返回值保证可解析为 JSON 对象。
  */
 function judgeParametersText(text: string): RawMetadata {
   if (/"(?:class_type|nodes)"\s*:/.test(text)) {
     const json = extractJsonSubstring(text)
     if (json) {
-      try {
-        const obj: unknown = JSON.parse(json)
-        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-          return { source: 'comfyui', prompt: json }
-        }
-      } catch {
-        // 关键字出现在普通提示词里且无合法 JSON，按 A1111 处理
-      }
+      return { source: 'comfyui', prompt: json }
     }
   }
   return { source: 'a1111', parameters: text }

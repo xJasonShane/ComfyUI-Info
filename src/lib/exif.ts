@@ -261,10 +261,49 @@ export function decodeUserComment(raw: Uint8Array): string | null {
   return new TextDecoder('utf-8').decode(raw).replace(/\u0000+$/, '')
 }
 
-/** 从混合文本中截取 JSON 对象部分 */
+/** 从 start（指向 {）做配平扫描，返回配平的 } 下标；扫描中跳过 "字符串"（含转义），未配平返回 -1 */
+function findBalancedEnd(text: string, start: number): number {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth++
+    else if (ch === '}' && --depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * 从混合文本中截取内嵌的 JSON 对象，返回其中最后闭合的合法者。
+ * 提示词常含 {}（模板语法、A1111 的 Hashes 值等），不能简单取首个 { 到末个 }：
+ * 逐个 { 起点做配平扫描并 JSON.parse 校验，只有合法的 JSON 对象才参与选取——
+ * 内嵌工作流 JSON 总在参数文本末尾，最后闭合者即它。找不到时返回 null。
+ */
 export function extractJsonSubstring(text: string): string | null {
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  return text.slice(start, end + 1)
+  let found: string | null = null
+  let foundEnd = -1
+  let attempts = 0
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    // 上限防止「大量未配平花括号」的病态文本触发平方级扫描
+    if (++attempts > 64) break
+    const end = findBalancedEnd(text, start)
+    if (end < 0 || end <= foundEnd) continue
+    const candidate = text.slice(start, end + 1)
+    try {
+      const obj: unknown = JSON.parse(candidate)
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        found = candidate
+        foundEnd = end
+      }
+    } catch {
+      // 配平成功但不是合法 JSON（如提示词模板段），尝试下一个起点
+    }
+  }
+  return found
 }
