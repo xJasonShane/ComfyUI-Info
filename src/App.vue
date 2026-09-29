@@ -1,3 +1,29 @@
+<script lang="ts">
+import { defineComponent } from 'vue'
+import { useMessage } from 'naive-ui'
+import type { MessageApi } from 'naive-ui'
+
+let messageApi: MessageApi | null = null
+
+/**
+ * 渲染在 <NMessageProvider> 内部的桥接组件：捕获 message API 供 App 顶层使用。
+ * naive-ui 约定 useMessage 只能在 Provider 的子孙组件中调用，
+ * 在渲染 Provider 的同一组件里调用会注入失败并中断挂载（页面全黑）。
+ */
+const MessageBridge = defineComponent({
+  setup() {
+    messageApi = useMessage()
+    return () => null
+  },
+})
+
+/** 供事件回调取用；仅在组件挂载后才会被触发，messageApi 必已就绪 */
+function appMessage(): MessageApi {
+  if (!messageApi) throw new Error('NMessageProvider 尚未挂载')
+  return messageApi
+}
+</script>
+
 <script setup lang="ts">
 import { computed, ref, watchEffect, watch, onMounted, onBeforeUnmount } from 'vue'
 import {
@@ -9,7 +35,6 @@ import {
   darkTheme,
   dateZhCN,
   zhCN,
-  useMessage,
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import TopBar from './components/TopBar.vue'
@@ -71,7 +96,6 @@ function showAll() {
 /* ---------- 详情 ---------- */
 const current = ref<ImageItem | null>(null)
 const showDetail = ref(false)
-const message = useMessage()
 function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
@@ -125,12 +149,12 @@ async function batchCopyPrompts() {
     .map((i) => i.params!.positive.join('\n'))
     .filter((s) => s.trim() !== '')
   if (!prompts.length) {
-    message.warning('所选图片中还没有已解析出提示词的项')
+    appMessage().warning('所选图片中还没有已解析出提示词的项')
     return
   }
   const ok = await copyText(prompts.join('\n'))
-  if (ok) message.success(`已复制 ${prompts.length} 张图片的正向提示词`)
-  else message.error('复制失败，请手动选择文本复制')
+  if (ok) appMessage().success(`已复制 ${prompts.length} 张图片的正向提示词`)
+  else appMessage().error('复制失败，请手动选择文本复制')
 }
 
 const exportOptions = [
@@ -141,12 +165,12 @@ const exportOptions = [
 
 function batchExport(key: string | number) {
   if (parsing.value) {
-    message.warning('扫描仍在进行，请等扫描完成后再导出')
+    appMessage().warning('扫描仍在进行，请等扫描完成后再导出')
     return
   }
   const items = selectedItems.value.filter((i) => i.status === 'done' || i.status === 'error')
   if (!items.length) {
-    message.warning('所选图片中还没有可导出的结果')
+    appMessage().warning('所选图片中还没有可导出的结果')
     return
   }
   const stamp = new Date().toISOString().slice(0, 10)
@@ -283,6 +307,7 @@ async function onDrop(e: DragEvent) {
     :date-locale="dateZhCN"
   >
     <NMessageProvider>
+      <MessageBridge />
       <div
         class="app"
         @dragenter.prevent="onDragEnter"
