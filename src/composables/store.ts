@@ -71,6 +71,8 @@ async function parseItem(item: ImageItem, epoch: number) {
 
 /* ---------- 添加 / 清空 ---------- */
 let seq = 0
+// 已加载文件的指纹（name|size|lastModified），O(1) 查重；增删 items 时必须同步维护
+const seenKeys = new Set<string>()
 
 export function retryItem(item: ImageItem) {
   // 仅允许重试当前列表中的失败项（列表清空时抽屉会被关闭，这里兜底）
@@ -86,7 +88,8 @@ export function addFiles(files: File[]) {
   for (const file of files) {
     if (!isSupportedImage(file)) continue
     const key = `${file.name}|${file.size}|${file.lastModified}`
-    if (state.items.some((i) => `${i.name}|${i.size}|${i.file.lastModified}` === key)) continue
+    if (seenKeys.has(key)) continue
+    seenKeys.add(key)
     // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
     const item = reactive<ImageItem>({
       id: `img-${++seq}`,
@@ -108,6 +111,7 @@ export function addFiles(files: File[]) {
 export function clearAll() {
   for (const i of state.items) URL.revokeObjectURL(i.url)
   state.items = []
+  seenKeys.clear()
   queue.length = 0
   state.batchTotal = 0
   state.batchDone = 0
