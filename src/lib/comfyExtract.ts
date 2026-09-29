@@ -82,6 +82,25 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     return null
   }
 
+  // 沿连线向上找选择值：KSamplerSelect / SchedulerSelect 等选择节点把 sampler_name /
+  // scheduler 以连线传入采样器，采样器输入槽里只能读到 link 数组
+  const resolveNodeChoice = (id: unknown, slots: string[], depth = 0): string | null => {
+    const node = map[String(id)]
+    if (!node || depth > 8) return null
+    const inputs = (node.inputs || {}) as NodeInputs
+    for (const slot of slots) {
+      const direct = asText(inputs[slot])
+      if (direct) return direct
+    }
+    for (const v of Object.values(inputs)) {
+      if (isLink(v)) {
+        const found = resolveNodeChoice(v[0], slots, depth + 1)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
   // 沿 latent 链向上找出图信息：宽高取链上最近显式声明的节点（最终输出由末端缩放节点决定），
   // batch_size 独立就近补齐（LatentUpscale 等节点不声明批量，批量保留自上游 EmptyLatentImage）
   const resolveLatent = (id: unknown, depth = 0): LatentInfo | null => {
@@ -125,8 +144,21 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
         classType: cls,
         steps: asNum(inputs.steps),
         cfg: asNum(inputs.cfg),
-        sampler: asText(inputs.sampler_name) ?? undefined,
-        scheduler: asText(inputs.scheduler) ?? undefined,
+        sampler:
+          asText(inputs.sampler_name) ??
+          (isLink(inputs.sampler_name)
+            ? resolveNodeChoice(inputs.sampler_name[0], ['sampler_name'])
+            : undefined) ??
+          (isLink(inputs.sampler)
+            ? resolveNodeChoice(inputs.sampler[0], ['sampler_name'])
+            : undefined) ??
+          undefined,
+        scheduler:
+          asText(inputs.scheduler) ??
+          (isLink(inputs.scheduler)
+            ? resolveNodeChoice(inputs.scheduler[0], ['scheduler'])
+            : undefined) ??
+          undefined,
         seed:
           asText(inputs.seed) ??
           asText(inputs.noise_seed) ??

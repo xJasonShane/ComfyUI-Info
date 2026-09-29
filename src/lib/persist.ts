@@ -4,6 +4,7 @@
  * file:// 直接打开、隐私模式等场景下 IndexedDB 可能不可用——启动时用真实读写探测，
  * 不可用则整体降级为纯内存（与未引入持久化前行为一致）；所有读写失败均静默吞掉。
  */
+import { toRaw } from 'vue'
 import type { ImageItem, ImageSource, ParsedParams, RawMetadata } from '../types'
 
 const DB_NAME = 'comfyui-info'
@@ -36,6 +37,8 @@ let archivedSeq = 0
 /** 列表项 → 存档记录；解析中的项不入库（等出结果时再写） */
 export function toRecord(item: ImageItem): PersistRecord | null {
   if (item.status === 'pending' || item.status === 'parsing') return null
+  // item 是 reactive 深代理：直接引用 item.raw / item.params 会把 Proxy 传给 put，
+  // 结构化克隆抛 DataCloneError 导致写入永久失败——toRaw 解出原始可克隆对象
   return {
     key: recordKey(item),
     name: item.name,
@@ -44,8 +47,8 @@ export function toRecord(item: ImageItem): PersistRecord | null {
     mtime: item.mtime,
     status: item.status === 'error' ? 'error' : 'done',
     source: item.source,
-    raw: item.raw,
-    params: item.params,
+    raw: toRaw(item.raw),
+    params: item.params ? toRaw(item.params) : undefined,
     error: item.error,
     savedAt: Date.now(),
   }
@@ -146,7 +149,9 @@ export async function probePersistence(): Promise<boolean> {
     store.delete('__probe__')
     await settled(tx)
     return true
-  } catch {
+  } catch (err) {
+    // 探测失败即判定环境不可用；保留告警便于定位具体失败环节
+    console.warn('[comfyui-info] 持久化探测失败，降级纯内存:', err)
     return false
   }
 }

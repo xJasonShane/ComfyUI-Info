@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import type { ImageItem } from '../src/types'
 
@@ -360,4 +360,50 @@ it('排序模式：按文件时间新旧排列，失败项始终靠后', async (
   expect(names()).toEqual(['a.png', 'c.png', 'b.png', 'e.png']) // 失败项脱离时间线靠后
   api.store.sortMode = 'default'
   expect(names()).toEqual(['a.png', 'b.png', 'c.png', 'e.png']) // 来源 + 文件名，失败项垫底
+})
+
+describe('usageStats', () => {
+  const mk = (
+    id: string,
+    models: string[],
+    loras: { name: string }[],
+    samplers: { nodeId: string; classType: string; sampler?: string }[],
+  ) => ({
+    id,
+    url: '',
+    name: `${id}.png`,
+    size: 1,
+    mtime: 1,
+    status: 'done' as const,
+    source: 'comfyui' as const,
+    raw: { source: 'comfyui' as const },
+    params: { positive: [], negative: [], models, loras, samplers, nodeCount: 1 },
+  })
+
+  it('按已解析项聚合模型 / LoRA / 采样器频次（次数降序，同次数按名排序）', () => {
+    api.store.items.push(
+      mk('1', ['b.safetensors'], [{ name: 'l1' }], [
+        { nodeId: '3', classType: 'KSampler', sampler: 'euler' },
+      ]),
+      mk('2', ['a.safetensors'], [{ name: 'l1' }, { name: 'l2' }], [
+        { nodeId: '3', classType: 'KSampler', sampler: 'dpmpp_2m' },
+        { nodeId: '9', classType: 'KSampler', sampler: 'euler' },
+      ]),
+      // 无参数项（解析中 / 无元数据）不参与统计
+      { id: '3', url: '', name: '3.png', size: 1, mtime: 1, status: 'done', source: 'none', raw: { source: 'none' } },
+    )
+    const s = api.usageStats.value
+    expect(s.models).toEqual([
+      { name: 'a.safetensors', count: 1 },
+      { name: 'b.safetensors', count: 1 },
+    ])
+    expect(s.loras).toEqual([
+      { name: 'l1', count: 2 },
+      { name: 'l2', count: 1 },
+    ])
+    expect(s.samplers).toEqual([
+      { name: 'euler', count: 2 },
+      { name: 'dpmpp_2m', count: 1 },
+    ])
+  })
 })

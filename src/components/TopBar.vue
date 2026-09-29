@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { NButton, NDropdown, NInput, NPopconfirm, NSelect, NTooltip, useMessage } from 'naive-ui'
 import Icon from './Icon.vue'
+import StatsDrawer from './StatsDrawer.vue'
 import {
   addFiles,
   clearAll,
@@ -27,6 +28,7 @@ const message = useMessage()
 // Chromium 系走 File System Access 选择器（可记住目录、一键重扫），其余回退 webkitdirectory
 const fsPickSupported = supportsDirectoryPicker()
 const scanning = ref(false)
+const showStats = ref(false)
 
 /** webkitRelativePath 仅在目录选择时有值，普通多选为空串——退回 undefined 让去重退化为文件名 */
 function onPick(e: Event) {
@@ -212,6 +214,22 @@ function exportAs(key: string | number) {
       style="width: 124px"
     />
 
+    <NTooltip v-if="store.items.length > 0">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          aria-label="生成统计"
+          title="生成统计"
+          @click="showStats = true"
+        >
+          <template #icon><Icon name="chart" /></template>
+        </NButton>
+      </template>
+      按模型 / LoRA / 采样器聚合使用频次
+    </NTooltip>
+
     <NButton
       size="small"
       quaternary
@@ -226,6 +244,8 @@ function exportAs(key: string | number) {
     <div v-if="parsing" class="scan-progress">
       <i :style="{ width: scanProgress + '%' }" />
     </div>
+
+    <StatsDrawer v-model:show="showStats" />
 
     <input
       ref="fileInput"

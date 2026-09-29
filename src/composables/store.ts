@@ -304,8 +304,9 @@ async function flushPersist() {
     const records = items.map(toRecord).filter((r) => r !== null)
     if (records.length) await putPersisted(records)
     if (keys.length) await deletePersisted(keys)
-  } catch {
-    // 写库失败（配额 / 环境限制）不影响功能，本轮丢弃
+  } catch (err) {
+    // 写库失败（配额 / 环境限制）不影响功能，本轮丢弃；保留告警便于定位环境问题
+    console.warn('[comfyui-info] 存档写入失败，本轮丢弃:', err)
   }
   if (dirtyItems.size || deletedKeys.size) schedulePersist() // 写库期间又有变更
 }
@@ -321,7 +322,9 @@ async function hydrate() {
       rescanHandle = handle
       state.rescanName = handle.name
     }
-  } catch {
+  } catch (err) {
+    // 恢复失败等同不可用：静默降级纯内存，但保留一条告警便于排查环境问题
+    console.warn('[comfyui-info] 会话恢复失败，本次会话不启用持久化:', err)
     persistAvailable = false
   }
 }
@@ -370,6 +373,35 @@ export const modelOptions = computed(() => {
   return Array.from(set)
     .sort()
     .map((m) => ({ label: m, value: m }))
+})
+
+export interface UsageStat {
+  name: string
+  count: number
+}
+
+/**
+ * 生成统计：对已解析出参数的图片聚合模型 / LoRA / 采样器使用频次（次数降序，同次数按名排序）。
+ * computed 缓存：解析中每个 item 出结果都会触发一次重算，开销 O(全部参数项)，量级可忽略。
+ */
+export const usageStats = computed(() => {
+  const models = new Map<string, number>()
+  const loras = new Map<string, number>()
+  const samplers = new Map<string, number>()
+  for (const it of state.items) {
+    const p = it.params
+    if (!p) continue
+    for (const m of p.models) models.set(m, (models.get(m) ?? 0) + 1)
+    for (const l of p.loras) loras.set(l.name, (loras.get(l.name) ?? 0) + 1)
+    for (const s of p.samplers) {
+      if (s.sampler) samplers.set(s.sampler, (samplers.get(s.sampler) ?? 0) + 1)
+    }
+  }
+  const toList = (m: Map<string, number>): UsageStat[] =>
+    Array.from(m, ([name, count]) => ({ name, count })).sort(
+      (a, b) => b.count - a.count || nameCollator.compare(a.name, b.name),
+    )
+  return { models: toList(models), loras: toList(loras), samplers: toList(samplers) }
 })
 
 /**

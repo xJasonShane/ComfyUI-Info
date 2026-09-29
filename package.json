@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "eslint": "^10.11.0",
     "eslint-plugin-vue": "^10.11.1",

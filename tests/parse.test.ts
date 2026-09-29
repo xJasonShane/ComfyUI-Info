@@ -566,6 +566,61 @@ describe('extractComfyParams', () => {
   it('损坏 JSON 返回 null', () => {
     expect(extractComfyParams('not json')).toBeNull()
   })
+
+  it('sampler_name / scheduler 经选择节点连线传入时可解析（KSamplerSelect / SchedulerSelect）', () => {
+    const prompt = JSON.stringify({
+      '3': {
+        class_type: 'KSampler',
+        inputs: {
+          seed: 1562088014288583000,
+          steps: 28,
+          cfg: 6.5,
+          sampler_name: ['10', 0],
+          scheduler: ['11', 0],
+          denoise: 1,
+          model: ['4', 0],
+          positive: ['6', 0],
+          negative: ['7', 0],
+          latent_image: ['5', 0],
+        },
+      },
+      '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'dreamshaper_8.safetensors' } },
+      '5': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 768, batch_size: 1 } },
+      '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a cat', clip: ['4', 1] } },
+      '7': { class_type: 'CLIPTextEncode', inputs: { text: 'low quality', clip: ['4', 1] } },
+      '10': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler_ancestral' } },
+      '11': { class_type: 'SchedulerSelect', inputs: { scheduler: 'karras' } },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.samplers[0]!.sampler).toBe('euler_ancestral')
+    expect(p.samplers[0]!.scheduler).toBe('karras')
+  })
+
+  it('SamplerCustom 的 sampler 槽连线到 KSamplerSelect 时同样可解析', () => {
+    const prompt = JSON.stringify({
+      '13': {
+        class_type: 'SamplerCustom',
+        inputs: {
+          noise_seed: 42,
+          cfg: 7,
+          sampler: ['10', 0],
+          sigmas: ['11', 0],
+          model: ['4', 0],
+          positive: ['6', 0],
+          negative: ['7', 0],
+          latent_image: ['5', 0],
+        },
+      },
+      '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'a.safetensors' } },
+      '5': { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 512, batch_size: 1 } },
+      '6': { class_type: 'CLIPTextEncode', inputs: { text: 'cat', clip: ['4', 1] } },
+      '7': { class_type: 'CLIPTextEncode', inputs: { text: 'bad', clip: ['4', 1] } },
+      '10': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'dpmpp_2m' } },
+      '11': { class_type: 'KarrasScheduler', inputs: { steps: 20, denoise: 1 } },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.samplers[0]!.sampler).toBe('dpmpp_2m')
+  })
 })
 
 describe('extractParams', () => {
