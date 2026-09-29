@@ -35,17 +35,19 @@ watch(
 let active = 0
 const queue: ImageItem[] = []
 const PARSE_LIMIT = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) * 2))
+// 清空列表时递增：旧批次的在途解析完成时不再计数，避免污染新批次进度
+let batchEpoch = 0
 
 function pump() {
   while (active < PARSE_LIMIT && queue.length > 0) {
     const item = queue.shift()
     if (!item) break
     active++
-    void parseItem(item)
+    void parseItem(item, batchEpoch)
   }
 }
 
-async function parseItem(item: ImageItem) {
+async function parseItem(item: ImageItem, epoch: number) {
   item.status = 'parsing'
   try {
     const raw = await readImageMetadata(item.file)
@@ -62,7 +64,7 @@ async function parseItem(item: ImageItem) {
     item.error = e instanceof Error ? e.message : String(e)
   } finally {
     active--
-    state.batchDone++
+    if (epoch === batchEpoch) state.batchDone++
     pump()
   }
 }
@@ -71,7 +73,8 @@ async function parseItem(item: ImageItem) {
 let seq = 0
 
 export function retryItem(item: ImageItem) {
-  if (item.status !== 'error') return
+  // 仅允许重试当前列表中的失败项（列表清空时抽屉会被关闭，这里兜底）
+  if (item.status !== 'error' || !state.items.includes(item)) return
   item.status = 'pending'
   item.error = undefined
   state.batchTotal++
@@ -108,6 +111,7 @@ export function clearAll() {
   queue.length = 0
   state.batchTotal = 0
   state.batchDone = 0
+  batchEpoch++ // 在途解析完成后不再计入新批次
 }
 
 /* ---------- 派生数据 ---------- */

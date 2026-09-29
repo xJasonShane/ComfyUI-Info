@@ -62,6 +62,16 @@ function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
 }
+// 清空列表时收起详情抽屉，避免展示已撤销 URL 的图片
+watch(
+  () => store.items.length,
+  (len) => {
+    if (len === 0) {
+      showDetail.value = false
+      current.value = null
+    }
+  },
+)
 
 /* ---------- 全窗口拖拽（支持文件夹递归） ---------- */
 const dragging = ref(false)
