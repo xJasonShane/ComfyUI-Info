@@ -81,6 +81,8 @@ function isValidRecord(value: unknown): value is PersistRecord {
   )
 }
 
+let dbPromise: Promise<IDBDatabase> | null = null
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
@@ -99,6 +101,29 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
+/**
+ * 连接单例：批量扫描时每 500ms 就有一次写库事务，缓存连接避免每次开关数据库的开销。
+ * 打开失败不缓存（下次调用重试）；连接被意外关闭或其他标签页升级版本时重置，后续调用重新打开。
+ */
+function getDb(): Promise<IDBDatabase> {
+  if (!dbPromise) {
+    dbPromise = openDb().then((db) => {
+      db.onclose = () => {
+        dbPromise = null
+      }
+      db.onversionchange = () => {
+        db.close()
+        dbPromise = null
+      }
+      return db
+    }, (err) => {
+      dbPromise = null
+      throw err
+    })
+  }
+  return dbPromise
+}
+
 function settled(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve()
@@ -114,16 +139,12 @@ function settled(tx: IDBTransaction): Promise<void> {
 export async function probePersistence(): Promise<boolean> {
   try {
     if (typeof indexedDB === 'undefined') return false
-    const db = await openDb()
-    try {
-      const tx = db.transaction(STORE, 'readwrite')
-      const store = tx.objectStore(STORE)
-      store.put({ key: '__probe__', savedAt: Date.now() })
-      store.delete('__probe__')
-      await settled(tx)
-    } finally {
-      db.close()
-    }
+    const db = await getDb()
+    const tx = db.transaction(STORE, 'readwrite')
+    const store = tx.objectStore(STORE)
+    store.put({ key: '__probe__', savedAt: Date.now() })
+    store.delete('__probe__')
+    await settled(tx)
     return true
   } catch {
     return false
@@ -132,94 +153,66 @@ export async function probePersistence(): Promise<boolean> {
 
 /** 读取全部存档，剔除无法识别的历史记录（如旧版本结构） */
 export async function loadPersisted(): Promise<PersistRecord[]> {
-  const db = await openDb()
-  try {
-    const req = db.transaction(STORE).objectStore(STORE).getAll()
-    const rows = await new Promise<unknown[]>((resolve, reject) => {
-      req.onsuccess = () => resolve(req.result as unknown[])
-      req.onerror = () => reject(req.error ?? new Error('读取存档失败'))
-    })
-    return rows.filter(isValidRecord)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const req = db.transaction(STORE).objectStore(STORE).getAll()
+  const rows = await new Promise<unknown[]>((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result as unknown[])
+    req.onerror = () => reject(req.error ?? new Error('读取存档失败'))
+  })
+  return rows.filter(isValidRecord)
 }
 
 export async function putPersisted(records: PersistRecord[]): Promise<void> {
   if (!records.length) return
-  const db = await openDb()
-  try {
-    const tx = db.transaction(STORE, 'readwrite')
-    const store = tx.objectStore(STORE)
-    for (const rec of records) store.put(rec)
-    await settled(tx)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const tx = db.transaction(STORE, 'readwrite')
+  const store = tx.objectStore(STORE)
+  for (const rec of records) store.put(rec)
+  await settled(tx)
 }
 
 export async function deletePersisted(keys: string[]): Promise<void> {
   if (!keys.length) return
-  const db = await openDb()
-  try {
-    const tx = db.transaction(STORE, 'readwrite')
-    const store = tx.objectStore(STORE)
-    for (const key of keys) store.delete(key)
-    await settled(tx)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const tx = db.transaction(STORE, 'readwrite')
+  const store = tx.objectStore(STORE)
+  for (const key of keys) store.delete(key)
+  await settled(tx)
 }
 
 /** 清空全部存档（随「清空列表」一并触发，所见即所得） */
 export async function clearPersisted(): Promise<void> {
-  const db = await openDb()
-  try {
-    const tx = db.transaction(STORE, 'readwrite')
-    tx.objectStore(STORE).clear()
-    await settled(tx)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const tx = db.transaction(STORE, 'readwrite')
+  tx.objectStore(STORE).clear()
+  await settled(tx)
 }
 
 /* ---------- 目录句柄（一键重扫的书签，不随清空列表删除） ---------- */
 
 /** 保存目录句柄；浏览器不支持结构化克隆句柄时抛错，由调用方降级为仅本会话有效 */
 export async function saveHandle(handle: FileSystemDirectoryHandle): Promise<void> {
-  const db = await openDb()
-  try {
-    const tx = db.transaction(HANDLE_STORE, 'readwrite')
-    tx.objectStore(HANDLE_STORE).put({ id: 'last', handle, savedAt: Date.now() })
-    await settled(tx)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const tx = db.transaction(HANDLE_STORE, 'readwrite')
+  tx.objectStore(HANDLE_STORE).put({ id: 'last', handle, savedAt: Date.now() })
+  await settled(tx)
 }
 
 export async function loadHandle(): Promise<FileSystemDirectoryHandle | null> {
-  const db = await openDb()
-  try {
-    const req = db.transaction(HANDLE_STORE).objectStore(HANDLE_STORE).get('last')
-    const row = await new Promise<{ id: string; handle?: FileSystemDirectoryHandle } | undefined>(
-      (resolve, reject) => {
-        req.onsuccess = () => resolve(req.result)
-        req.onerror = () => reject(req.error ?? new Error('读取目录句柄失败'))
-      },
-    )
-    return row?.handle ?? null
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const req = db.transaction(HANDLE_STORE).objectStore(HANDLE_STORE).get('last')
+  const row = await new Promise<{ id: string; handle?: FileSystemDirectoryHandle } | undefined>(
+    (resolve, reject) => {
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error ?? new Error('读取目录句柄失败'))
+    },
+  )
+  return row?.handle ?? null
 }
 
 export async function clearHandle(): Promise<void> {
-  const db = await openDb()
-  try {
-    const tx = db.transaction(HANDLE_STORE, 'readwrite')
-    tx.objectStore(HANDLE_STORE).delete('last')
-    await settled(tx)
-  } finally {
-    db.close()
-  }
+  const db = await getDb()
+  const tx = db.transaction(HANDLE_STORE, 'readwrite')
+  tx.objectStore(HANDLE_STORE).delete('last')
+  await settled(tx)
 }

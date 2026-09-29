@@ -1,8 +1,8 @@
 /**
  * 解析调度：把「读元数据 + 提取参数」派发到 Worker 池，批量扫描时主线程只等结果。
  * 传输（真实 Worker）通过工厂注入、延迟到首次解析时动态加载——无 Worker 环境导入本模块零副作用，
- * 池与回退编排可独立单测。构造失败、健康探测超时（如部分 file:// 环境限制 Blob Worker）
- * 或 Worker 中途失效时，自动整体回退主线程解析，行为与纯主线程版本一致。
+ * 池与回退编排可独立单测。构造失败、健康探测超时（如部分 file:// 环境限制 Blob Worker）、
+ * Worker 中途失效或任务超时无响应时，自动整体回退主线程解析，行为与纯主线程版本一致。
  */
 import { extractParams, internParseResult, readImageMetadata } from './metadata'
 import type { ParseResult } from '../types'
@@ -19,23 +19,33 @@ export interface ParseTransport {
   terminate(): void
 }
 
+/**
+ * 单任务超时：健康探测通过后 Worker 仍可能静默挂起（部分 file:// 环境、安全软件拦截等），
+ * 不设上限会让任务永久 pending、卡片永远停在「解析中」且无法重试。
+ * 大文件逐级补扫 + JSON 解析的合法耗时远低于该值，超时即判定通道失效，走 BROKEN 整体回退。
+ */
+export const JOB_TIMEOUT_MS = 30_000
+
 interface Job {
   resolve: (r: ParseResult) => void
   reject: (e: unknown) => void
+  /** 超时哨兵：正常回包或通道失效时清除 */
+  timer?: ReturnType<typeof setTimeout>
 }
 
-class WorkerEntry implements ParseTransport {
+export class WorkerEntry implements ParseTransport {
   broken = false
   private jobs = new Map<number, Job>()
   private seq = 0
   private worker: Worker
 
-  constructor(workerCtor: new () => Worker) {
+  constructor(workerCtor: new () => Worker, private jobTimeoutMs = JOB_TIMEOUT_MS) {
     this.worker = new workerCtor()
     this.worker.onmessage = (e: MessageEvent<ParseWorkerReply>) => {
       const job = this.jobs.get(e.data.id)
       if (!job) return
       this.jobs.delete(e.data.id)
+      if (job.timer !== undefined) clearTimeout(job.timer)
       if (e.data.error !== undefined || !e.data.raw) {
         job.reject(new Error(e.data.error ?? 'Worker 返回了无效结果'))
       } else {
@@ -50,15 +60,26 @@ class WorkerEntry implements ParseTransport {
     if (this.broken) return Promise.reject(BROKEN)
     const id = ++this.seq
     return new Promise((resolve, reject) => {
-      this.jobs.set(id, { resolve, reject })
+      // 探测通过后仍可能静默挂起（不再回包）：超时判定通道失效，走 BROKEN 整体回退主线程
+      const timer = setTimeout(() => {
+        this.jobs.delete(id)
+        this.fail()
+        reject(BROKEN)
+      }, this.jobTimeoutMs)
+      this.jobs.set(id, { resolve, reject, timer })
       this.worker.postMessage({ id, file } satisfies ParseWorkerRequest)
     })
   }
 
   private fail() {
     this.broken = true
-    for (const job of this.jobs.values()) job.reject(BROKEN)
+    for (const job of this.jobs.values()) {
+      if (job.timer !== undefined) clearTimeout(job.timer)
+      job.reject(BROKEN)
+    }
     this.jobs.clear()
+    // 通道已判失效，终止 Worker 释放资源（调度器随后会终止整池并永久回退主线程）
+    this.worker.terminate()
   }
 
   terminate() {

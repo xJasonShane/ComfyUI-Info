@@ -19,7 +19,7 @@ import {
 } from '../src/lib/metadata'
 import { extractComfyParams } from '../src/lib/comfyExtract'
 import { parseA1111Parameters } from '../src/lib/a1111'
-import { BROKEN, ParsePool, ParseScheduler } from '../src/lib/parser'
+import { BROKEN, JOB_TIMEOUT_MS, ParsePool, ParseScheduler, WorkerEntry } from '../src/lib/parser'
 import type { ParseTransport } from '../src/lib/parser'
 import type { ParseResult } from '../types'
 
@@ -778,5 +778,40 @@ describe('ParseScheduler（回退编排）', () => {
     })
     fake.jobs[1]!.reject(new Error('boom'))
     await expect(pending).rejects.toThrow('boom')
+  })
+
+  it('Worker 静默挂起时任务超时判定通道失效，整体回退主线程', async () => {
+    // 健康探测（首包）正常回包、后续任务永不回包的假 Worker：模拟「探测通过后静默挂起」
+    class ProbeOnlyWorker {
+      onmessage: ((e: MessageEvent) => void) | null = null
+      onerror: ((e: ErrorEvent) => void) | null = null
+      onmessageerror: ((e: MessageEvent) => void) | null = null
+      private received = 0
+      postMessage(msg: { id: number }) {
+        this.received++
+        if (this.received > 1) return // 真实任务静默挂起
+        this.onmessage?.(
+          new MessageEvent('message', { data: { id: msg.id, raw: { source: 'none' } } }),
+        )
+      }
+      terminate() {}
+    }
+    vi.useFakeTimers()
+    try {
+      const scheduler = new ParseScheduler(async () => {
+        const pool = new ParsePool(
+          () => new WorkerEntry(ProbeOnlyWorker as unknown as new () => Worker),
+          1,
+          100,
+        )
+        return pool.create() // 探测包由假 Worker 正常应答，池创建成功
+      })
+      const pending = scheduler.parse(new File([new Uint8Array(0)], 'probe.png'))
+      await vi.advanceTimersByTimeAsync(JOB_TIMEOUT_MS + 1)
+      // 任务超时 → BROKEN → 池终止并永久回退主线程：空文件主线程解析为「无元数据」
+      await expect(pending).resolves.toMatchObject({ raw: { source: 'none' } })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

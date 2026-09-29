@@ -329,8 +329,9 @@ const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, none: 2 }
 const rankBySource = (it: ImageItem) => (it.status === 'error' ? 3 : (sourceRank[it.source] ?? 3))
 // 时间模式下失败项始终靠后（它们不属于时间线），时间相同再按文件名兜底
 const errLast = (it: ImageItem) => (it.status === 'error' ? 1 : 0)
-const byName = (a: ImageItem, b: ImageItem) =>
-  a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+// Collator 预实例化：排序是 O(n log n) 次比较，复用实例走 Intl 快路径，大列表排序不再每次重建比较器
+const nameCollator = new Intl.Collator('zh-CN', { numeric: true })
+const byName = (a: ImageItem, b: ImageItem) => nameCollator.compare(a.name, b.name)
 
 const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
