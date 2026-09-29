@@ -139,7 +139,9 @@ function downloadJson(text: string | undefined, suffix: string) {
             <div class="section-title">LoRA（{{ p.loras.length }}）</div>
             <div v-for="l in p.loras" :key="l.name" class="stage-row">
               <span class="tag">LoRA</span>
-              <span class="txt">{{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度 {{ l.strengthClip ?? '-' }}）</span>
+              <span class="txt">
+                {{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度 {{ l.strengthClip ?? '-' }}{{ l.hash ? ` · ${l.hash}` : '' }}）
+              </span>
             </div>
           </div>
 

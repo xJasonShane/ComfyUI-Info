@@ -27,6 +27,8 @@ export interface LoraInfo {
   name: string
   strengthModel?: number
   strengthClip?: number
+  /** A1111 "Lora hashes" 行提供的识别哈希（ComfyUI 工作流里没有） */
+  hash?: string
 }
 
 export interface ParsedParams {
