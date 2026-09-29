@@ -29,10 +29,14 @@
 ```bash
 npm install
 npm run dev       # 开发（默认 http://localhost:5173）
-npm run build     # 构建产物为单个 dist/index.html
+npm run build     # 构建产物为单个 dist/index.html（含 vue-tsc 类型检查）
 npm run preview   # 预览构建产物
-npm run test      # 解析器单元测试
+npm run test      # 单元测试（解析器 / store / 导出 / 工具）
+npm run lint      # ESLint 检查
+npm run format    # Prettier 格式化（format:check 只校验不写入）
 ```
+
+GitHub Actions 在 push / PR 时自动执行 lint + 单测 + 构建。
 
 `npm run build` 产出的是**单文件** `dist/index.html`（约 530 KB），直接双击即可在浏览器中离线使用，无需任何服务器。
 

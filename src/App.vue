@@ -75,7 +75,13 @@ function onRemove(item: ImageItem) {
 function onKeydown(e: KeyboardEvent) {
   if (!showDetail.value || !current.value) return
   const t = e.target as HTMLElement | null
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+  if (
+    t &&
+    (t.tagName === 'INPUT' ||
+      t.tagName === 'TEXTAREA' ||
+      t.tagName === 'SELECT' ||
+      t.isContentEditable)
+  ) {
     return // 焦点在输入框内时方向键属于光标，不切换图片
   }
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
@@ -92,7 +98,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 // 抽屉关闭后把焦点返还给来源卡片（对话框关闭的 ARIA 模式）
 watch(showDetail, (v) => {
   if (!v && current.value) {
-    document.querySelector<HTMLElement>(`[data-item-id="${current.value.id}"]`)?.focus({ preventScroll: true })
+    document
+      .querySelector<HTMLElement>(`[data-item-id="${current.value.id}"]`)
+      ?.focus({ preventScroll: true })
   }
 })
 // 清空列表时收起详情抽屉，避免展示已撤销 URL 的图片
@@ -193,10 +201,20 @@ async function onDrop(e: DragEvent) {
         <TopBar />
 
         <div v-if="store.items.length" class="statline">
-          <span>已加载 <b>{{ store.items.length }}</b></span>
-          <span><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b> ComfyUI 原图</span>
-          <span><i class="dot" style="background: var(--teal)" /><b>{{ stats.a1111 }}</b> A1111</span>
-          <span><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b> 无元数据</span>
+          <span
+            >已加载 <b>{{ store.items.length }}</b></span
+          >
+          <span
+            ><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b> ComfyUI
+            原图</span
+          >
+          <span
+            ><i class="dot" style="background: var(--teal)" /><b>{{ stats.a1111 }}</b> A1111</span
+          >
+          <span
+            ><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b>
+            无元数据</span
+          >
           <span
             v-if="stats.error"
             class="stat-error"
@@ -223,7 +241,12 @@ async function onDrop(e: DragEvent) {
               @remove="onRemove(it)"
             />
           </div>
-          <EmptyState v-else :filtered="store.items.length > 0" :hidden-count="hiddenCount" @show-all="showAll" />
+          <EmptyState
+            v-else
+            :filtered="store.items.length > 0"
+            :hidden-count="hiddenCount"
+            @show-all="showAll"
+          />
           <div v-if="remaining > 0" class="more-row">
             <NButton size="small" secondary @click="shown += PAGE">
               加载更多（还有 {{ remaining }} 张）

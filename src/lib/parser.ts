@@ -76,7 +76,9 @@ class ParsePool {
       // 健康探测：用空文件走一遍完整解析链路，部分环境里 Blob Worker 会静默无响应，超时即整体回退
       await Promise.race([
         Promise.all(pool.entries.map((e) => e.post(new File([new Uint8Array(0)], 'probe.png')))),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('worker probe timeout')), 5000)),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('worker probe timeout')), 5000),
+        ),
       ])
     } catch {
       pool.dispose()

@@ -67,7 +67,12 @@ function exportAs(key: string | number) {
       <template #icon><Icon name="folder-plus" /></template>
       添加文件夹
     </NButton>
-    <NDropdown v-if="store.items.length > 0" trigger="click" :options="exportOptions" @select="exportAs">
+    <NDropdown
+      v-if="store.items.length > 0"
+      trigger="click"
+      :options="exportOptions"
+      @select="exportAs"
+    >
       <NButton size="small" secondary :disabled="filteredItems.length === 0">
         <template #icon><Icon name="download" /></template>
         导出
@@ -140,7 +145,14 @@ function exportAs(key: string | number) {
       <i :style="{ width: scanProgress + '%' }" />
     </div>
 
-    <input ref="fileInput" type="file" accept=".png,.jpg,.jpeg,.webp" multiple hidden @change="onPickImages" />
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".png,.jpg,.jpeg,.webp"
+      multiple
+      hidden
+      @change="onPickImages"
+    />
     <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onPickDir" />
   </header>
 </template>

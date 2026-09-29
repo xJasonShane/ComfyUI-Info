@@ -1,0 +1,227 @@
+import { beforeAll, beforeEach, expect, it, vi } from 'vitest'
+import { parseA1111Parameters } from '../src/lib/a1111'
+
+// mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
+vi.mock('../src/lib/metadata', () => ({
+  isSupportedImage: () => true,
+}))
+vi.mock('../src/lib/parser', () => ({
+  parseImage: vi.fn(),
+}))
+
+let api: typeof import('../src/composables/store')
+let parser: typeof import('../src/lib/parser')
+
+beforeAll(async () => {
+  // store 模块顶层访问 localStorage / navigator / URL.createObjectURL，Node 环境需打桩
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
+  vi.stubGlobal('navigator', { hardwareConcurrency: 4 })
+  vi.stubGlobal(
+    'URL',
+    class extends URL {
+      static createObjectURL = () => 'blob:mock'
+      static revokeObjectURL = () => {}
+    },
+  )
+  parser = await import('../src/lib/parser')
+  api = await import('../src/composables/store')
+})
+
+beforeEach(() => {
+  api.clearAll()
+  api.store.search = ''
+  api.store.sourceFilter = 'comfyui'
+  api.store.modelFilter = null
+  vi.mocked(parser.parseImage).mockReset()
+})
+
+const flush = () => new Promise<void>((r) => setTimeout(r, 0))
+const file = (name: string) => new File(['x'], name)
+
+it('清空后旧批次的在途解析不污染新批次进度', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'none' } })),
+  )
+
+  api.addFiles([file('a.png')])
+  expect(api.store.batchTotal).toBe(1)
+  expect(api.parsing.value).toBe(true)
+
+  api.clearAll() // 清空时 a 的解析仍在途
+  expect(api.store.batchTotal).toBe(0)
+  expect(api.store.batchDone).toBe(0)
+  expect(api.parsing.value).toBe(false)
+
+  api.addFiles([file('b.png'), file('c.png')])
+  expect(api.store.batchTotal).toBe(2)
+
+  release() // a、b、c 相继完成
+  await flush()
+  // 旧批次 a 的完成不计入，新批次恰好 2 项；无代际号时 batchDone 会变成 3
+  expect(api.store.batchDone).toBe(2)
+  expect(api.parsing.value).toBe(false)
+  expect(api.scanProgress.value).toBe(100)
+})
+
+it('失败的项可重试并正确计入当前批次', async () => {
+  vi.mocked(parser.parseImage).mockRejectedValueOnce(new Error('boom'))
+  api.addFiles([file('a.png')])
+  await flush()
+  const item = api.store.items[0]
+  expect(item.status).toBe('error')
+  expect(api.stats.value.error).toBe(1)
+
+  vi.mocked(parser.parseImage).mockResolvedValueOnce({ raw: { source: 'none' } })
+  api.retryItem(item)
+  expect(api.parsing.value).toBe(true)
+  await flush()
+  expect(item.status).toBe('done')
+  expect(api.store.batchTotal).toBe(2) // addFiles 1 + retry 1
+  expect(api.store.batchDone).toBe(2)
+  expect(api.stats.value.error).toBe(0)
+})
+
+it('指纹相同的文件只计入一次（含批内重复）', () => {
+  const f1 = new File(['x'], 'dup.png', { lastModified: 1000 })
+  const f2 = new File(['x'], 'dup.png', { lastModified: 1000 })
+  const other = new File(['x'], 'other.png', { lastModified: 1000 })
+  api.addFiles([f1, f2, f1, other])
+  expect(api.store.items.length).toBe(2)
+  expect(api.store.batchTotal).toBe(2)
+})
+
+it('清空列表后指纹去重随之失效，可重新添加同名文件', () => {
+  api.addFiles([file('a.png')])
+  api.clearAll()
+  api.addFiles([file('a.png')])
+  expect(api.store.items.length).toBe(1)
+})
+
+it('搜索覆盖模型 / LoRA（含哈希）/ 采样参数字段', async () => {
+  const parameters =
+    '<lora:add_detail:0.8>, masterpiece\nSteps: 20, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1, Model: majicMIX, Lora hashes: "add_detail: aaaabbbb"'
+  vi.mocked(parser.parseImage).mockResolvedValue({
+    raw: { source: 'a1111', parameters },
+    params: parseA1111Parameters(parameters),
+  })
+  api.addFiles([file('a.png')])
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  const matchCount = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.length
+  }
+  expect(matchCount('majicmix')).toBe(1) // 模型名（大小写不敏感）
+  expect(matchCount('add_detail')).toBe(1) // LoRA 名称
+  expect(matchCount('aaaabbbb')).toBe(1) // LoRA 哈希
+  expect(matchCount('karras')).toBe(1) // 采样器
+  expect(matchCount('20')).toBe(0) // 步数等数值不在搜索域内
+  expect(matchCount('masterpiece')).toBe(1) // 提示词（原有范围）
+  expect(matchCount('zzz-no-hit')).toBe(0)
+})
+
+it('移除已完成条目：列表 / 指纹 / 计数同步，同名可重加', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  api.addFiles([file('a.png'), file('b.png'), file('c.png')])
+  await flush()
+  expect(api.store.batchTotal).toBe(3)
+
+  api.removeItem(api.store.items[1])
+  expect(api.store.items.length).toBe(2)
+  expect(api.store.batchTotal).toBe(2)
+  expect(api.store.batchDone).toBe(2)
+  expect(api.parsing.value).toBe(false)
+
+  api.addFiles([file('b.png')]) // 指纹已随移除删除，可重新加入
+  expect(api.store.items.length).toBe(3)
+})
+
+it('移除排队中的条目：出队且总数递减', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'none' } })),
+  )
+  api.addFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.png`)))
+
+  const queued = api.store.items.find((i) => i.status === 'pending')!
+  expect(queued).toBeDefined() // 并发上限 8，必有排队项
+  api.removeItem(queued)
+  expect(api.store.items.length).toBe(9)
+  expect(api.store.batchTotal).toBe(9)
+
+  release()
+  await flush()
+  expect(api.store.batchDone).toBe(9)
+  expect(api.store.batchTotal).toBe(9)
+  expect(api.parsing.value).toBe(false)
+})
+
+it('移除在途条目：计数保留，解析完成后自动对账', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'none' } })),
+  )
+  api.addFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.png`)))
+
+  const inflight = api.store.items.find((i) => i.status === 'parsing')!
+  expect(inflight).toBeDefined()
+  api.removeItem(inflight)
+  expect(api.store.items.length).toBe(9)
+  expect(api.store.batchTotal).toBe(10) // 在途项计数保留
+
+  release()
+  await flush()
+  // 被移除项完成时的 batchDone++ 与保留的 batchTotal 对齐，不出现永久“扫描中”
+  expect(api.store.batchDone).toBe(10)
+  expect(api.store.batchTotal).toBe(10)
+  expect(api.parsing.value).toBe(false)
+})
+
+it('modelOptions 从解析结果聚合去重并排序', async () => {
+  const addWithModel = (name: string, model: string) => {
+    const parameters = `x\nSteps: 20, Model: ${model}`
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([new File(['x'], name, { lastModified: 1 })])
+  }
+  addWithModel('a.png', 'beta')
+  addWithModel('b.png', 'alpha')
+  addWithModel('c.png', 'beta')
+  await flush()
+  expect(api.modelOptions.value).toEqual([
+    { label: 'alpha', value: 'alpha' },
+    { label: 'beta', value: 'beta' },
+  ])
+})
+
+it('排序模式：按文件时间新旧排列，失败项始终靠后', async () => {
+  vi.mocked(parser.parseImage).mockImplementation((f: File) =>
+    f.name === 'e.png'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({ raw: { source: 'comfyui' } }),
+  )
+  const t0 = 1_700_000_000_000
+  api.addFiles([
+    new File(['x'], 'a.png', { lastModified: t0 + 2000 }),
+    new File(['x'], 'b.png', { lastModified: t0 }),
+    new File(['x'], 'c.png', { lastModified: t0 + 1000 }),
+    new File(['x'], 'e.png', { lastModified: t0 + 3000 }), // 时间最新但解析失败
+  ])
+  await flush()
+  api.store.sourceFilter = 'all'
+  const names = () => api.filteredItems.value.map((i) => i.name)
+
+  api.store.sortMode = 'time-asc'
+  expect(names()).toEqual(['b.png', 'c.png', 'a.png', 'e.png'])
+  api.store.sortMode = 'time-desc'
+  expect(names()).toEqual(['a.png', 'c.png', 'b.png', 'e.png']) // 失败项脱离时间线靠后
+  api.store.sortMode = 'default'
+  expect(names()).toEqual(['a.png', 'b.png', 'c.png', 'e.png']) // 来源 + 文件名，失败项垫底
+})

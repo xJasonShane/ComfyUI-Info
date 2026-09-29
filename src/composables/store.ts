@@ -147,20 +147,25 @@ export function clearAll() {
 /* ---------- 派生数据 ---------- */
 export const parsing = computed(() => state.batchDone < state.batchTotal)
 export const scanProgress = computed(() =>
-  state.batchTotal === 0 ? 0 : Math.min(100, Math.round((state.batchDone / state.batchTotal) * 100)),
+  state.batchTotal === 0
+    ? 0
+    : Math.min(100, Math.round((state.batchDone / state.batchTotal) * 100)),
 )
 
 const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, none: 2 }
 
-const rankBySource = (it: ImageItem) => (it.status === 'error' ? 3 : sourceRank[it.source] ?? 3)
+const rankBySource = (it: ImageItem) => (it.status === 'error' ? 3 : (sourceRank[it.source] ?? 3))
 // 时间模式下失败项始终靠后（它们不属于时间线），时间相同再按文件名兜底
 const errLast = (it: ImageItem) => (it.status === 'error' ? 1 : 0)
-const byName = (a: ImageItem, b: ImageItem) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+const byName = (a: ImageItem, b: ImageItem) =>
+  a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
 
 const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
-  'time-desc': (a, b) => errLast(a) - errLast(b) || b.file.lastModified - a.file.lastModified || byName(a, b),
-  'time-asc': (a, b) => errLast(a) - errLast(b) || a.file.lastModified - b.file.lastModified || byName(a, b),
+  'time-desc': (a, b) =>
+    errLast(a) - errLast(b) || b.file.lastModified - a.file.lastModified || byName(a, b),
+  'time-asc': (a, b) =>
+    errLast(a) - errLast(b) || a.file.lastModified - b.file.lastModified || byName(a, b),
 }
 
 export const stats = computed(() => {

@@ -18,7 +18,8 @@
   --checker: rgba(255, 255, 255, 0.05);
   --danger: #e06c5a;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  --font-ui: 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Microsoft YaHei',
+  --font-ui:
+    'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Microsoft YaHei',
     'Noto Sans SC', sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
   --font-display: Georgia, 'Times New Roman', 'Songti SC', SimSun, serif;
@@ -72,9 +73,7 @@ body {
   flex-direction: column;
   height: 100%;
   min-height: 100vh;
-  background:
-    radial-gradient(1200px 500px at 50% -10%, var(--bg-glow), transparent 70%),
-    var(--bg);
+  background: radial-gradient(1200px 500px at 50% -10%, var(--bg-glow), transparent 70%), var(--bg);
 }
 
 /* ============ 顶栏 ============ */

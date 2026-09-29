@@ -11,8 +11,8 @@ defineEmits<{ showAll: [] }>()
     <template v-if="filtered">
       <h2>没有符合当前筛选的图片</h2>
       <p v-if="hiddenCount > 0">
-        已解析的图片中有 <b>{{ hiddenCount }}</b> 张被来源 / 搜索 / 模型筛选隐藏。它们可能以
-        A1111 兼容格式保存（ComfyUI 生态常见，拖回 ComfyUI 同样能自动转换成工作流）。
+        已解析的图片中有 <b>{{ hiddenCount }}</b> 张被来源 / 搜索 / 模型筛选隐藏。它们可能以 A1111
+        兼容格式保存（ComfyUI 生态常见，拖回 ComfyUI 同样能自动转换成工作流）。
       </p>
       <p v-else>试试调整搜索关键词、模型或来源筛选，也可以直接拖入更多图片或文件夹。</p>
       <button v-if="hiddenCount > 0" class="show-all" @click="$emit('showAll')">

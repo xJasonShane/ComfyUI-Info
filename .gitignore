@@ -28,4 +28,7 @@ desktop.ini
 
 # 其他
 docs/
-tests/
+
+# 测试夹具：脚本生成的样例图与真实生成样例（含个人数据），不入库；
+# 测试代码本身（*.test.ts）需要入库供 CI 使用
+tests/fixtures/

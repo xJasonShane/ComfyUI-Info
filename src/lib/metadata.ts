@@ -59,10 +59,16 @@ function judgeParametersText(text: string): RawMetadata {
 }
 
 /** PNG / JPEG / WebP 均无生成参数时，给出诊断线索 */
-function diagnoseNone(scan: { hasExif: boolean; hasXmp: boolean; textKeys: string[] }): RawMetadata {
+function diagnoseNone(scan: {
+  hasExif: boolean
+  hasXmp: boolean
+  textKeys: string[]
+}): RawMetadata {
   const hints: string[] = []
   if (scan.hasXmp) {
-    hints.push('图片包含 Adobe XMP 编辑信息（Photoshop / Lightroom 处理痕迹），生成参数在处理或转存时被清除')
+    hints.push(
+      '图片包含 Adobe XMP 编辑信息（Photoshop / Lightroom 处理痕迹），生成参数在处理或转存时被清除',
+    )
   }
   if (scan.textKeys.length) {
     hints.push(`检测到 PNG 文本块: ${scan.textKeys.join('、')}`)
@@ -73,7 +79,9 @@ function diagnoseNone(scan: { hasExif: boolean; hasXmp: boolean; textKeys: strin
   if (!hints.length) {
     hints.push('图片不含任何生成参数元数据')
   }
-  hints.push('请使用 ComfyUI output 目录中直接生成的原图测试（未经 Photoshop / 网络转存的版本才保留参数）')
+  hints.push(
+    '请使用 ComfyUI output 目录中直接生成的原图测试（未经 Photoshop / 网络转存的版本才保留参数）',
+  )
   return { source: 'none', hints }
 }
 
@@ -110,9 +118,17 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
         if (m) return m
       }
       const software = extractTiffAsciiTag(exifChunk.data, 0x0131)
-      return diagnoseNone({ hasExif: true, hasXmp: /xmp/i.test(Object.keys(texts).join(' ')), textKeys: Object.keys(texts).concat(software ? [`EXIF 软件: ${software}`] : []) })
+      return diagnoseNone({
+        hasExif: true,
+        hasXmp: /xmp/i.test(Object.keys(texts).join(' ')),
+        textKeys: Object.keys(texts).concat(software ? [`EXIF 软件: ${software}`] : []),
+      })
     }
-    return diagnoseNone({ hasExif: false, hasXmp: Object.keys(texts).some((k) => /xmp/i.test(k)), textKeys: Object.keys(texts) })
+    return diagnoseNone({
+      hasExif: false,
+      hasXmp: Object.keys(texts).some((k) => /xmp/i.test(k)),
+      textKeys: Object.keys(texts),
+    })
   }
 
   if (ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
@@ -130,7 +146,11 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
         if (m) return m
       }
       const software = extractTiffAsciiTag(scan.exifTiff, 0x0131)
-      return diagnoseNone({ hasExif: true, hasXmp: scan.hasXmp, textKeys: software ? [`EXIF 软件: ${software}`] : [] })
+      return diagnoseNone({
+        hasExif: true,
+        hasXmp: scan.hasXmp,
+        textKeys: software ? [`EXIF 软件: ${software}`] : [],
+      })
     }
     return diagnoseNone({ hasExif: false, hasXmp: scan.hasXmp, textKeys: [] })
   }

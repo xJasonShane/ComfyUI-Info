@@ -53,7 +53,11 @@ export function buildExportJson(items: ImageItem[]): string {
     }
     return rec
   })
-  return JSON.stringify({ exportedAt: new Date().toISOString(), count: records.length, items: records }, null, 2)
+  return JSON.stringify(
+    { exportedAt: new Date().toISOString(), count: records.length, items: records },
+    null,
+    2,
+  )
 }
 
 export function buildExportCsv(items: ImageItem[]): string {
@@ -81,7 +85,8 @@ export function buildExportCsv(items: ImageItem[]): string {
   const lines = items.map((it) => {
     const p = it.params
     const s = p?.samplers[0]
-    const stages = p && p.samplers.length > 1 ? p.samplers.slice(1).map(formatStage).join(' || ') : undefined
+    const stages =
+      p && p.samplers.length > 1 ? p.samplers.slice(1).map(formatStage).join(' || ') : undefined
     return csvRow([
       it.name,
       it.size,

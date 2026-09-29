@@ -54,7 +54,13 @@ const modelShort = computed(() => {
     <img v-if="!broken" :src="item.url" loading="lazy" alt="" @error="broken = true" />
     <div v-else class="broken">无法预览</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>
-    <button class="card-remove" type="button" title="从列表移除" aria-label="从列表移除这张图片" @click.stop="$emit('remove')">
+    <button
+      class="card-remove"
+      type="button"
+      title="从列表移除"
+      aria-label="从列表移除这张图片"
+      @click.stop="$emit('remove')"
+    >
       <Icon name="x" :size="12" :stroke="2.4" />
     </button>
     <div v-if="modelShort || dims" class="veil">

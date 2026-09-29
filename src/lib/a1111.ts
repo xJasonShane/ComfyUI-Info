@@ -24,7 +24,8 @@ function parseLoraTag(content: string): LoraInfo | null {
   const name = parts.join(':').trim()
   if (!name) return null
   if (strengths.length === 0) return { name }
-  if (strengths.length === 1) return { name, strengthModel: strengths[0], strengthClip: strengths[0] }
+  if (strengths.length === 1)
+    return { name, strengthModel: strengths[0], strengthClip: strengths[0] }
   return { name, strengthModel: strengths[0], strengthClip: strengths[1] }
 }
 
@@ -129,7 +130,11 @@ export function parseA1111Parameters(text: string): ParsedParams {
         sampler: pairs['Hires sampler'] || pairs['Sampler'] || undefined,
         scheduler: undefined,
         seed: Number.isFinite(seed) ? String(seed) : undefined,
-        denoise: Number.isFinite(hDenoise) ? hDenoise : Number.isFinite(denoise) ? denoise : undefined,
+        denoise: Number.isFinite(hDenoise)
+          ? hDenoise
+          : Number.isFinite(denoise)
+            ? denoise
+            : undefined,
       })
     }
   }

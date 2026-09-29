@@ -31,7 +31,12 @@ interface IfdWalkResult {
   exifPointer?: number
 }
 
-function readEntryValue(tiff: Uint8Array, view: DataView, entry: number, little: boolean): Uint8Array | null {
+function readEntryValue(
+  tiff: Uint8Array,
+  view: DataView,
+  entry: number,
+  little: boolean,
+): Uint8Array | null {
   const type = view.getUint16(entry + 2, little)
   const count = view.getUint32(entry + 4, little)
   const total = count * byteSizeOfType(type)
@@ -144,7 +149,8 @@ export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
 export function scanWebp(bytes: Uint8Array): MetadataScan {
   const out: MetadataScan = { exifTiff: null, hasXmp: false, needsFullScan: false }
   if (bytes.length < 12) return out
-  const fourcc = (off: number) => String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
+  const fourcc = (off: number) =>
+    String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
   if (fourcc(0) !== 'RIFF' || fourcc(8) !== 'WEBP') return out
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let pos = 12
@@ -228,7 +234,7 @@ function decodeUtf16Heuristic(body: Uint8Array): string {
   }
   // 无 BOM：两种字节序各解一次，取控制字符 / 乱码更少的那个（x86 写入端通常是小端）
   const le = new TextDecoder('utf-16le').decode(body)
-  let be = le
+  let be: string
   try {
     be = new TextDecoder('utf-16be').decode(body)
   } catch {
@@ -258,6 +264,7 @@ export function decodeUserComment(raw: Uint8Array): string | null {
     }
   }
   // 无标准前缀：按 UTF-8 处理并去掉结尾空字节
+  // eslint-disable-next-line no-control-regex -- NUL 是刻意匹配的目标（写入端填充的尾巴）
   return new TextDecoder('utf-8').decode(raw).replace(/\u0000+$/, '')
 }
 

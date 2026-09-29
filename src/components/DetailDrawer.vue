@@ -132,7 +132,11 @@ function downloadJson(text: string | undefined, suffix: string) {
 
           <div v-if="samplerRows.length" class="section">
             <div class="section-title">
-              <span>采样参数<template v-if="p.samplers.length > 1">（{{ p.samplers.length }} 阶段）</template></span>
+              <span
+                >采样参数<template v-if="p.samplers.length > 1"
+                  >（{{ p.samplers.length }} 阶段）</template
+                ></span
+              >
             </div>
             <dl v-if="p.samplers.length === 1" class="kv">
               <template v-for="([k, v], i) in samplerRows" :key="i">
@@ -152,7 +156,8 @@ function downloadJson(text: string | undefined, suffix: string) {
             <div v-for="l in p.loras" :key="l.name" class="stage-row">
               <span class="tag">LoRA</span>
               <span class="txt">
-                {{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度 {{ l.strengthClip ?? '-' }}{{ l.hash ? ` · ${l.hash}` : '' }}）
+                {{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度
+                {{ l.strengthClip ?? '-' }}{{ l.hash ? ` · ${l.hash}` : '' }}）
               </span>
             </div>
           </div>
@@ -198,7 +203,11 @@ function downloadJson(text: string | undefined, suffix: string) {
                     <NButton size="tiny" secondary @click="copy(item.raw.prompt, 'Prompt JSON')">
                       <template #icon><Icon name="copy" :size="13" /></template>复制
                     </NButton>
-                    <NButton size="tiny" secondary @click="downloadJson(item.raw.prompt, 'prompt.json')">
+                    <NButton
+                      size="tiny"
+                      secondary
+                      @click="downloadJson(item.raw.prompt, 'prompt.json')"
+                    >
                       <template #icon><Icon name="download" :size="13" /></template>下载
                     </NButton>
                   </div>
@@ -206,7 +215,11 @@ function downloadJson(text: string | undefined, suffix: string) {
                 <NTabPane name="workflow" tab="UI 工作流">
                   <pre class="json-pre">{{ jsonText }}</pre>
                   <div style="display: flex; gap: 8px; margin-top: 10px">
-                    <NButton size="tiny" secondary @click="copy(item.raw.workflow, 'UI 工作流 JSON')">
+                    <NButton
+                      size="tiny"
+                      secondary
+                      @click="copy(item.raw.workflow, 'UI 工作流 JSON')"
+                    >
                       <template #icon><Icon name="copy" :size="13" /></template>复制
                     </NButton>
                     <NButton
