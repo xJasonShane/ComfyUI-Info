@@ -78,9 +78,20 @@ export function extractUserCommentFromTiff(tiff: Uint8Array): Uint8Array | null 
 
 const XMP_JPEG_PREFIX = 'http://ns.adobe.com/xap/1.0/\u0000'
 
+interface MetadataScan {
+  exifTiff: Uint8Array | null
+  hasXmp: boolean
+  /**
+   * 扫描的切片未覆盖容器声明的全部元数据区，调用方应整文件重扫。
+   * JPEG 的 APPn 段全部位于扫描数据（SOS）之前，头部切片总是足够，恒为 false；
+   * WebP 的元数据块在图像数据之后，依 VP8X 标志判定。
+   */
+  needsFullScan: boolean
+}
+
 /** JPEG 段扫描：EXIF TIFF 数据 + 是否含 Adobe XMP（用于诊断） */
-export function scanJpeg(bytes: Uint8Array): { exifTiff: Uint8Array | null; hasXmp: boolean } {
-  const out: { exifTiff: Uint8Array | null; hasXmp: boolean } = { exifTiff: null, hasXmp: false }
+export function scanJpeg(bytes: Uint8Array): MetadataScan {
+  const out: MetadataScan = { exifTiff: null, hasXmp: false, needsFullScan: false }
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return out
   let pos = 2
   while (pos + 4 <= bytes.length) {
@@ -125,19 +136,36 @@ export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
   return scanJpeg(bytes).exifTiff
 }
 
-/** WebP（RIFF 容器）扫描：EXIF chunk（剥离 APP1 风格前缀）+ XMP chunk 检测 */
-export function scanWebp(bytes: Uint8Array): { exifTiff: Uint8Array | null; hasXmp: boolean } {
-  const out: { exifTiff: Uint8Array | null; hasXmp: boolean } = { exifTiff: null, hasXmp: false }
+/**
+ * WebP（RIFF 容器）扫描：EXIF chunk（剥离 APP1 风格前缀）+ XMP chunk 检测。
+ * EXIF / XMP 块位于图像数据之后，头部切片可能扫不到——VP8X 标志声明了
+ * 切片中未出现的元数据时置 needsFullScan，调用方应整文件重扫。
+ */
+export function scanWebp(bytes: Uint8Array): MetadataScan {
+  const out: MetadataScan = { exifTiff: null, hasXmp: false, needsFullScan: false }
   if (bytes.length < 12) return out
   const fourcc = (off: number) => String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
   if (fourcc(0) !== 'RIFF' || fourcc(8) !== 'WEBP') return out
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let pos = 12
+  let declaresExif = false
+  let declaresXmp = false
+  const rescan = () => {
+    out.needsFullScan = (declaresExif && !out.exifTiff) || (declaresXmp && !out.hasXmp)
+  }
   while (pos + 8 <= bytes.length) {
     const id = fourcc(pos)
     const size = view.getUint32(pos + 4, true)
-    if (pos + 8 + size > bytes.length) return out
-    if (id === 'EXIF' && !out.exifTiff) {
+    if (pos + 8 + size > bytes.length) {
+      rescan()
+      return out
+    }
+    if (id === 'VP8X') {
+      // VP8X 载荷首字节的标志位：ICC 0x20 / Alpha 0x10 / EXIF 0x08 / XMP 0x04
+      const flags = bytes[pos + 8]
+      declaresExif = (flags & 0x08) !== 0
+      declaresXmp = (flags & 0x04) !== 0
+    } else if (id === 'EXIF' && !out.exifTiff) {
       let data = bytes.subarray(pos + 8, pos + 8 + size)
       // 部分写入端在 EXIF chunk 里保留 APP1 风格的 "Exif\0\0" 前缀
       if (
@@ -157,6 +185,7 @@ export function scanWebp(bytes: Uint8Array): { exifTiff: Uint8Array | null; hasX
     }
     pos += 8 + size + (size % 2)
   }
+  rescan()
   return out
 }
 

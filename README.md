@@ -58,7 +58,7 @@ Vue 3 + TypeScript + Vite + Naive UI，零运行时依赖的元数据解析（�
 
 - **PNG**：ComfyUI 通过 PIL 把 `prompt`（API 格式工作流 JSON）和 `workflow`（UI 格式工作流 JSON）写入 `tEXt` / `iTXt` 块，含非 Latin-1 字符（如中文）时 PIL 自动改用 zlib 压缩的 `iTXt`
 - **JPEG / WebP**：EXIF `UserComment`（0x9286）；A1111 的 `parameters` 文本同样在此（ComfyUI 内置节点只输出带元数据的 PNG，JPEG/WebP 需要自定义保存节点）
-- 解析时只读取文件头部切片（元数据位于图像数据之前），扫描大量图片也很快
+- 解析时只读取文件头部切片（PNG / JPEG 的元数据位于图像数据之前），扫描大量图片也很快；WebP 的 EXIF / XMP 块位于图像数据之后，解析器依 VP8X 标志对头部未命中的大文件做一次整文件补扫
 
 > **提示**：`tests/fixtures/` 内有各类样例（ComfyUI tEXt / iTXt 中文 / 两阶段工作流 / A1111 / Photoshop 处理图 / 真实 ComfyUI 输出），`npm run test` 可验证解析器行为。
 

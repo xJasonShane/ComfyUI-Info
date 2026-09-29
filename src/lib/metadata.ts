@@ -119,7 +119,11 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
 
   if (ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
     const head = await readHead(file, HEAD_BYTES)
-    const scan = ext === 'webp' ? scanWebp(head) : scanJpeg(head)
+    let scan = ext === 'webp' ? scanWebp(head) : scanJpeg(head)
+    if (ext === 'webp' && scan.needsFullScan && file.size > HEAD_BYTES) {
+      // WebP 的 EXIF / XMP 块位于图像数据之后，头部切片没扫到时整文件重扫一次
+      scan = scanWebp(await readHead(file, file.size))
+    }
     if (scan.exifTiff) {
       const raw = extractUserCommentFromTiff(scan.exifTiff)
       const text = raw ? decodeUserComment(raw) : null
