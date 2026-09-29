@@ -54,7 +54,7 @@ npm run test      # 解析器单元测试
 
 ## 技术栈
 
-Vue 3 + TypeScript + Vite + Naive UI，零运行时依赖的元数据解析（自实现 PNG chunk 解析与 EXIF TIFF 解析，zlib 解压用浏览器原生 `DecompressionStream`）。
+Vue 3 + TypeScript + Vite + Naive UI，零运行时依赖的元数据解析（自实现 PNG chunk 解析与 EXIF TIFF 解析，zlib 解压用浏览器原生 `DecompressionStream`）。解析跑在 Web Worker 池里（按硬件线程数建 1-4 个），批量扫描时主线程只等结果不参与计算；Worker 不可用的环境（如部分 `file://` 直接打开的场景）自动整体回退到主线程解析，行为一致。
 
 ## 元数据存储原理（参考）
 
@@ -74,6 +74,8 @@ src/
     metadata.ts     # 解析入口 + 来源判定 + 无元数据诊断线索
     comfyExtract.ts # ComfyUI 工作流 → 结构化参数
     a1111.ts        # A1111 parameters 文本解析
+    parser.ts       # 解析调度：Worker 池 + 主线程兜底
+    parseWorker.ts  # 后台解析线程入口
     export.ts       # 筛选结果导出（JSON / CSV）
     utils.ts        # 剪贴板 / 下载 / 格式化
   composables/

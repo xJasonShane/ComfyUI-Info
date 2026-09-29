@@ -3,8 +3,10 @@
  * 只读取文件头部切片即可拿到元数据，避免把整张大图读进内存。
  * 识别不出参数时收集诊断线索（XMP / EXIF 软件字段等），帮助用户判断原因。
  */
-import type { RawMetadata } from '../types'
+import type { ParsedParams, RawMetadata } from '../types'
 import { readPngTexts } from './png'
+import { extractComfyParams } from './comfyExtract'
+import { parseA1111Parameters } from './a1111'
 import {
   extractTiffAsciiTag,
   extractUserCommentFromTiff,
@@ -73,6 +75,13 @@ function diagnoseNone(scan: { hasExif: boolean; hasXmp: boolean; textKeys: strin
   }
   hints.push('请使用 ComfyUI output 目录中直接生成的原图测试（未经 Photoshop / 网络转存的版本才保留参数）')
   return { source: 'none', hints }
+}
+
+/** 按来源把原始元数据提取为结构化参数（Worker 与主线程兜底共用的入口） */
+export function extractParams(raw: RawMetadata): ParsedParams | undefined {
+  if (raw.source === 'comfyui' && raw.prompt) return extractComfyParams(raw.prompt) ?? undefined
+  if (raw.source === 'a1111' && raw.parameters) return parseA1111Parameters(raw.parameters)
+  return undefined
 }
 
 export async function readImageMetadata(file: File): Promise<RawMetadata> {

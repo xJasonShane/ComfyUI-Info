@@ -1,8 +1,7 @@
 import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource } from '../types'
-import { isSupportedImage, readImageMetadata } from '../lib/metadata'
-import { extractComfyParams } from '../lib/comfyExtract'
-import { parseA1111Parameters } from '../lib/a1111'
+import { isSupportedImage } from '../lib/metadata'
+import { parseImage } from '../lib/parser'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
 
@@ -50,14 +49,10 @@ function pump() {
 async function parseItem(item: ImageItem, epoch: number) {
   item.status = 'parsing'
   try {
-    const raw = await readImageMetadata(item.file)
+    const { raw, params } = await parseImage(item.file)
     item.raw = raw
     item.source = raw.source
-    if (raw.source === 'comfyui' && raw.prompt) {
-      item.params = extractComfyParams(raw.prompt) ?? undefined
-    } else if (raw.source === 'a1111' && raw.parameters) {
-      item.params = parseA1111Parameters(raw.parameters)
-    }
+    item.params = params
     item.status = 'done'
   } catch (e) {
     item.status = 'error'
