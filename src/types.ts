@@ -50,10 +50,20 @@ export interface ImageItem {
   file: File
   url: string
   name: string
+  /** 相对路径（含文件名）：目录选择来自 webkitRelativePath，拖拽目录来自 entry.fullPath；单选文件无目录信息时缺省 */
+  path?: string
   size: number
   status: 'pending' | 'parsing' | 'done' | 'error'
   source: ImageSource
   params?: ParsedParams
   raw: RawMetadata
   error?: string
+  /** 预构建的小写搜索串（解析完成时生成一次），供筛选热路径直接 includes */
+  searchText?: string
+}
+
+/** 添加图片的入参：path 为相对路径（含文件名），仅目录选择 / 拖拽目录时存在 */
+export interface IncomingFile {
+  file: File
+  path?: string
 }

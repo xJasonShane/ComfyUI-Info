@@ -11,12 +11,13 @@ const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
 const message = useMessage()
 
-const isNarrow = ref(window.innerWidth < 960)
-const onResize = () => {
-  isNarrow.value = window.innerWidth < 960
+const narrowQuery = window.matchMedia('(max-width: 959.98px)')
+const isNarrow = ref(narrowQuery.matches)
+const onNarrowChange = (e: MediaQueryListEvent) => {
+  isNarrow.value = e.matches
 }
-onMounted(() => window.addEventListener('resize', onResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onResize))
+onMounted(() => narrowQuery.addEventListener('change', onNarrowChange))
+onBeforeUnmount(() => narrowQuery.removeEventListener('change', onNarrowChange))
 const drawerWidth = computed(() => (isNarrow.value ? '100%' : 940))
 
 const p = computed(() => props.item?.params)
@@ -32,13 +33,39 @@ const fileTime = computed(() => {
   })
 })
 
+/** 当前条目上实际可用的 JSON 页签（与模板里各 NTabPane 的渲染条件保持一致） */
+function availableTabs(item: ImageItem): string[] {
+  const tabs: string[] = []
+  if (item.raw.parameters) tabs.push('raw')
+  if (item.raw.prompt) tabs.push('prompt')
+  if (item.raw.source !== 'a1111') tabs.push('workflow')
+  return tabs
+}
+
 const tab = ref('prompt')
+// 切换图片时保留用户所在页签（如对照多张图的 workflow）；新条目没有该页签时才回退默认
 watch(
   () => props.item?.id,
   () => {
-    tab.value = props.item?.source === 'a1111' ? 'raw' : 'prompt'
+    const it = props.item
+    if (!it) return
+    const tabs = availableTabs(it)
+    if (tabs.includes(tab.value)) return
+    tab.value = it.source === 'a1111' && tabs.includes('raw') ? 'raw' : (tabs[0] ?? 'prompt')
   },
 )
+
+/** 是否渲染 JSON 页签区：有任一原始文本就展示（含「元数据存在但解析失败」的场景） */
+const showJsonTabs = computed(() => {
+  const it = props.item
+  return !!it && !!(it.raw.parameters || it.raw.prompt)
+})
+
+/** 元数据文本存在但结构化参数缺失：JSON 损坏 / 无法解析，与「无元数据」区分开 */
+const corruptRawText = computed(() => {
+  const it = props.item
+  return !!it && it.status === 'done' && !it.params && !!(it.raw.prompt || it.raw.parameters)
+})
 
 const generalRows = computed<[string, string][]>(() => {
   const params = p.value
@@ -111,7 +138,7 @@ function downloadJson(text: string | undefined, suffix: string) {
 
       <div class="detail-panel">
         <div class="fileline">
-          <span style="flex: 1">{{ item.name }}</span>
+          <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
           <span :title="new Date(item.file.lastModified).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
           <NButton size="tiny" quaternary circle aria-label="关闭详情" @click="show = false">
@@ -183,61 +210,6 @@ function downloadJson(text: string | undefined, suffix: string) {
             </div>
             <pre class="prompt-text">{{ negativeText }}</pre>
           </div>
-
-          <div class="section">
-            <NTabs v-model:value="tab" type="segment" size="small" animated>
-              <template v-if="item.source === 'a1111'">
-                <NTabPane name="raw" tab="原始参数">
-                  <pre class="json-pre">{{ item.raw.parameters }}</pre>
-                  <div style="display: flex; gap: 8px; margin-top: 10px">
-                    <NButton size="tiny" secondary @click="copy(item.raw.parameters, '参数文本')">
-                      <template #icon><Icon name="copy" :size="13" /></template>复制
-                    </NButton>
-                  </div>
-                </NTabPane>
-              </template>
-              <template v-else>
-                <NTabPane name="prompt" tab="Prompt JSON">
-                  <pre class="json-pre">{{ jsonText }}</pre>
-                  <div style="display: flex; gap: 8px; margin-top: 10px">
-                    <NButton size="tiny" secondary @click="copy(item.raw.prompt, 'Prompt JSON')">
-                      <template #icon><Icon name="copy" :size="13" /></template>复制
-                    </NButton>
-                    <NButton
-                      size="tiny"
-                      secondary
-                      @click="downloadJson(item.raw.prompt, 'prompt.json')"
-                    >
-                      <template #icon><Icon name="download" :size="13" /></template>下载
-                    </NButton>
-                  </div>
-                </NTabPane>
-                <NTabPane name="workflow" tab="UI 工作流">
-                  <pre class="json-pre">{{ jsonText }}</pre>
-                  <div style="display: flex; gap: 8px; margin-top: 10px">
-                    <NButton
-                      size="tiny"
-                      secondary
-                      @click="copy(item.raw.workflow, 'UI 工作流 JSON')"
-                    >
-                      <template #icon><Icon name="copy" :size="13" /></template>复制
-                    </NButton>
-                    <NButton
-                      size="tiny"
-                      secondary
-                      :disabled="!item.raw.workflow"
-                      @click="downloadJson(item.raw.workflow, 'workflow.json')"
-                    >
-                      <template #icon><Icon name="download" :size="13" /></template>下载
-                    </NButton>
-                  </div>
-                  <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
-                    下载的 workflow.json 可直接拖入 ComfyUI 画布恢复整个工作流。
-                  </p>
-                </NTabPane>
-              </template>
-            </NTabs>
-          </div>
         </template>
 
         <div v-else-if="item.status === 'error'" class="notice">
@@ -253,11 +225,64 @@ function downloadJson(text: string | undefined, suffix: string) {
           <br />
           <span style="font-size: 12px; color: var(--text-faint)">稍等片刻，参数马上出来</span>
         </div>
+        <div v-else-if="corruptRawText" class="notice">
+          <span class="notice-title">检测到生成元数据，但解析失败</span>
+          <p class="err-message">
+            {{
+              item.raw.source === 'comfyui'
+                ? '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查'
+                : '参数文本无法解析为结构化参数，可在下方查看原文'
+            }}
+          </p>
+        </div>
         <div v-else class="notice">
           未检测到 ComfyUI / A1111 生成元数据
           <ul v-if="item.raw.hints?.length" class="hints">
             <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
           </ul>
+        </div>
+
+        <div v-if="showJsonTabs" class="section">
+          <NTabs v-model:value="tab" type="segment" size="small" animated>
+            <NTabPane v-if="item.raw.parameters" name="raw" tab="原始参数">
+              <pre class="json-pre">{{ item.raw.parameters }}</pre>
+              <div style="display: flex; gap: 8px; margin-top: 10px">
+                <NButton size="tiny" secondary @click="copy(item.raw.parameters, '参数文本')">
+                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                </NButton>
+              </div>
+            </NTabPane>
+            <NTabPane v-if="item.raw.prompt" name="prompt" tab="Prompt JSON">
+              <pre class="json-pre">{{ jsonText }}</pre>
+              <div style="display: flex; gap: 8px; margin-top: 10px">
+                <NButton size="tiny" secondary @click="copy(item.raw.prompt, 'Prompt JSON')">
+                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                </NButton>
+                <NButton size="tiny" secondary @click="downloadJson(item.raw.prompt, 'prompt.json')">
+                  <template #icon><Icon name="download" :size="13" /></template>下载
+                </NButton>
+              </div>
+            </NTabPane>
+            <NTabPane v-if="item.raw.source !== 'a1111'" name="workflow" tab="UI 工作流">
+              <pre class="json-pre">{{ jsonText }}</pre>
+              <div style="display: flex; gap: 8px; margin-top: 10px">
+                <NButton size="tiny" secondary @click="copy(item.raw.workflow, 'UI 工作流 JSON')">
+                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                </NButton>
+                <NButton
+                  size="tiny"
+                  secondary
+                  :disabled="!item.raw.workflow"
+                  @click="downloadJson(item.raw.workflow, 'workflow.json')"
+                >
+                  <template #icon><Icon name="download" :size="13" /></template>下载
+                </NButton>
+              </div>
+              <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
+                下载的 workflow.json 可直接拖入 ComfyUI 画布恢复整个工作流。
+              </p>
+            </NTabPane>
+          </NTabs>
         </div>
 
         <p class="kbd-hint">← / → 切换图片 · Esc 关闭</p>

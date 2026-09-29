@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NDropdown, NInput, NPopconfirm, NSelect, NTooltip } from 'naive-ui'
+import { NButton, NDropdown, NInput, NPopconfirm, NSelect, NTooltip, useMessage } from 'naive-ui'
 import Icon from './Icon.vue'
 import {
   addFiles,
@@ -19,16 +19,19 @@ import { downloadText } from '../lib/utils'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
+const message = useMessage()
 
-function onPickImages(e: Event) {
+/** webkitRelativePath 仅在目录选择时有值，普通多选为空串——退回 undefined 让去重退化为文件名 */
+function onPick(e: Event) {
   const input = e.target as HTMLInputElement
-  if (input.files) addFiles(Array.from(input.files))
-  input.value = ''
-}
-
-function onPickDir(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files) addFiles(Array.from(input.files))
+  if (input.files) {
+    addFiles(
+      Array.from(input.files).map((f) => ({
+        file: f,
+        path: f.webkitRelativePath || undefined,
+      })),
+    )
+  }
   input.value = ''
 }
 
@@ -38,7 +41,11 @@ const exportOptions = [
 ]
 
 function exportAs(key: string | number) {
-  // 只导出已出结果的项（done / error）；解析中的项等扫描完再导出
+  // 只导出已出结果的项（done / error）；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
+  if (parsing.value) {
+    message.warning('扫描仍在进行，请等扫描完成后再导出')
+    return
+  }
   const items = filteredItems.value.filter((i) => i.status === 'done' || i.status === 'error')
   if (!items.length) return
   const stamp = new Date().toISOString().slice(0, 10)
@@ -151,8 +158,8 @@ function exportAs(key: string | number) {
       accept=".png,.jpg,.jpeg,.webp"
       multiple
       hidden
-      @change="onPickImages"
+      @change="onPick"
     />
-    <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onPickDir" />
+    <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onPick" />
   </header>
 </template>

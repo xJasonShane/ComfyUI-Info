@@ -731,3 +731,15 @@ body {
   left: 2px;
   color: var(--accent);
 }
+
+/* 前庭障碍用户选择减少动效时，关闭卡片入场 / 空态浮动 / 进度脉冲等动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -38,6 +38,7 @@ export function buildExportJson(items: ImageItem[]): string {
       source: it.status === 'error' ? 'error' : it.source,
       mtime: new Date(it.file.lastModified).toISOString(),
     }
+    if (it.path) rec.path = it.path
     if (it.status === 'error') rec.error = it.error ?? '未知错误'
     const p = it.params
     if (p) {
@@ -63,6 +64,7 @@ export function buildExportJson(items: ImageItem[]): string {
 export function buildExportCsv(items: ImageItem[]): string {
   const header = [
     '文件名',
+    '路径',
     '大小(字节)',
     '来源',
     '修改时间',
@@ -89,6 +91,7 @@ export function buildExportCsv(items: ImageItem[]): string {
       p && p.samplers.length > 1 ? p.samplers.slice(1).map(formatStage).join(' || ') : undefined
     return csvRow([
       it.name,
+      it.path,
       it.size,
       it.status === 'error' ? 'error' : it.source,
       new Date(it.file.lastModified).toISOString(),

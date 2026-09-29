@@ -47,12 +47,13 @@ function judgeUserCommentText(text: string): RawMetadata | null {
  * A1111 参数文本判定。部分 ComfyUI 生态的保存节点（Civitai 兼容模式）会把
  * workflow JSON 内嵌在参数文本尾部——检测到节点结构关键字时升级为 ComfyUI 解析。
  * extractJsonSubstring 返回值保证可解析为 JSON 对象。
+ * 升级时保留原始 parameters 文本：结构化参数来自工作流 JSON，原文另有排查价值。
  */
 function judgeParametersText(text: string): RawMetadata {
   if (/"(?:class_type|nodes)"\s*:/.test(text)) {
     const json = extractJsonSubstring(text)
     if (json) {
-      return { source: 'comfyui', prompt: json }
+      return { source: 'comfyui', prompt: json, parameters: text }
     }
   }
   return { source: 'a1111', parameters: text }

@@ -35,6 +35,8 @@ const modelShort = computed(() => {
   const m = props.item.params?.models?.[0]
   return m ? shortModel(m) : ''
 })
+
+const displayPath = computed(() => props.item.path ?? props.item.name)
 </script>
 
 <template>
@@ -46,7 +48,7 @@ const modelShort = computed(() => {
     tabindex="0"
     :data-item-id="item.id"
     :aria-label="`${item.name}，查看详情`"
-    :title="item.status === 'error' ? `${item.name}（${item.error ?? '解析失败'}）` : item.name"
+    :title="item.status === 'error' ? `${displayPath}（${item.error ?? '解析失败'}）` : displayPath"
     @click="$emit('open')"
     @keydown.enter.prevent="$emit('open')"
     @keydown.space.prevent="$emit('open')"

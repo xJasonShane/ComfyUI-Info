@@ -36,7 +36,7 @@ beforeEach(() => {
 })
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0))
-const file = (name: string) => new File(['x'], name)
+const file = (name: string) => ({ file: new File(['x'], name) })
 
 it('清空后旧批次的在途解析不污染新批次进度', async () => {
   let release!: () => void
@@ -87,9 +87,26 @@ it('指纹相同的文件只计入一次（含批内重复）', () => {
   const f1 = new File(['x'], 'dup.png', { lastModified: 1000 })
   const f2 = new File(['x'], 'dup.png', { lastModified: 1000 })
   const other = new File(['x'], 'other.png', { lastModified: 1000 })
-  api.addFiles([f1, f2, f1, other])
+  api.addFiles([{ file: f1 }, { file: f2 }, { file: f1 }, { file: other }])
   expect(api.store.items.length).toBe(2)
   expect(api.store.batchTotal).toBe(2)
+})
+
+it('路径参与去重：不同目录的同名同指纹文件都保留，同路径只计一次', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  const f = new File(['x'], 'dup.png', { lastModified: 1000 })
+  api.addFiles([
+    { file: f, path: 'v1/dup.png' },
+    { file: f, path: 'v1/dup.png' },
+    { file: f, path: 'v2/dup.png' },
+  ])
+  await flush()
+  expect(api.store.items.length).toBe(2)
+  expect(api.store.items.map((i) => i.path)).toEqual(['v1/dup.png', 'v2/dup.png'])
+  // 路径同时进入搜索域：可按目录定位
+  api.store.sourceFilter = 'all'
+  api.store.search = 'v2/'
+  expect(api.filteredItems.value.map((i) => i.path)).toEqual(['v2/dup.png'])
 })
 
 it('清空列表后指纹去重随之失效，可重新添加同名文件', () => {
@@ -189,7 +206,7 @@ it('modelOptions 从解析结果聚合去重并排序', async () => {
       raw: { source: 'a1111', parameters },
       params: parseA1111Parameters(parameters),
     })
-    api.addFiles([new File(['x'], name, { lastModified: 1 })])
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }) }])
   }
   addWithModel('a.png', 'beta')
   addWithModel('b.png', 'alpha')
@@ -209,10 +226,10 @@ it('排序模式：按文件时间新旧排列，失败项始终靠后', async (
   )
   const t0 = 1_700_000_000_000
   api.addFiles([
-    new File(['x'], 'a.png', { lastModified: t0 + 2000 }),
-    new File(['x'], 'b.png', { lastModified: t0 }),
-    new File(['x'], 'c.png', { lastModified: t0 + 1000 }),
-    new File(['x'], 'e.png', { lastModified: t0 + 3000 }), // 时间最新但解析失败
+    { file: new File(['x'], 'a.png', { lastModified: t0 + 2000 }) },
+    { file: new File(['x'], 'b.png', { lastModified: t0 }) },
+    { file: new File(['x'], 'c.png', { lastModified: t0 + 1000 }) },
+    { file: new File(['x'], 'e.png', { lastModified: t0 + 3000 }) }, // 时间最新但解析失败
   ])
   await flush()
   api.store.sourceFilter = 'all'

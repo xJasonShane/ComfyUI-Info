@@ -43,12 +43,13 @@ describe('buildExportJson', () => {
   it('包含解析参数与来源，解析失败项带错误信息', () => {
     const parsed = JSON.parse(
       buildExportJson([
-        makeItem({ params }),
+        makeItem({ params, path: 'sets/v2/a.png' }),
         makeItem({ name: 'bad.png', status: 'error', source: 'none', error: '读取失败' }),
       ]),
     )
     expect(parsed.count).toBe(2)
     expect(parsed.items[0].file).toBe('a.png')
+    expect(parsed.items[0].path).toBe('sets/v2/a.png')
     expect(parsed.items[0].mtime).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(parsed.items[0].models).toEqual(['dreamshaper_8.safetensors'])
     expect(parsed.items[0].loras[0].hash).toBe('aaaabbbb')
@@ -56,6 +57,7 @@ describe('buildExportJson', () => {
     expect(parsed.items[1].source).toBe('error')
     expect(parsed.items[1].error).toBe('读取失败')
     expect(parsed.items[1].positive).toBeUndefined()
+    expect(parsed.items[1].path).toBeUndefined() // 单选文件无目录信息时不输出路径
   })
 })
 
@@ -65,11 +67,18 @@ describe('buildExportCsv', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff)
     const lines = csv.slice(1).split('\r\n')
     expect(lines).toHaveLength(2)
-    expect(lines[0].startsWith('文件名,大小(字节),来源,修改时间,模型,LoRA')).toBe(true)
+    expect(lines[0].startsWith('文件名,路径,大小(字节),来源,修改时间,模型,LoRA')).toBe(true)
+    expect(lines[1].startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
     expect(lines[1]).toContain('"masterpiece, a cat"') // 含逗号的提示词整体加引号
     expect(lines[1]).toContain('add_detail(m:0.8 c:0.8 #aaaabbbb)')
     expect(lines[1]).toContain('#hires Hires fix, steps=12, denoise=0.7') // 二阶段摘要
     expect(lines[1]).toContain('DPM++ 2M Karras')
+  })
+
+  it('路径列输出相对路径', () => {
+    const csv = buildExportCsv([makeItem({ params, path: 'sets/v2/a.png' })])
+    const line = csv.slice(1).split('\r\n')[1]
+    expect(line.startsWith('a.png,sets/v2/a.png,1234')).toBe(true)
   })
 
   it('无参数项参数列留空，错误项带错误列', () => {
@@ -79,12 +88,12 @@ describe('buildExportCsv', () => {
     ])
     const rows = csv.slice(1).split('\r\n')
     const empty = rows[1].split(',')
-    expect(empty).toHaveLength(19)
-    expect(empty.slice(0, 3)).toEqual(['a.png', '1234', 'none'])
-    expect(empty[3]).toMatch(/^\d{4}-\d{2}-\d{2}T/) // 修改时间（ISO）
-    expect(empty.slice(4).every((c) => c === '')).toBe(true)
+    expect(empty).toHaveLength(20)
+    expect(empty.slice(0, 4)).toEqual(['a.png', '', '1234', 'none'])
+    expect(empty[4]).toMatch(/^\d{4}-\d{2}-\d{2}T/) // 修改时间（ISO）
+    expect(empty.slice(5).every((c) => c === '')).toBe(true)
     const failed = rows[2].split(',')
-    expect(failed[2]).toBe('error')
-    expect(failed[18]).toBe('boom')
+    expect(failed[3]).toBe('error')
+    expect(failed[19]).toBe('boom')
   })
 })

@@ -346,6 +346,16 @@ describe('readImageMetadata 端到端', () => {
     const meta = await readImageMetadata(new File([png], 'hybrid.png'))
     expect(meta.source).toBe('comfyui')
     expect(meta.prompt).toBe(wf)
+    expect(meta.parameters).toBe(params) // 升级后原始参数文本保留，供排查对照
+  })
+
+  it('prompt JSON 损坏：来源仍为 ComfyUI 但参数提取失败（UI 据此提示「元数据存在但解析失败」）', async () => {
+    const broken = '{"3": {"class_type": "KSampler", "inputs": {' // 截断的工作流 JSON
+    const png = buildPng([textChunkAscii('prompt', broken)])
+    const meta = await readImageMetadata(new File([png], 'broken.png'))
+    expect(meta.source).toBe('comfyui')
+    expect(meta.prompt).toBe(broken)
+    expect(extractParams(meta)).toBeUndefined()
   })
 
   it('A1111 文本含模板花括号与 Hashes JSON 时仍能升级为 ComfyUI', async () => {

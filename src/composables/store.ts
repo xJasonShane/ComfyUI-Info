@@ -1,5 +1,5 @@
 import { computed, reactive, watch } from 'vue'
-import type { ImageItem, ImageSource } from '../types'
+import type { ImageItem, ImageSource, IncomingFile } from '../types'
 import { isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 
@@ -64,6 +64,8 @@ async function parseItem(item: ImageItem, epoch: number) {
     item.raw = raw
     item.source = raw.source
     item.params = params
+    // 搜索串在解析结果落定后构建一次：筛选热路径只做 includes，不再每键重建
+    item.searchText = buildSearchText(item)
     item.status = 'done'
   } catch (e) {
     item.status = 'error'
@@ -77,7 +79,7 @@ async function parseItem(item: ImageItem, epoch: number) {
 
 /* ---------- 添加 / 清空 ---------- */
 let seq = 0
-// 已加载文件的指纹（name|size|lastModified），O(1) 查重；增删 items 时必须同步维护
+// 已加载文件的指纹（路径或文件名|size|lastModified），O(1) 查重；增删 items 时必须同步维护
 const seenKeys = new Set<string>()
 
 export function retryItem(item: ImageItem) {
@@ -90,10 +92,15 @@ export function retryItem(item: ImageItem) {
   pump()
 }
 
-export function addFiles(files: File[]) {
-  for (const file of files) {
+/** 去重指纹：路径（无目录信息时退回文件名）| 大小 | 修改时间——路径参与后，不同目录的同名文件不再被误去重 */
+function fingerprint(it: { path?: string; name: string; size: number; file: File }): string {
+  return `${it.path ?? it.name}|${it.size}|${it.file.lastModified}`
+}
+
+export function addFiles(files: IncomingFile[]) {
+  for (const { file, path } of files) {
     if (!isSupportedImage(file)) continue
-    const key = `${file.name}|${file.size}|${file.lastModified}`
+    const key = fingerprint({ path, name: file.name, size: file.size, file })
     if (seenKeys.has(key)) continue
     seenKeys.add(key)
     // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
@@ -102,6 +109,7 @@ export function addFiles(files: File[]) {
       file,
       url: URL.createObjectURL(file),
       name: file.name,
+      path,
       size: file.size,
       status: 'pending',
       source: 'none',
@@ -118,7 +126,7 @@ export function removeItem(item: ImageItem) {
   const idx = state.items.indexOf(item)
   if (idx < 0) return
   state.items.splice(idx, 1)
-  seenKeys.delete(`${item.name}|${item.size}|${item.file.lastModified}`)
+  seenKeys.delete(fingerprint(item))
   URL.revokeObjectURL(item.url)
   if (item.status === 'pending') {
     // 未开始的直接出队
@@ -189,10 +197,13 @@ export const modelOptions = computed(() => {
     .map((m) => ({ label: m, value: m }))
 })
 
-/** 搜索域：文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数，按任意生成要素定位图片 */
-function searchHaystack(it: ImageItem): string[] {
+/**
+ * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数，按任意生成要素定位图片。
+ * 在解析完成时（parseItem）构建一次并小写化，筛选热路径不再重复拼接。
+ */
+function buildSearchText(it: ImageItem): string {
   const p = it.params
-  const parts = [it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
+  const parts = [it.path ?? it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
   for (const l of p?.loras ?? []) {
     parts.push(l.name)
     if (l.hash) parts.push(l.hash)
@@ -203,7 +214,7 @@ function searchHaystack(it: ImageItem): string[] {
     if (s.classType) parts.push(s.classType)
     if (s.seed) parts.push(s.seed)
   }
-  return parts
+  return parts.join('\n').toLowerCase()
 }
 
 export const filteredItems = computed(() => {
@@ -218,8 +229,8 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (q) {
-        const hay = searchHaystack(it).join('\n').toLowerCase()
-        if (!hay.includes(q)) return false
+        // 未解析完的项只有文件名可搜，与旧的全量拼接行为一致
+        if (!(it.searchText ?? it.name.toLowerCase()).includes(q)) return false
       }
       return true
     })

@@ -7,7 +7,7 @@ import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
 import { addFiles, filteredItems, parsing, removeItem, stats, store } from './composables/store'
-import type { ImageItem } from './types'
+import type { ImageItem, IncomingFile } from './types'
 
 /* ---------- 主题 ---------- */
 const darkOverrides: GlobalThemeOverrides = {
@@ -143,21 +143,25 @@ function onDragLeave() {
   if (depth === 0) dragging.value = false
 }
 
-async function collectDroppedFiles(dt: DataTransfer): Promise<File[]> {
+async function collectDroppedFiles(dt: DataTransfer): Promise<IncomingFile[]> {
   const entries: FileSystemEntry[] = []
   for (let i = 0; i < dt.items.length; i++) {
     const entry = dt.items[i].webkitGetAsEntry()
     if (entry) entries.push(entry)
   }
-  if (!entries.length) return Array.from(dt.files)
+  if (!entries.length) return Array.from(dt.files).map((file) => ({ file }))
 
-  const out: File[] = []
+  const out: IncomingFile[] = []
   async function walk(entry: FileSystemEntry): Promise<void> {
     if (entry.isFile) {
       const file = await new Promise<File | null>((resolve) =>
         (entry as FileSystemFileEntry).file(resolve, () => resolve(null)),
       )
-      if (file) out.push(file)
+      if (file) {
+        // fullPath 形如 "/目录/子目录/a.png"，去掉开头的斜杠作为展示与去重用的相对路径
+        const path = entry.fullPath.replace(/^\//, '')
+        out.push({ file, path: path || undefined })
+      }
     } else if (entry.isDirectory) {
       const reader = (entry as FileSystemDirectoryEntry).createReader()
       for (;;) {
