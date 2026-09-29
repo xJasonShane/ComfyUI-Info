@@ -87,9 +87,9 @@ interface MetadataScan {
   exifTiff: Uint8Array | null
   hasXmp: boolean
   /**
-   * 扫描的切片未覆盖容器声明的全部元数据区，调用方应整文件重扫。
-   * JPEG 的 APPn 段全部位于扫描数据（SOS）之前，头部切片总是足够，恒为 false；
-   * WebP 的元数据块在图像数据之后，依 VP8X 标志判定。
+   * 扫描的切片未覆盖容器声明的全部元数据区，调用方应读取更大的切片。
+   * JPEG：段区在切片中间被截断（未扫到 SOS / EOI）时置 true——完整文件必以 SOS / EOI 结束段区；
+   * WebP：元数据块在图像数据之后，依 VP8X 标志判定。
    */
   needsFullScan: boolean
 }
@@ -107,6 +107,7 @@ export function scanJpeg(bytes: Uint8Array): MetadataScan {
       continue
     }
     if (marker === 0xda) return out // 扫描数据开始，之后不会再有元数据
+    if (marker === 0xd9) return out // EOI：段区结束
     const segLen = (bytes[pos + 2] << 8) | bytes[pos + 3]
     if (segLen < 2) return out
     if (marker === 0xe1) {
@@ -133,6 +134,11 @@ export function scanJpeg(bytes: Uint8Array): MetadataScan {
       }
     }
     pos += 2 + segLen
+  }
+  // 循环耗尽：末尾恰好剩 EOI（FFD9，2 字节无长度字段，循环条件读不到）视为完整；
+  // 否则是切片在段区中间被截断，可能还有未扫到的 APPn 段
+  if (!(bytes.length - pos === 2 && bytes[pos] === 0xff && bytes[pos + 1] === 0xd9)) {
+    out.needsFullScan = true
   }
   return out
 }

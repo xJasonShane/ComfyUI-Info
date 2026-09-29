@@ -3,8 +3,8 @@
  * 只读取文件头部切片即可拿到元数据，避免把整张大图读进内存。
  * 识别不出参数时收集诊断线索（XMP / EXIF 软件字段等），帮助用户判断原因。
  */
-import type { ParsedParams, RawMetadata } from '../types'
-import { readPngTexts } from './png'
+import type { ParseResult, ParsedParams, RawMetadata } from '../types'
+import { readPngTexts, parsePngChunks } from './png'
 import { extractComfyParams } from './comfyExtract'
 import { parseA1111Parameters } from './a1111'
 import {
@@ -16,7 +16,32 @@ import {
   scanWebp,
 } from './exif'
 
-const HEAD_BYTES = 4 * 1024 * 1024
+/**
+ * 头部切片分级读取：元数据几乎都位于文件最前面（PNG 文本块在 IDAT 之前、JPEG 段在 SOS 之前），
+ * 先读小切片，命中即止；未命中逐级放大。批量扫描时绝大多数文件止步于第一级，
+ * 避免每张图固定读 4MB 带来的 I/O 与内存放大。
+ */
+const HEAD_STAGES = [256 * 1024, 4 * 1024 * 1024]
+
+async function readHead(file: File, size: number): Promise<Uint8Array> {
+  const buf = await file.slice(0, size).arrayBuffer()
+  return new Uint8Array(buf)
+}
+
+/** 按 HEAD_STAGES 逐级放大读取，直到 enough 判定通过或已读整文件 */
+async function readHeadUntil(
+  file: File,
+  enough: (bytes: Uint8Array) => boolean,
+): Promise<Uint8Array> {
+  for (let stage = 0; ; stage++) {
+    const size = Math.min(
+      stage < HEAD_STAGES.length ? HEAD_STAGES[stage] : file.size,
+      file.size,
+    )
+    const bytes = await readHead(file, size)
+    if (enough(bytes) || size >= file.size) return bytes
+  }
+}
 
 function extOf(name: string): string {
   const i = name.lastIndexOf('.')
@@ -25,11 +50,6 @@ function extOf(name: string): string {
 
 export function isSupportedImage(file: File): boolean {
   return ['png', 'jpg', 'jpeg', 'webp'].includes(extOf(file.name))
-}
-
-async function readHead(file: File, size: number): Promise<Uint8Array> {
-  const buf = await file.slice(0, size).arrayBuffer()
-  return new Uint8Array(buf)
 }
 
 /** UserComment 文本 → 来源判定：内嵌 ComfyUI 工作流 JSON 则升级，否则按 A1111 参数文本处理 */
@@ -93,16 +113,42 @@ export function extractParams(raw: RawMetadata): ParsedParams | undefined {
   return undefined
 }
 
+/* ---------- 主线程侧字符串去重（interning） ---------- */
+const internPool = new Map<string, string>()
+
+function intern(s: string | undefined): string | undefined {
+  if (s === undefined) return undefined
+  const hit = internPool.get(s)
+  if (hit !== undefined) return hit
+  internPool.set(s, s)
+  return s
+}
+
+/**
+ * 同一工作流批量出图时，prompt / workflow JSON 会随 Worker 消息逐份克隆成独立字符串；
+ * 在主线程接收处把相同内容合并为同一引用，长列表常驻内存可降一个量级。
+ * 池只在 clearAll（清空列表）时整体清空——单张移除留下的孤儿串以「不同工作流的数量」为上界。
+ */
+export function internParseResult(result: ParseResult): ParseResult {
+  result.raw.prompt = intern(result.raw.prompt)
+  result.raw.workflow = intern(result.raw.workflow)
+  result.raw.parameters = intern(result.raw.parameters)
+  if (result.params) result.params.rawText = intern(result.params.rawText)
+  return result
+}
+
+/** 清空 intern 池：列表整体清空后所有结果串都不再被引用，池同步释放 */
+export function clearInternPool() {
+  internPool.clear()
+}
+
 export async function readImageMetadata(file: File): Promise<RawMetadata> {
   const ext = extOf(file.name)
 
   if (ext === 'png') {
-    let r = await readPngTexts(await readHead(file, HEAD_BYTES))
-    if (!r.complete && file.size > HEAD_BYTES) {
-      // 头部切片恰好截断在文本块区域，整文件重读一次
-      r = await readPngTexts(await readHead(file, file.size))
-    }
-    const { texts, chunks } = r
+    // PNG：文本块 / eXIf 都在 IDAT 之前，读到 IDAT 即为完整；切片截断在文本块区则逐级放大
+    const bytes = await readHeadUntil(file, (b) => parsePngChunks(b).complete)
+    const { texts, chunks } = await readPngTexts(bytes)
     if (texts['prompt'] || texts['workflow']) {
       return { source: 'comfyui', prompt: texts['prompt'], workflow: texts['workflow'] }
     }
@@ -133,12 +179,10 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
   }
 
   if (ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
-    const head = await readHead(file, HEAD_BYTES)
-    let scan = ext === 'webp' ? scanWebp(head) : scanJpeg(head)
-    if (ext === 'webp' && scan.needsFullScan && file.size > HEAD_BYTES) {
-      // WebP 的 EXIF / XMP 块位于图像数据之后，头部切片没扫到时整文件重扫一次
-      scan = scanWebp(await readHead(file, file.size))
-    }
+    const isWebp = ext === 'webp'
+    // JPEG：段区截断（未到 SOS / EOI）时逐级放大；WebP：VP8X 声明的 EXIF / XMP 未扫到时逐级放大
+    const bytes = await readHeadUntil(file, (b) => !(isWebp ? scanWebp(b) : scanJpeg(b)).needsFullScan)
+    const scan = isWebp ? scanWebp(bytes) : scanJpeg(bytes)
     if (scan.exifTiff) {
       const raw = extractUserCommentFromTiff(scan.exifTiff)
       const text = raw ? decodeUserComment(raw) : null

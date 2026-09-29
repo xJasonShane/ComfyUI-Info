@@ -45,6 +45,12 @@ export interface ParsedParams {
   rawText?: string
 }
 
+/** 一次完整解析的结果：原始元数据 + 提取出的结构化参数 */
+export interface ParseResult {
+  raw: RawMetadata
+  params?: ParsedParams
+}
+
 export interface ImageItem {
   id: string
   file: File

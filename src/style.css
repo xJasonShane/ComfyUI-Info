@@ -331,7 +331,100 @@ body {
   opacity: 0;
   transition:
     opacity 0.15s ease,
+    background 0.15s ease,
+    right 0.15s ease;
+}
+
+/* ============ 多选与批量操作 ============ */
+.card.card-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.card .card-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
     background 0.15s ease;
+}
+
+.card:hover .card-check,
+.card .card-check:focus-visible,
+.card .card-check.on {
+  opacity: 1;
+}
+
+.card .card-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.card .card-check.on::after {
+  content: '✓';
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* 移除按钮给左上让位：选择指示器可见（悬停 / 选中 / 触屏）时不重叠 */
+.card:hover .card-remove,
+.grid.selecting .card-remove,
+.card .card-check:focus-visible + .card-remove {
+  right: 38px;
+}
+
+@media (hover: none) {
+  .card .card-remove {
+    right: 38px;
+  }
+  .card .card-check {
+    opacity: 1;
+  }
+}
+
+.select-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.select-bar .sel-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.select-bar .sel-count b {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .card:hover .card-remove,

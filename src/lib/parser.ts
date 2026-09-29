@@ -4,14 +4,9 @@
  * 自动整体回退到主线程解析，行为与纯主线程版本一致。
  */
 import ParseWorker from './parseWorker?worker&inline'
-import { extractParams, readImageMetadata } from './metadata'
-import type { ParsedParams, RawMetadata } from '../types'
+import { extractParams, internParseResult, readImageMetadata } from './metadata'
+import type { ParseResult } from '../types'
 import type { ParseWorkerReply, ParseWorkerRequest } from './parseWorker'
-
-export interface ParseResult {
-  raw: RawMetadata
-  params?: ParsedParams
-}
 
 /** Worker 不可用的哨兵：触发整体回退主线程（与真实解析失败区分开） */
 const BROKEN = Symbol('parse-worker-broken')
@@ -109,13 +104,16 @@ async function parseOnMainThread(file: File): Promise<ParseResult> {
 export function parseImage(file: File): Promise<ParseResult> {
   if (poolPromise === null) poolPromise = ParsePool.create()
   return poolPromise.then((pool) => {
-    if (!pool) return parseOnMainThread(file)
-    return pool.parse(file).catch((err) => {
-      if (err !== BROKEN) throw err
-      // Worker 中途失效：终止并永久回退主线程
-      pool.dispose()
-      poolPromise = Promise.resolve(null)
-      return parseOnMainThread(file)
-    })
+    if (!pool) return parseOnMainThread(file).then(internParseResult)
+    return pool
+      .parse(file)
+      .then(internParseResult)
+      .catch((err) => {
+        if (err !== BROKEN) throw err
+        // Worker 中途失效：终止并永久回退主线程
+        pool.dispose()
+        poolPromise = Promise.resolve(null)
+        return parseOnMainThread(file).then(internParseResult)
+      })
   })
 }

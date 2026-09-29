@@ -1,12 +1,24 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect, watch, onMounted, onBeforeUnmount } from 'vue'
-import { NButton, NConfigProvider, NMessageProvider, darkTheme, dateZhCN, zhCN } from 'naive-ui'
+import {
+  NButton,
+  NConfigProvider,
+  NDropdown,
+  NMessageProvider,
+  NPopconfirm,
+  darkTheme,
+  dateZhCN,
+  zhCN,
+  useMessage,
+} from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import TopBar from './components/TopBar.vue'
 import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
-import { addFiles, filteredItems, parsing, removeItem, stats, store } from './composables/store'
+import { addFiles, filteredItems, parsing, rangeIds, removeItem, stats, store } from './composables/store'
+import { buildExportCsv, buildExportJson } from './lib/export'
+import { copyText, downloadText } from './lib/utils'
 import type { ImageItem, IncomingFile } from './types'
 
 /* ---------- 主题 ---------- */
@@ -58,6 +70,7 @@ function showAll() {
 /* ---------- 详情 ---------- */
 const current = ref<ImageItem | null>(null)
 const showDetail = ref(false)
+const message = useMessage()
 function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
@@ -65,10 +78,78 @@ function open(item: ImageItem) {
 // 单张移除；若移除的正是抽屉里打开的这张，一并收起
 function onRemove(item: ImageItem) {
   removeItem(item)
+  selectedIds.value.delete(item.id)
   if (current.value === item) {
     showDetail.value = false
     current.value = null
   }
+}
+
+/* ---------- 多选与批量操作 ---------- */
+// 选择独立于筛选：切换筛选后已选条目保持（含当前筛选下不可见的），批量动作按 id 生效
+const selectedIds = ref(new Set<string>())
+const anchorId = ref<string | null>(null)
+const selectedItems = computed(() => store.items.filter((i) => selectedIds.value.has(i.id)))
+
+function toggleSelect(item: ImageItem) {
+  if (selectedIds.value.has(item.id)) selectedIds.value.delete(item.id)
+  else selectedIds.value.add(item.id)
+  anchorId.value = item.id
+}
+
+function rangeSelect(item: ImageItem) {
+  const list = filteredItems.value
+  for (const id of rangeIds(list, anchorId.value, item.id)) selectedIds.value.add(id)
+  // 锚点失效（被移除）时重新落点，保证下一次 Shift 点击有有效起点
+  if (!anchorId.value || !list.some((i) => i.id === anchorId.value)) anchorId.value = item.id
+}
+
+function selectAllFiltered() {
+  for (const i of filteredItems.value) selectedIds.value.add(i.id)
+}
+
+function clearSelection() {
+  selectedIds.value.clear()
+  anchorId.value = null
+}
+
+function batchRemove() {
+  for (const it of selectedItems.value) removeItem(it)
+  clearSelection()
+}
+
+async function batchCopyPrompts() {
+  const prompts = selectedItems.value
+    .filter((i) => i.status === 'done' && i.params)
+    .map((i) => i.params!.positive.join('\n'))
+    .filter((s) => s.trim() !== '')
+  if (!prompts.length) {
+    message.warning('所选图片中还没有已解析出提示词的项')
+    return
+  }
+  const ok = await copyText(prompts.join('\n'))
+  if (ok) message.success(`已复制 ${prompts.length} 张图片的正向提示词`)
+  else message.error('复制失败，请手动选择文本复制')
+}
+
+const exportOptions = [
+  { label: '导出 JSON', key: 'json' },
+  { label: '导出 CSV (Excel)', key: 'csv' },
+]
+
+function batchExport(key: string | number) {
+  if (parsing.value) {
+    message.warning('扫描仍在进行，请等扫描完成后再导出')
+    return
+  }
+  const items = selectedItems.value.filter((i) => i.status === 'done' || i.status === 'error')
+  if (!items.length) {
+    message.warning('所选图片中还没有可导出的结果')
+    return
+  }
+  const stamp = new Date().toISOString().slice(0, 10)
+  if (key === 'csv') downloadText(`comfyui-info-selected-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+  else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
 }
 
 /* ---------- 键盘导航（抽屉打开时 ←/→ 沿当前筛选顺序浏览） ---------- */
@@ -235,14 +316,17 @@ async function onDrop(e: DragEvent) {
         </div>
 
         <main class="gallery">
-          <div v-if="visibleItems.length" class="grid">
+          <div v-if="visibleItems.length" class="grid" :class="{ selecting: selectedItems.length > 0 }">
             <ImageCard
               v-for="(it, idx) in visibleItems"
               :key="it.id"
               :item="it"
               :index="idx"
+              :selected="selectedIds.has(it.id)"
               @open="open(it)"
               @remove="onRemove(it)"
+              @select-toggle="toggleSelect(it)"
+              @select-range="rangeSelect(it)"
             />
           </div>
           <EmptyState
@@ -257,6 +341,22 @@ async function onDrop(e: DragEvent) {
             </NButton>
           </div>
         </main>
+
+        <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
+          <span class="sel-count">已选 <b>{{ selectedItems.length }}</b> 张</span>
+          <NButton size="tiny" secondary @click="selectAllFiltered">全选筛选结果</NButton>
+          <NButton size="tiny" secondary @click="batchCopyPrompts">复制提示词</NButton>
+          <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
+            <NButton size="tiny" secondary>导出选中</NButton>
+          </NDropdown>
+          <NPopconfirm @positive-click="batchRemove">
+            <template #trigger>
+              <NButton size="tiny" secondary type="error">移除选中</NButton>
+            </template>
+            确定移除选中的 {{ selectedItems.length }} 张图片？
+          </NPopconfirm>
+          <NButton size="tiny" quaternary @click="clearSelection">取消选择</NButton>
+        </div>
 
         <DetailDrawer v-model:show="showDetail" :item="current" />
 

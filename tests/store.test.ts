@@ -4,6 +4,7 @@ import { parseA1111Parameters } from '../src/lib/a1111'
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
 vi.mock('../src/lib/metadata', () => ({
   isSupportedImage: () => true,
+  clearInternPool: () => {},
 }))
 vi.mock('../src/lib/parser', () => ({
   parseImage: vi.fn(),
@@ -216,6 +217,15 @@ it('modelOptions 从解析结果聚合去重并排序', async () => {
     { label: 'alpha', value: 'alpha' },
     { label: 'beta', value: 'beta' },
   ])
+})
+
+it('rangeIds 区间选择：锚点到目标的有序区间，锚点失效退化为仅目标', () => {
+  const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+  expect(api.rangeIds(list, 'a', 'c')).toEqual(['a', 'b', 'c'])
+  expect(api.rangeIds(list, 'c', 'a')).toEqual(['a', 'b', 'c']) // 反向点击同样取完整区间
+  expect(api.rangeIds(list, null, 'b')).toEqual(['b'])
+  expect(api.rangeIds(list, 'zz', 'b')).toEqual(['b']) // 锚点不在列表中
+  expect(api.rangeIds(list, 'a', 'zz')).toEqual([])
 })
 
 it('排序模式：按文件时间新旧排列，失败项始终靠后', async () => {

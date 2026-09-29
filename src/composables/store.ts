@@ -1,6 +1,6 @@
 import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile } from '../types'
-import { isSupportedImage } from '../lib/metadata'
+import { clearInternPool, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
@@ -150,6 +150,7 @@ export function clearAll() {
   state.batchTotal = 0
   state.batchDone = 0
   batchEpoch++ // 在途解析完成后不再计入新批次
+  clearInternPool() // 在途解析完成时会把结果串重新入池，无碍
 }
 
 /* ---------- 派生数据 ---------- */
@@ -237,8 +238,24 @@ export const filteredItems = computed(() => {
     .sort(sorters[state.sortMode])
 })
 
-export const sourceOptions: { label: string; value: SourceFilter }[] = [
-  { label: 'ComfyUI 原图', value: 'comfyui' },
+/**
+ * 区间选择：取有序列表中锚点与目标之间（含两端）的全部 id。
+ * 锚点为空或已不在列表中时退化为仅目标——调用方随后应把锚点设为目标。
+ */
+export function rangeIds(
+  list: { id: string }[],
+  anchorId: string | null,
+  targetId: string,
+): string[] {
+  const to = list.findIndex((i) => i.id === targetId)
+  if (to < 0) return []
+  const from = anchorId ? list.findIndex((i) => i.id === anchorId) : -1
+  if (from < 0) return [targetId]
+  const [lo, hi] = from <= to ? [from, to] : [to, from]
+  return list.slice(lo, hi + 1).map((i) => i.id)
+}
+
+export const sourceOptions: { label: string; value: SourceFilter }[] = [  { label: 'ComfyUI 原图', value: 'comfyui' },
   { label: 'A1111 / WebUI', value: 'a1111' },
   { label: '无元数据', value: 'none' },
   { label: '解析失败', value: 'error' },

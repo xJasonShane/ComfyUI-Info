@@ -7,9 +7,15 @@ import {
   extractJsonSubstring,
   findJpegExifTiff,
   findWebpExifTiff,
+  scanJpeg,
   scanWebp,
 } from '../src/lib/exif'
-import { readImageMetadata, extractParams } from '../src/lib/metadata'
+import {
+  clearInternPool,
+  internParseResult,
+  readImageMetadata,
+  extractParams,
+} from '../src/lib/metadata'
 import { extractComfyParams } from '../src/lib/comfyExtract'
 import { parseA1111Parameters } from '../src/lib/a1111'
 
@@ -108,7 +114,7 @@ function buildJpegWithExif(tiff: Uint8Array): Uint8Array {
   return out
 }
 
-// 与 metadata.ts 的头部切片大小一致
+// 用于构造「EXIF 位于分级切片之外」的大块图像数据（覆盖逐级放大到整文件的路径）
 const HEAD_BYTES = 4 * 1024 * 1024
 
 function webpChunk(id: string, data: Uint8Array): Uint8Array {
@@ -287,6 +293,14 @@ describe('EXIF UserComment', () => {
     expect(decodeUserComment(extractUserCommentFromTiff(fullScan.exifTiff!)!)).toBe('hello')
   })
 
+  it('JPEG 段区在切片中间被截断时提示需要更多数据', () => {
+    const tiff = buildTiff(new Uint8Array(asciiUserComment('hello')))
+    const jpeg = buildJpegWithExif(tiff)
+    expect(scanJpeg(jpeg).needsFullScan).toBe(false) // 完整文件以 EOI 结束段区
+    // 截掉 EOI 与 APP1 尾部：循环耗尽仍未到 SOS / EOI，必须放大切片重扫
+    expect(scanJpeg(jpeg.slice(0, jpeg.length - 6)).needsFullScan).toBe(true)
+  })
+
   it('extractJsonSubstring 截取 JSON', () => {
     expect(extractJsonSubstring('前缀 {"a":1} 后缀')).toBe('{"a":1}')
     expect(extractJsonSubstring('no json')).toBeNull()
@@ -399,6 +413,15 @@ describe('readImageMetadata 端到端', () => {
     const webp = buildWebpWithExif(tiff, HEAD_BYTES)
     const meta = await readImageMetadata(new File([webp], 'big.webp'))
     expect(meta.source).toBe('a1111')
+  })
+
+  it('PNG 元数据区超过一级切片（256KB）时分级放大重读仍可识别', async () => {
+    // 前置一个 300KB 的占位文本块，把 prompt 块推到一级切片之外
+    const pad = 'A'.repeat(300 * 1024)
+    const png = buildPng([textChunkAscii('pad', pad), textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
+    const meta = await readImageMetadata(new File([png], 'big-text.png'))
+    expect(meta.source).toBe('comfyui')
+    expect(meta.prompt).toBe(COMFY_PROMPT_ASCII)
   })
 
   it('无元数据图片', async () => {
@@ -578,5 +601,21 @@ describe('parseA1111Parameters', () => {
     )
     expect(p.samplers).toHaveLength(1)
     expect(p.samplers[0].denoise).toBe(0.45)
+  })
+})
+
+describe('internParseResult', () => {
+  it('相同内容合并为同一引用值，undefined 透传，rawText 与原文归并', () => {
+    clearInternPool()
+    const a = internParseResult({ raw: { source: 'comfyui', prompt: '{"a":1}' } })
+    const b = internParseResult({ raw: { source: 'a1111', parameters: '{"a":1}' } })
+    expect(b.raw.parameters).toBe(a.raw.prompt)
+    expect(a.raw.workflow).toBeUndefined()
+
+    const params = parseA1111Parameters('Steps: 20')
+    const c = internParseResult({ raw: { source: 'a1111', parameters: 'Steps: 20' }, params })
+    expect(c.params?.rawText).toBe(c.raw.parameters)
+    expect(internParseResult({ raw: { source: 'none' } }).raw.prompt).toBeUndefined()
+    clearInternPool()
   })
 })
