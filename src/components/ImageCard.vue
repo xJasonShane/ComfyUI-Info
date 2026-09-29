@@ -9,12 +9,14 @@ defineEmits<{ open: [] }>()
 const broken = ref(false)
 
 const srcColor = computed(() => {
+  if (props.item.status === 'error') return 'var(--danger)'
   if (props.item.source === 'comfyui') return 'var(--accent)'
   if (props.item.source === 'a1111') return 'var(--teal)'
   return 'var(--gray-src)'
 })
 
 const srcLabel = computed(() => {
+  if (props.item.status === 'error') return '解析失败'
   if (props.item.status !== 'done') return '解析中'
   if (props.item.source === 'comfyui') return 'ComfyUI'
   if (props.item.source === 'a1111') return 'A1111'
@@ -35,7 +37,13 @@ const modelShort = computed(() => {
 </script>
 
 <template>
-  <div class="card" :style="{ '--i': index }" :title="item.name" @click="$emit('open')">
+  <div
+    class="card"
+    :class="{ 'card-error': item.status === 'error' }"
+    :style="{ '--i': index }"
+    :title="item.status === 'error' ? `${item.name}（${item.error ?? '解析失败'}）` : item.name"
+    @click="$emit('open')"
+  >
     <img v-if="!broken" :src="item.url" loading="lazy" alt="" @error="broken = true" />
     <div v-else class="broken">无法预览</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>

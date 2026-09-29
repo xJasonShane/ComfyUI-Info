@@ -45,9 +45,10 @@ watch(
 const visibleItems = computed(() => filteredItems.value.slice(0, shown.value))
 const remaining = computed(() => filteredItems.value.length - visibleItems.value.length)
 // 被“来源 / 搜索 / 模型”筛选挡住的已解析图片数量（用于空状态引导）
-const hiddenCount = computed(
-  () => store.items.filter((i) => i.status === 'done').length - filteredItems.value.length,
-)
+const hiddenCount = computed(() => {
+  const shown = new Set(filteredItems.value)
+  return store.items.filter((i) => i.status === 'done' && !shown.has(i)).length
+})
 function showAll() {
   store.sourceFilter = 'all'
   store.search = ''
@@ -139,6 +140,14 @@ async function onDrop(e: DragEvent) {
           <span><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b> ComfyUI 原图</span>
           <span><i class="dot" style="background: var(--teal)" /><b>{{ stats.a1111 }}</b> A1111</span>
           <span><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b> 无元数据</span>
+          <span
+            v-if="stats.error"
+            class="stat-error"
+            title="点击查看解析失败的图片"
+            @click="store.sourceFilter = 'error'"
+          >
+            <i class="dot" style="background: var(--danger)" /><b>{{ stats.error }}</b> 解析失败
+          </span>
           <span v-if="parsing" style="color: var(--accent)">扫描中…</span>
         </div>
 

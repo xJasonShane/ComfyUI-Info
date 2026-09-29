@@ -5,6 +5,7 @@ import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
+import { retryItem } from '../composables/store'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
@@ -212,6 +213,14 @@ function downloadJson(text: string | undefined, suffix: string) {
           </div>
         </template>
 
+        <div v-else-if="item.status === 'error'" class="notice">
+          <span class="notice-title">解析失败</span>
+          <p class="err-message">{{ item.error ?? '读取图片元数据时发生未知错误' }}</p>
+          <NButton size="small" secondary @click="retryItem(item)">
+            <template #icon><Icon name="refresh" :size="13" /></template>
+            重试
+          </NButton>
+        </div>
         <div v-else-if="item.status !== 'done'" class="notice">
           正在解析元数据…
           <br />

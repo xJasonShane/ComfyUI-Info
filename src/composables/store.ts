@@ -1,10 +1,10 @@
 import { computed, reactive, watch } from 'vue'
-import type { ImageItem } from '../types'
+import type { ImageItem, ImageSource } from '../types'
 import { isSupportedImage, readImageMetadata } from '../lib/metadata'
 import { extractComfyParams } from '../lib/comfyExtract'
 import { parseA1111Parameters } from '../lib/a1111'
 
-export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none'
+export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
 
 interface StoreState {
   items: ImageItem[]
@@ -70,6 +70,15 @@ async function parseItem(item: ImageItem) {
 /* ---------- 添加 / 清空 ---------- */
 let seq = 0
 
+export function retryItem(item: ImageItem) {
+  if (item.status !== 'error') return
+  item.status = 'pending'
+  item.error = undefined
+  state.batchTotal++
+  queue.push(item)
+  pump()
+}
+
 export function addFiles(files: File[]) {
   for (const file of files) {
     if (!isSupportedImage(file)) continue
@@ -110,8 +119,12 @@ export const scanProgress = computed(() =>
 const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, none: 2 }
 
 export const stats = computed(() => {
-  const c = { comfyui: 0, a1111: 0, none: 0 }
-  for (const i of state.items) c[i.source]++
+  const c: Record<ImageSource | 'error', number> = { comfyui: 0, a1111: 0, none: 0, error: 0 }
+  for (const i of state.items) {
+    // 解析失败的项没有来源，单独计数，不冒充“无元数据”
+    if (i.status === 'error') c.error++
+    else c[i.source]++
+  }
   return c
 })
 
@@ -130,7 +143,11 @@ export const filteredItems = computed(() => {
   const q = state.search.trim().toLowerCase()
   return state.items
     .filter((it) => {
-      if (it.status === 'error') return false
+      // 解析失败的项不受搜索 / 模型筛选影响，由来源筛选统一控制可见性
+      if (it.status === 'error') {
+        return state.sourceFilter === 'error' || state.sourceFilter === 'all'
+      }
+      if (state.sourceFilter === 'error') return false
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (q) {
@@ -143,7 +160,8 @@ export const filteredItems = computed(() => {
     })
     .sort(
       (a, b) =>
-        (sourceRank[a.source] ?? 3) - (sourceRank[b.source] ?? 3) ||
+        (a.status === 'error' ? 3 : sourceRank[a.source] ?? 3) -
+          (b.status === 'error' ? 3 : sourceRank[b.source] ?? 3) ||
         a.name.localeCompare(b.name, 'zh-CN', { numeric: true }),
     )
 })
@@ -152,6 +170,7 @@ export const sourceOptions: { label: string; value: SourceFilter }[] = [
   { label: 'ComfyUI 原图', value: 'comfyui' },
   { label: 'A1111 / WebUI', value: 'a1111' },
   { label: '无元数据', value: 'none' },
+  { label: '解析失败', value: 'error' },
   { label: '全部图片', value: 'all' },
 ]
 
