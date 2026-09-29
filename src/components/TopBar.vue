@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NInput, NPopconfirm, NSelect, NTooltip } from 'naive-ui'
+import { NButton, NDropdown, NInput, NPopconfirm, NSelect, NTooltip } from 'naive-ui'
 import Icon from './Icon.vue'
 import {
   addFiles,
   clearAll,
+  filteredItems,
   modelOptions,
   parsing,
   scanProgress,
@@ -12,6 +13,8 @@ import {
   store,
   toggleDark,
 } from '../composables/store'
+import { buildExportCsv, buildExportJson } from '../lib/export'
+import { downloadText } from '../lib/utils'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
@@ -26,6 +29,20 @@ function onPickDir(e: Event) {
   const input = e.target as HTMLInputElement
   if (input.files) addFiles(Array.from(input.files))
   input.value = ''
+}
+
+const exportOptions = [
+  { label: '导出 JSON', key: 'json' },
+  { label: '导出 CSV (Excel)', key: 'csv' },
+]
+
+function exportAs(key: string | number) {
+  // 只导出已出结果的项（done / error）；解析中的项等扫描完再导出
+  const items = filteredItems.value.filter((i) => i.status === 'done' || i.status === 'error')
+  if (!items.length) return
+  const stamp = new Date().toISOString().slice(0, 10)
+  if (key === 'csv') downloadText(`comfyui-info-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+  else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
 }
 </script>
 
@@ -49,6 +66,12 @@ function onPickDir(e: Event) {
       <template #icon><Icon name="folder-plus" /></template>
       添加文件夹
     </NButton>
+    <NDropdown v-if="store.items.length > 0" trigger="click" :options="exportOptions" @select="exportAs">
+      <NButton size="small" secondary :disabled="filteredItems.length === 0">
+        <template #icon><Icon name="download" /></template>
+        导出
+      </NButton>
+    </NDropdown>
     <NTooltip v-if="store.items.length > 0">
       <template #trigger>
         <NPopconfirm @positive-click="clearAll">

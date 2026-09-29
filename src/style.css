@@ -314,6 +314,43 @@ body {
   font-size: 12px;
 }
 
+.card .card-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #eee;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
+}
+
+.card:hover .card-remove,
+.card-remove:focus-visible {
+  opacity: 1;
+}
+
+.card .card-remove:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+@media (hover: none) {
+  .card .card-remove {
+    opacity: 1;
+  }
+}
+
 .more-row {
   display: flex;
   justify-content: center;

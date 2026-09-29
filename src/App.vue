@@ -6,7 +6,7 @@ import TopBar from './components/TopBar.vue'
 import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
-import { addFiles, filteredItems, parsing, stats, store } from './composables/store'
+import { addFiles, filteredItems, parsing, removeItem, stats, store } from './composables/store'
 import type { ImageItem } from './types'
 
 /* ---------- 主题 ---------- */
@@ -61,6 +61,14 @@ const showDetail = ref(false)
 function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
+}
+// 单张移除；若移除的正是抽屉里打开的这张，一并收起
+function onRemove(item: ImageItem) {
+  removeItem(item)
+  if (current.value === item) {
+    showDetail.value = false
+    current.value = null
+  }
 }
 // 清空列表时收起详情抽屉，避免展示已撤销 URL 的图片
 watch(
@@ -183,6 +191,7 @@ async function onDrop(e: DragEvent) {
               :item="it"
               :index="idx"
               @open="open(it)"
+              @remove="onRemove(it)"
             />
           </div>
           <EmptyState v-else :filtered="store.items.length > 0" :hidden-count="hiddenCount" @show-all="showAll" />

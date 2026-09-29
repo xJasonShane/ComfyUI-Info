@@ -2,9 +2,10 @@
 import { computed, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
+import Icon from './Icon.vue'
 
 const props = defineProps<{ item: ImageItem; index: number }>()
-defineEmits<{ open: [] }>()
+defineEmits<{ open: []; remove: [] }>()
 
 const broken = ref(false)
 
@@ -47,6 +48,9 @@ const modelShort = computed(() => {
     <img v-if="!broken" :src="item.url" loading="lazy" alt="" @error="broken = true" />
     <div v-else class="broken">无法预览</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>
+    <button class="card-remove" type="button" title="从列表移除" @click.stop="$emit('remove')">
+      <Icon name="x" :size="12" :stroke="2.4" />
+    </button>
     <div v-if="modelShort || dims" class="veil">
       <span class="model">{{ modelShort }}</span>
       <span class="dims">{{ dims }}</span>

@@ -108,6 +108,26 @@ export function addFiles(files: File[]) {
   pump()
 }
 
+export function removeItem(item: ImageItem) {
+  const idx = state.items.indexOf(item)
+  if (idx < 0) return
+  state.items.splice(idx, 1)
+  seenKeys.delete(`${item.name}|${item.size}|${item.file.lastModified}`)
+  URL.revokeObjectURL(item.url)
+  if (item.status === 'pending') {
+    // 未开始的直接出队
+    const qi = queue.indexOf(item)
+    if (qi >= 0) queue.splice(qi, 1)
+    state.batchTotal--
+  } else if (item.status !== 'parsing') {
+    // done / error：两本账一起减
+    state.batchTotal--
+    state.batchDone--
+  }
+  // 在途（parsing）无法中断也不动计数：其完成时的 batchDone++ 会与保留的 batchTotal 对齐，
+  // 不会出现永久“扫描中”或进度超过 100%
+}
+
 export function clearAll() {
   for (const i of state.items) URL.revokeObjectURL(i.url)
   state.items = []
