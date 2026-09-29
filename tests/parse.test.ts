@@ -619,6 +619,9 @@ describe('parseA1111Parameters', () => {
     expect(s2.seed).toBe('42')
     expect(s2.sampler).toBe('DPM++ 2M Karras') // 未提供 Hires sampler 时继承一阶段
     expect(s2.denoise).toBe(0.7) // 来自 Denoising strength
+    // Size 是一阶段尺寸：启用高清修复时最终输出 = Size × Hires upscale
+    expect(p.width).toBe(2048)
+    expect(p.height).toBe(3072)
   })
 
   it('img2img（无 Hires 键）的 Denoising strength 保留在单阶段', () => {

@@ -99,13 +99,13 @@ export function parseA1111Parameters(text: string): ParsedParams {
   const cfg = Number(pairs['CFG scale'])
   const seed = Number(pairs['Seed'])
   const denoise = Number(pairs['Denoising strength'])
+  // 出现 Hires* 键说明启用了高清修复：第二阶段按 img2img 重绘，未单独提供的参数继承一阶段
+  const hires =
+    pairs['Hires upscale'] !== undefined ||
+    pairs['Hires upscaler'] !== undefined ||
+    pairs['Hires steps'] !== undefined ||
+    pairs['Hires denoising strength'] !== undefined
   if (pairs['Steps'] !== undefined || pairs['Sampler'] !== undefined) {
-    // 出现 Hires* 键说明启用了高清修复：第二阶段按 img2img 重绘，未单独提供的参数继承一阶段
-    const hires =
-      pairs['Hires upscale'] !== undefined ||
-      pairs['Hires upscaler'] !== undefined ||
-      pairs['Hires steps'] !== undefined ||
-      pairs['Hires denoising strength'] !== undefined
     out.samplers.push({
       nodeId: '0',
       classType: 'A1111',
@@ -143,6 +143,14 @@ export function parseA1111Parameters(text: string): ParsedParams {
   if (size) {
     out.width = Number(size[1])
     out.height = Number(size[2])
+    // Size 是一阶段尺寸：启用高清修复时最终输出 = Size × Hires upscale
+    if (hires) {
+      const upscale = Number(pairs['Hires upscale'])
+      if (Number.isFinite(upscale) && upscale > 0) {
+        out.width = Math.round(out.width * upscale)
+        out.height = Math.round(out.height * upscale)
+      }
+    }
   }
   if (pairs['Model']) out.models.push(pairs['Model'])
 

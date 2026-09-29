@@ -47,21 +47,35 @@ export async function ensureReadPermission(handle: FileSystemDirectoryHandle): P
   return false
 }
 
+/** 攒批大小：遍历期间分批交付，调用方边收边入列，超大目录不必等全量枚举完成 */
+const DELIVER_BATCH = 200
+
 /**
  * 递归枚举目录下全部文件（含子目录），相对路径以目录名为根（如 root/sub/a.png）。
+ * 分批回调交付：边扫边入列，卡片渐进出现、解析与遍历重叠执行，文件句柄数组不再整体常驻。
  * 不做格式过滤——入列前的扩展名 / 魔数过滤由 addFiles 统一处理。
- * 单个文件读取失败（如悬空符号链接）跳过，不影响其余。
+ * 单个文件读取失败（如悬空符号链接）跳过，不影响其余。返回交付的文件总数。
  */
 export async function collectDirectoryFiles(
   handle: FileSystemDirectoryHandle,
-): Promise<IncomingFile[]> {
-  const out: IncomingFile[] = []
+  onBatch: (files: IncomingFile[]) => void,
+): Promise<number> {
+  let batch: IncomingFile[] = []
+  let total = 0
+  const flush = () => {
+    if (batch.length) {
+      onBatch(batch)
+      batch = []
+    }
+  }
   async function walk(dir: FileSystemDirectoryHandle, prefix: string): Promise<void> {
     for await (const [name, entry] of dir.entries()) {
       if (entry.kind === 'file') {
         try {
           const file = await (entry as FileSystemFileHandle).getFile()
-          out.push({ file, path: `${prefix}${name}` })
+          batch.push({ file, path: `${prefix}${name}` })
+          total++
+          if (batch.length >= DELIVER_BATCH) flush()
         } catch {
           // 单个文件不可读时跳过
         }
@@ -71,5 +85,6 @@ export async function collectDirectoryFiles(
     }
   }
   await walk(handle, `${handle.name}/`)
-  return out
+  flush()
+  return total
 }

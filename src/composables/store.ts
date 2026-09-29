@@ -114,11 +114,13 @@ export function retryItem(item: ImageItem) {
   pump()
 }
 
-export function addFiles(files: IncomingFile[]) {
+/** 返回本次直接入列的新增数量（去重后）；无扩展名文件的嗅探确认是异步入列，不计入返回值 */
+export function addFiles(files: IncomingFile[]): number {
   const deferred: IncomingFile[] = []
+  let added = 0
   for (const { file, path } of files) {
     if (isSupportedImage(file)) {
-      enqueueFile(file, path)
+      added += enqueueFile(file, path)
     } else {
       // 无扩展名 / 生僻扩展名：按文件头魔数嗅探，异步确认后再入列
       deferred.push({ file, path })
@@ -126,11 +128,13 @@ export function addFiles(files: IncomingFile[]) {
   }
   pump()
   for (const incoming of deferred) void acceptBySniff(incoming)
+  return added
 }
 
-function enqueueFile(file: File, path?: string) {
+/** 入列单个文件：返回是否新增（指纹已存在 / 存档回挂不产生解析任务，均不算新增） */
+function enqueueFile(file: File, path?: string): number {
   const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
-  if (seenKeys.has(key)) return
+  if (seenKeys.has(key)) return 0
   // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
   const archived = detachedByKey.get(key)
   if (archived) {
@@ -139,7 +143,7 @@ function enqueueFile(file: File, path?: string) {
     archived.detached = false
     seenKeys.add(key)
     detachedByKey.delete(key)
-    return
+    return 0
   }
   seenKeys.add(key)
   // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
@@ -158,6 +162,7 @@ function enqueueFile(file: File, path?: string) {
   state.items.push(item)
   state.batchTotal++
   queue.push(item)
+  return 1
 }
 
 /** 无扩展名文件的嗅探入列：确认是受支持图片才加入，普通杂项文件维持静默跳过 */
@@ -234,12 +239,18 @@ export function forgetRescanHandle() {
   if (persistAvailable) void clearHandle().catch(() => {})
 }
 
-/** 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析 */
-export async function rescanDirectory(): Promise<boolean> {
-  if (!rescanHandle) return false
-  if (!(await ensureReadPermission(rescanHandle))) return false
-  addFiles(await collectDirectoryFiles(rescanHandle))
-  return true
+/**
+ * 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析。
+ * 分批边扫边入列；返回新增入列的文件数，无句柄或未获授权返回 null。
+ */
+export async function rescanDirectory(): Promise<number | null> {
+  if (!rescanHandle) return null
+  if (!(await ensureReadPermission(rescanHandle))) return null
+  let added = 0
+  await collectDirectoryFiles(rescanHandle, (files) => {
+    added += addFiles(files)
+  })
+  return added
 }
 
 /* ---------- 会话持久化（探测失败时静默降级为纯内存） ---------- */

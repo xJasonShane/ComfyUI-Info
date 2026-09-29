@@ -51,12 +51,12 @@ async function onPickFolder() {
   if (!handle) return
   scanning.value = true
   try {
-    const incoming = await collectDirectoryFiles(handle)
-    if (!incoming.length) {
+    // 分批入列：遍历期间解析已并行开跑；总数为 0 表示目录里没有图片文件（未加入任何项）
+    const count = await collectDirectoryFiles(handle, addFiles)
+    if (!count) {
       message.warning(`目录「${handle.name}」中没有找到图片文件`)
       return
     }
-    addFiles(incoming)
     await setRescanHandle(handle)
   } finally {
     scanning.value = false
@@ -64,12 +64,13 @@ async function onPickFolder() {
 }
 
 async function onRescan() {
-  const ok = await rescanDirectory()
-  if (!ok) {
+  const added = await rescanDirectory()
+  if (added === null) {
     message.warning('未能获得目录读取权限，无法重扫')
     return
   }
-  if (parsing.value) message.success(`正在重新扫描「${store.rescanName}」…`)
+  // 大目录遍历期间解析可能已全部完成，此时 parsing 为 false 但确有新增，以新增计数为准
+  if (added > 0 || parsing.value) message.success(`正在重新扫描「${store.rescanName}」…`)
   else message.info(`「${store.rescanName}」没有新增图片，列表保持不变`)
 }
 
