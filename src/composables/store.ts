@@ -1,5 +1,5 @@
 import { computed, reactive, watch } from 'vue'
-import type { ImageItem, ImageSource, IncomingFile } from '../types'
+import type { ImageItem, ImageSource, IncomingFile, ParsedParams, RawMetadata } from '../types'
 import { clearInternPool, hasSupportedSignature, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
@@ -65,6 +65,55 @@ const queue: ImageItem[] = []
 const PARSE_LIMIT = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) * 2))
 // 清空列表时递增：旧批次的在途解析完成时不再计数，避免污染新批次进度
 let batchEpoch = 0
+// 在途任务（从开始解析到结果应用）：与响应式 status 解耦——批量扫描期间 status 保持
+// 'pending' 直到结果应用，removeItem 据此集合区分「排队 / 在途 / 已出结果」做计数对账
+const inflight = new Set<string>()
+
+/* ---------- 解析结果节拍应用（P1：聚合计算去抖） ---------- */
+// 每张图完成时直接写响应式字段会触发 stats / filteredItems / usageStats / modelOptions
+// 等全量重算，万级扫描是 O(n²) 总量。结果先进暂存区，按节拍批量应用——每批只引发一轮
+// 重算；扫描全部结束（active 归零且队列空）时立即收尾应用，单张 / 小批量场景零延迟。
+interface PendingResult {
+  item: ImageItem
+  raw: RawMetadata
+  params?: ParsedParams
+  /** 成功时预构建的小写搜索串；失败项不构建（沿用 name 兜底匹配） */
+  searchText?: string
+  error?: string
+}
+const APPLY_INTERVAL_MS = 200
+let pendingResults: PendingResult[] = []
+let applyTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleApply() {
+  if (applyTimer !== null) return
+  applyTimer = setTimeout(() => {
+    applyTimer = null
+    applyPending()
+  }, APPLY_INTERVAL_MS)
+}
+
+function applyPending() {
+  if (applyTimer !== null) {
+    clearTimeout(applyTimer)
+    applyTimer = null
+  }
+  if (!pendingResults.length) return
+  const batch = pendingResults
+  pendingResults = []
+  for (const r of batch) {
+    inflight.delete(r.item.id)
+    // 已移除 / 已清空的项：丢弃孤儿结果（与 markDirty 的存活校验同源，B1）
+    if (!liveIds.has(r.item.id)) continue
+    r.item.raw = r.raw
+    r.item.source = r.raw.source
+    r.item.params = r.params
+    r.item.searchText = r.searchText
+    r.item.error = r.error
+    r.item.status = r.error ? 'error' : 'done'
+    markDirty(r.item)
+  }
+}
 
 function pump() {
   while (active < PARSE_LIMIT && queue.length > 0) {
@@ -76,23 +125,23 @@ function pump() {
 }
 
 async function parseItem(item: ImageItem, epoch: number) {
-  item.status = 'parsing'
+  inflight.add(item.id)
   try {
     // 入队的都是实文件项（存档项不解析）
     const { raw, params } = await parseImage(item.file!)
-    item.raw = raw
-    item.source = raw.source
-    item.params = params
-    // 搜索串在解析结果落定后构建一次：筛选热路径只做 includes，不再每键重建
-    item.searchText = buildSearchText(item)
-    item.status = 'done'
+    // 搜索串在结果落定时构建一次（应用时直接挂上）：筛选热路径只做 includes，不再每键重建
+    pendingResults.push({ item, raw, params, searchText: buildSearchText(item, params) })
   } catch (e) {
-    item.status = 'error'
-    item.error = e instanceof Error ? e.message : String(e)
+    pendingResults.push({
+      item,
+      raw: { source: 'none' },
+      error: e instanceof Error ? e.message : String(e),
+    })
   } finally {
-    markDirty(item)
     active--
     if (epoch === batchEpoch) state.batchDone++
+    if (active === 0 && queue.length === 0) applyPending()
+    else scheduleApply()
     pump()
   }
 }
@@ -193,18 +242,19 @@ export function removeItem(item: ImageItem) {
   deletedKeys.add(key)
   schedulePersist()
   URL.revokeObjectURL(item.url)
-  if (item.status === 'pending') {
+  if (inflight.has(item.id)) {
+    // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
+    // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
+  } else if (item.status === 'pending') {
     // 未开始的直接出队
     const qi = queue.indexOf(item)
     if (qi >= 0) queue.splice(qi, 1)
     state.batchTotal--
-  } else if (item.status !== 'parsing') {
+  } else {
     // done / error：两本账一起减
     state.batchTotal--
     state.batchDone--
   }
-  // 在途（parsing）无法中断也不动计数：其完成时的 batchDone++ 会与保留的 batchTotal 对齐，
-  // 不会出现永久“扫描中”或进度超过 100%
 }
 
 export function clearAll() {
@@ -214,6 +264,13 @@ export function clearAll() {
   liveIds.clear()
   detachedByKey.clear()
   queue.length = 0
+  inflight.clear()
+  // 丢弃未应用的解析结果并取消节拍定时器：孤儿结果在应用时也会被 liveIds 拦截，这里直接清干净
+  if (applyTimer !== null) {
+    clearTimeout(applyTimer)
+    applyTimer = null
+  }
+  pendingResults = []
   state.batchTotal = 0
   state.batchDone = 0
   batchEpoch++ // 在途解析完成后不再计入新批次
@@ -276,7 +333,7 @@ export function restoreArchived(records: PersistRecord[]) {
   for (const rec of records) {
     if (seenKeys.has(rec.key)) continue
     const item = reactive<ImageItem>(fromRecord(rec))
-    item.searchText = buildSearchText(item)
+    item.searchText = buildSearchText(item, item.params)
     detachedByKey.set(rec.key, item)
     liveIds.add(item.id)
     state.items.push(item)
@@ -416,10 +473,9 @@ export const usageStats = computed(() => {
 
 /**
  * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数，按任意生成要素定位图片。
- * 在解析完成时（parseItem）构建一次并小写化，筛选热路径不再重复拼接。
+ * 在解析结果落定时（parseItem）构建一次并小写化，应用时挂上，筛选热路径不再重复拼接。
  */
-function buildSearchText(it: ImageItem): string {
-  const p = it.params
+function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
   const parts = [it.path ?? it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
   for (const l of p?.loras ?? []) {
     parts.push(l.name)

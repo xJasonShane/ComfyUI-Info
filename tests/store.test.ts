@@ -184,8 +184,9 @@ it('移除排队中的条目：出队且总数递减', async () => {
   )
   api.addFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.png`)))
 
-  const queued = api.store.items.find((i) => i.status === 'pending')!
-  expect(queued).toBeDefined() // 并发上限 8，必有排队项
+  // 并发上限 8，末尾的仍在排队（P1 后在途项 status 也保持 pending，只能按入队顺序区分）
+  const queued = api.store.items[api.store.items.length - 1]!
+  expect(queued).toBeDefined()
   api.removeItem(queued)
   expect(api.store.items.length).toBe(9)
   expect(api.store.batchTotal).toBe(9)
@@ -205,7 +206,8 @@ it('移除在途条目：计数保留，解析完成后自动对账', async () =
   )
   api.addFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.png`)))
 
-  const inflight = api.store.items.find((i) => i.status === 'parsing')!
+  // 并发上限 8，先入队的必在途；P1 后 status 在结果应用前保持 pending，用入队顺序定位
+  const inflight = api.store.items[0]
   expect(inflight).toBeDefined()
   api.removeItem(inflight)
   expect(api.store.items.length).toBe(9)
@@ -282,6 +284,41 @@ it('解析中的项不计入来源统计，也不冒充「无元数据」', asyn
   expect(api.filteredItems.value).toHaveLength(0)
   api.store.sourceFilter = 'comfyui'
   expect(api.filteredItems.value).toHaveLength(2)
+})
+
+it('扫描进行中解析结果按节拍批量应用，全部完成后立即应用（P1 聚合去抖）', async () => {
+  vi.useFakeTimers()
+  try {
+    const gates = [0, 1, 2].map(() => {
+      let r!: () => void
+      return { gate: new Promise<void>((res) => (r = res)), release: r }
+    })
+    vi.mocked(parser.parseImage).mockImplementation((f: File) =>
+      gates[Number(f.name[1])].gate.then(() => ({ raw: { source: 'comfyui' } })),
+    )
+    api.addFiles([file('a0.png'), file('a1.png'), file('a2.png')])
+    await vi.advanceTimersByTimeAsync(0) // 三个任务全部启动
+    expect(api.store.items.every((i) => i.status === 'pending')).toBe(true)
+
+    gates[0].release() // 仅 a0 完成，其余仍在途
+    await vi.advanceTimersByTimeAsync(0)
+    // 扫描进行中：结果挂起不写响应式字段，不触发 stats / filteredItems 全量重算
+    expect(api.store.items[0].status).toBe('pending')
+    expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, none: 0, error: 0 })
+
+    await vi.advanceTimersByTimeAsync(250) // 节拍（200ms）到点批量应用
+    expect(api.store.items[0].status).toBe('done')
+    expect(api.stats.value.comfyui).toBe(1)
+
+    gates[1].release()
+    gates[2].release()
+    await vi.advanceTimersByTimeAsync(0) // 全部完成 → 立即收尾应用，不等下一拍
+    expect(api.store.items.map((i) => i.status)).toEqual(['done', 'done', 'done'])
+    expect(api.stats.value.comfyui).toBe(3)
+    expect(api.parsing.value).toBe(false)
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('modelOptions 从解析结果聚合去重并排序', async () => {
