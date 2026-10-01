@@ -4,12 +4,19 @@
  */
 import type { ImageItem, LoraInfo, SamplerInfo } from '../types'
 
-function csvCell(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+/**
+ * CSV 公式注入防护：以 = + - @ Tab 开头的文本单元格会被 Excel / WPS 当公式执行
+ * （提示词等用户可控内容可借此构造恶意公式，而导出文件常被二次分享），
+ * 按 OWASP 建议统一前置单引号使其按文本处理；数字列（含负数）不受影响。
+ */
+function csvCell(value: string | number): string {
+  let v = String(value)
+  if (typeof value !== 'number' && /^[=+\-@\t]/.test(v)) v = `'${v}`
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
 }
 
 function csvRow(cells: (string | number | undefined)[]): string {
-  return cells.map((c) => (c === undefined || c === null ? '' : csvCell(String(c)))).join(',')
+  return cells.map((c) => (c === undefined || c === null ? '' : csvCell(c))).join(',')
 }
 
 function formatLora(l: LoraInfo): string {

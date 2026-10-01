@@ -376,6 +376,18 @@ describe('readImageMetadata 端到端', () => {
     expect(extractParams(meta)).toBeUndefined()
   })
 
+  it('PNG 仅含 workflow（无 prompt）：来源为 ComfyUI 且无结构化参数（UI 据此提示「仅 UI 工作流」而非无元数据）', async () => {
+    const wf = JSON.stringify({
+      '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20, cfg: 7 } },
+    })
+    const png = buildPng([textChunkAscii('workflow', wf)])
+    const meta = await readImageMetadata(new File([png], 'wfonly.png'))
+    expect(meta.source).toBe('comfyui')
+    expect(meta.prompt).toBeUndefined()
+    expect(meta.workflow).toBe(wf)
+    expect(extractParams(meta)).toBeUndefined()
+  })
+
   it('A1111 文本含模板花括号与 Hashes JSON 时仍能升级为 ComfyUI', async () => {
     const wf = JSON.stringify({
       '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20, cfg: 7 } },

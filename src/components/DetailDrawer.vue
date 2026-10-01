@@ -58,13 +58,30 @@ watch(
 /** 是否渲染 JSON 页签区：有任一原始文本就展示（含「元数据存在但解析失败」的场景） */
 const showJsonTabs = computed(() => {
   const it = props.item
-  return !!it && !!(it.raw.parameters || it.raw.prompt)
+  return !!it && !!(it.raw.parameters || it.raw.prompt || it.raw.workflow)
 })
 
-/** 元数据文本存在但结构化参数缺失：JSON 损坏 / 无法解析，与「无元数据」区分开 */
+/** 元数据文本存在但结构化参数缺失：JSON 损坏 / 无法解析，或仅有 UI 工作流（无 API prompt），与「无元数据」区分开 */
 const corruptRawText = computed(() => {
   const it = props.item
-  return !!it && it.status === 'done' && !it.params && !!(it.raw.prompt || it.raw.parameters)
+  return (
+    !!it &&
+    it.status === 'done' &&
+    !it.params &&
+    !!(it.raw.prompt || it.raw.parameters || it.raw.workflow)
+  )
+})
+
+/** 元数据存在但无结构化参数时的解释文案：区分「仅有 UI 工作流」与「JSON / 参数文本损坏」 */
+const corruptHint = computed(() => {
+  const it = props.item
+  if (!it) return ''
+  if (!it.raw.prompt && !it.raw.parameters && it.raw.workflow) {
+    return '检测到 UI 工作流，但未内嵌 API 格式的 prompt，无法提取结构化参数；可在下方「UI 工作流」页签查看或下载'
+  }
+  return it.raw.source === 'comfyui'
+    ? '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查'
+    : '参数文本无法解析为结构化参数，可在下方查看原文'
 })
 
 const generalRows = computed<[string, string][]>(() => {
@@ -231,14 +248,8 @@ function downloadJson(text: string | undefined, suffix: string) {
           <span style="font-size: 12px; color: var(--text-faint)">稍等片刻，参数马上出来</span>
         </div>
         <div v-else-if="corruptRawText" class="notice">
-          <span class="notice-title">检测到生成元数据，但解析失败</span>
-          <p class="err-message">
-            {{
-              item.raw.source === 'comfyui'
-                ? '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查'
-                : '参数文本无法解析为结构化参数，可在下方查看原文'
-            }}
-          </p>
+          <span class="notice-title">检测到生成元数据，但无法提取结构化参数</span>
+          <p class="err-message">{{ corruptHint }}</p>
         </div>
         <div v-else class="notice">
           未检测到 ComfyUI / A1111 生成元数据

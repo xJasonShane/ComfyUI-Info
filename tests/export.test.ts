@@ -94,6 +94,19 @@ describe('buildExportCsv', () => {
     ])
   })
 
+  it('公式注入防护：= - 开头的文本列前置单引号，数字列不受影响', () => {
+    const csv = buildExportCsv([
+      makeItem({
+        name: '-canvas.png',
+        params: { ...params, positive: ['=1+1 CMD|"calc"'], samplers: [] },
+      }),
+    ])
+    const line = csv.slice(1).split('\r\n')[1]!
+    expect(line.startsWith("'-canvas.png,")) // 文件名列同样防护
+    expect(line).toContain("'=1+1 CMD|\"\"calc\"\"\"") // 提示词列：先加 ' 防公式，再按含引号规则转义
+    expect(line).toContain(',1234,') // 大小为数字：不加前缀
+  })
+
   it('无参数项参数列留空，错误项带错误列', () => {
     const csv = buildExportCsv([
       makeItem({ source: 'none', raw: { source: 'none' } }),
