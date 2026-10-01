@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
+import { deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
 import type { ImageItem } from '../src/types'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
@@ -12,6 +13,21 @@ vi.mock('../src/lib/metadata', () => ({
 vi.mock('../src/lib/parser', () => ({
   parseImage: vi.fn(),
 }))
+// 持久化 mock 为「探测可用」：让 markDirty → flush → 写库链路真实运转，以便断言写库行为
+vi.mock('../src/lib/persist', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/persist')>()
+  return {
+    ...actual,
+    probePersistence: vi.fn(async () => true),
+    loadPersisted: vi.fn(async () => []),
+    loadHandle: vi.fn(async () => null),
+    putPersisted: vi.fn(async () => {}),
+    deletePersisted: vi.fn(async () => {}),
+    clearPersisted: vi.fn(async () => {}),
+    saveHandle: vi.fn(async () => {}),
+    clearHandle: vi.fn(async () => {}),
+  }
+})
 
 let api: typeof import('../src/composables/store')
 let parser: typeof import('../src/lib/parser')
@@ -201,6 +217,71 @@ it('移除在途条目：计数保留，解析完成后自动对账', async () =
   expect(api.store.batchDone).toBe(10)
   expect(api.store.batchTotal).toBe(10)
   expect(api.parsing.value).toBe(false)
+})
+
+it('移除 / 清空的在途项解析完成后不写库存档（不「复活」到存档）', async () => {
+  // 先真实等待前序用例遗留的 500ms 写库防抖定时器清空：flushTimer 是模块级单例，
+  // 未清空会阻断本用例在假时钟上调度新写入；随后清掉遗留 flush 产生的调用记录
+  await new Promise((r) => setTimeout(r, 510))
+  vi.mocked(putPersisted).mockClear()
+  vi.mocked(deletePersisted).mockClear()
+  vi.useFakeTimers()
+  try {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    vi.mocked(parser.parseImage).mockImplementation(() =>
+      gate.then(() => ({ raw: { source: 'none' } })),
+    )
+
+    // 场景一：解析在途时单张移除 → 删除事务照常执行，孤儿结果不得写库
+    api.addFiles([file('a.png')])
+    const item = api.store.items[0]
+    api.removeItem(item)
+    release()
+    await vi.advanceTimersByTimeAsync(600) // 解析完成 + 500ms 写库防抖
+    expect(putPersisted).not.toHaveBeenCalled()
+    expect(deletePersisted).toHaveBeenCalledWith([recordKey(item)])
+
+    // 场景二：清空列表时仍有在途解析 → 完成后不得把孤儿记录写回已清空的存档
+    vi.mocked(putPersisted).mockClear()
+    vi.mocked(deletePersisted).mockClear()
+    let release2!: () => void
+    const gate2 = new Promise<void>((r) => (release2 = r))
+    vi.mocked(parser.parseImage).mockImplementation(() =>
+      gate2.then(() => ({ raw: { source: 'comfyui' } })),
+    )
+    api.addFiles([file('b.png')])
+    api.clearAll()
+    release2()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(putPersisted).not.toHaveBeenCalled()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('解析中的项不计入来源统计，也不冒充「无元数据」', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'comfyui' } })),
+  )
+  api.addFiles([file('a.png'), file('b.png')])
+
+  // 解析中：占位 source:'none' 不参与计数，也不出现在「无元数据」筛选下
+  expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, none: 0, error: 0 })
+  api.store.sourceFilter = 'none'
+  expect(api.filteredItems.value).toHaveLength(0)
+  api.store.sourceFilter = 'all'
+  expect(api.filteredItems.value).toHaveLength(2)
+
+  release()
+  await flush()
+  expect(api.stats.value.comfyui).toBe(2)
+  api.store.sourceFilter = 'none'
+  expect(api.filteredItems.value).toHaveLength(0)
+  api.store.sourceFilter = 'comfyui'
+  expect(api.filteredItems.value).toHaveLength(2)
 })
 
 it('modelOptions 从解析结果聚合去重并排序', async () => {

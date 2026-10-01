@@ -101,6 +101,9 @@ async function parseItem(item: ImageItem, epoch: number) {
 let seq = 0
 // 已加载文件的指纹（recordKey：路径或文件名|大小|修改时间），O(1) 查重；增删 items 时必须同步维护
 const seenKeys = new Set<string>()
+// 存活项 id 集合（与 seenKeys 同步增删）：markDirty 写库前校验，
+// 防止已移除 / 已清空的项在解析完成时把孤儿记录重新写回存档（「复活」竞态）
+const liveIds = new Set<string>()
 // 待回挂的存档项索引（recordKey → item），addFiles 时按指纹自动回挂
 const detachedByKey = new Map<string, ImageItem>()
 
@@ -160,6 +163,7 @@ function enqueueFile(file: File, path?: string): number {
     raw: { source: 'none' },
   })
   state.items.push(item)
+  liveIds.add(item.id)
   state.batchTotal++
   queue.push(item)
   return 1
@@ -181,6 +185,7 @@ export function removeItem(item: ImageItem) {
   const idx = state.items.indexOf(item)
   if (idx < 0) return
   state.items.splice(idx, 1)
+  liveIds.delete(item.id)
   const key = recordKey(item)
   seenKeys.delete(key)
   if (item.detached) detachedByKey.delete(key)
@@ -206,6 +211,7 @@ export function clearAll() {
   for (const i of state.items) URL.revokeObjectURL(i.url)
   state.items = []
   seenKeys.clear()
+  liveIds.clear()
   detachedByKey.clear()
   queue.length = 0
   state.batchTotal = 0
@@ -272,12 +278,15 @@ export function restoreArchived(records: PersistRecord[]) {
     const item = reactive<ImageItem>(fromRecord(rec))
     item.searchText = buildSearchText(item)
     detachedByKey.set(rec.key, item)
+    liveIds.add(item.id)
     state.items.push(item)
   }
 }
 
 function markDirty(item: ImageItem) {
   if (!persistAvailable) return
+  // 已移除 / 已清空的项不再写库：removeItem / clearAll 后完成的在途解析不得“复活”到存档
+  if (!liveIds.has(item.id)) return
   const key = recordKey(item)
   deletedKeys.delete(key)
   dirtyItems.set(key, item)
@@ -357,9 +366,10 @@ const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
 export const stats = computed(() => {
   const c: Record<ImageSource | 'error', number> = { comfyui: 0, a1111: 0, none: 0, error: 0 }
   for (const i of state.items) {
-    // 解析失败的项没有来源，单独计数，不冒充“无元数据”
+    // 解析失败的项没有来源，单独计数，不冒充“无元数据”；
+    // 解析中的项来源未定，同样不计数（初始 source:'none' 只是占位）
     if (i.status === 'error') c.error++
-    else c[i.source]++
+    else if (i.status === 'done') c[i.source]++
   }
   return c
 })
@@ -462,6 +472,11 @@ export const filteredItems = computed(() => {
         return state.sourceFilter === 'error' || state.sourceFilter === 'all'
       }
       if (state.sourceFilter === 'error') return false
+      // 解析中的项来源未定，只在「全部图片」下展示——
+      // 避免以占位 source:'none' 冒充「无元数据」、解析完成后又突然消失
+      if (it.status === 'pending' || it.status === 'parsing') {
+        return state.sourceFilter === 'all'
+      }
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (query && !matchQuery(it, query)) return false
