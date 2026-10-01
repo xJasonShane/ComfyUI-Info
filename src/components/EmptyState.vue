@@ -27,8 +27,9 @@ defineEmits<{ showAll: [] }>()
       </p>
       <div class="chips">
         <span>100% 本地解析</span>
-        <span>PNG / JPEG / WebP</span>
+        <span>PNG · JPEG · WebP</span>
         <span>ComfyUI · A1111</span>
+        <span>工作流 JSON / TXT</span>
         <span>一键复制提示词</span>
       </div>
     </template>

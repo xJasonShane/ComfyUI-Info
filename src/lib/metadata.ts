@@ -5,7 +5,7 @@
  */
 import type { ParseResult, ParsedParams, RawMetadata } from '../types'
 import { readPngTexts, parsePngChunks, isPng } from './png'
-import { extractComfyParams } from './comfyExtract'
+import { extractComfyParams, extractUiWorkflowParams } from './comfyExtract'
 import { parseA1111Parameters } from './a1111'
 import {
   extractTiffAsciiTag,
@@ -50,6 +50,37 @@ function extOf(name: string): string {
 
 export function isSupportedImage(file: File): boolean {
   return ['png', 'jpg', 'jpeg', 'webp'].includes(extOf(file.name))
+}
+
+/** F1：工作流 JSON / 参数文本文件——拖入即解析参数，无需配图 */
+export function isMetaTextFile(file: File): boolean {
+  return ['json', 'txt'].includes(extOf(file.name))
+}
+
+/**
+ * 文本类元数据解析（.json / .txt）：API / UI 工作流 JSON，或 A1111 parameters 文本。
+ * JSON 须含工作流节点结构才判为 ComfyUI；文本须有参数行特征才判为 A1111，
+ * 其余按无元数据处理并给出线索，避免普通文本文件被冒充成参数。
+ */
+export async function readTextMetadata(file: File): Promise<RawMetadata> {
+  const text = await file.text()
+  const trimmed = text.trim()
+  if (!trimmed) return { source: 'none', hints: ['文件为空'] }
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    if (/"class_type"\s*:/.test(trimmed)) return { source: 'comfyui', prompt: trimmed }
+    // UI 格式：nodes 数组 + 节点 type 字段（links 可缺省，如手工精简的导出）
+    if (/"nodes"\s*:\s*\[/.test(trimmed) && /"type"\s*:/.test(trimmed)) {
+      return { source: 'comfyui', workflow: trimmed }
+    }
+    return { source: 'none', hints: ['JSON 内容不是 ComfyUI 工作流（未找到节点结构）'] }
+  }
+  if (/^Steps:\s*\d/m.test(trimmed) || /^Negative prompt:/im.test(trimmed)) {
+    return judgeParametersText(trimmed)
+  }
+  return {
+    source: 'none',
+    hints: ['未识别出 ComfyUI 工作流或 A1111 参数文本（缺少 Steps / Negative prompt 行）'],
+  }
 }
 
 /** UserComment 文本 → 来源判定：内嵌 ComfyUI 工作流 JSON 则升级，否则按 A1111 参数文本处理 */
@@ -108,7 +139,15 @@ function diagnoseNone(scan: {
 
 /** 按来源把原始元数据提取为结构化参数（Worker 与主线程兜底共用的入口） */
 export function extractParams(raw: RawMetadata): ParsedParams | undefined {
-  if (raw.source === 'comfyui' && raw.prompt) return extractComfyParams(raw.prompt) ?? undefined
+  if (raw.source === 'comfyui') {
+    if (raw.prompt) {
+      const p = extractComfyParams(raw.prompt)
+      if (p) return p
+    }
+    // API prompt 缺失或损坏时回退 UI 工作流（O2）：仅保存 workflow 的图也能出参数
+    if (raw.workflow) return extractUiWorkflowParams(raw.workflow) ?? undefined
+    return undefined
+  }
   if (raw.source === 'a1111' && raw.parameters) return parseA1111Parameters(raw.parameters)
   return undefined
 }
@@ -182,6 +221,8 @@ async function detectKind(file: File): Promise<ImageKind | null> {
 }
 
 export async function readImageMetadata(file: File): Promise<RawMetadata> {
+  // 文本类元数据文件（工作流 JSON / 参数文本）走独立解析路径
+  if (isMetaTextFile(file)) return readTextMetadata(file)
   const kind = await detectKind(file)
 
   if (kind === 'png') {

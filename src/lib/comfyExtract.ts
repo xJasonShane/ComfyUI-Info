@@ -212,3 +212,159 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
   }
   return out
 }
+
+/* ---------- UI 格式工作流兜底提取（O2：仅有 workflow、未内嵌 API prompt 的场景） ---------- */
+
+interface UiNode {
+  id: number
+  type: string
+  /** 4 = bypass（旁路），不参与参数提取 */
+  mode?: number
+  inputs?: { name?: string; link?: number | null }[]
+  widgets_values?: unknown[]
+}
+
+interface UiWorkflow {
+  nodes?: UiNode[]
+  /** [linkId, 源节点 id, 源槽位, 目标节点 id, 目标槽位, 类型] */
+  links?: number[][]
+}
+
+const CONTROL_WORDS = new Set(['fixed', 'randomize', 'increment', 'decrement'])
+
+/**
+ * widgets_values → 采样参数。UI 格式里部件值按控件顺序排列，无字段名可依，
+ * 按 KSampler / KSamplerAdvanced 的已知布局 + 逐项校验解析：
+ * [seed, control_after_generate, steps, cfg, sampler, scheduler, denoise]
+ * （KSamplerAdvanced 以 add_noise 的 enable/disable 开头，seed 实为 noise_seed）。
+ */
+function samplerFromWidgets(wv: unknown[]): Omit<SamplerInfo, 'nodeId' | 'classType'> | null {
+  let i = 0
+  if (wv[0] === 'enable' || wv[0] === 'disable') i = 1
+  let seed: string | undefined
+  const rawSeed = wv[i]
+  if (typeof rawSeed === 'number' && Number.isFinite(rawSeed)) {
+    seed = String(rawSeed)
+    i++
+  } else if (typeof rawSeed === 'string' && /^\d+$/.test(rawSeed)) {
+    seed = rawSeed // 大整数 seed 已在解析前转为字符串保精度
+    i++
+  }
+  if (typeof wv[i] === 'string' && CONTROL_WORDS.has(wv[i] as string)) i++
+  const steps = asNum(wv[i])
+  if (steps !== undefined) i++
+  const cfg = asNum(wv[i])
+  if (cfg !== undefined) i++
+  const sampler = asText(wv[i]) ?? undefined
+  if (sampler !== undefined) i++
+  const scheduler = asText(wv[i]) ?? undefined
+  if (scheduler !== undefined) i++
+  const denoise = asNum(wv[i])
+  if (steps === undefined && cfg === undefined && !sampler) return null
+  return { steps, cfg, sampler, scheduler, seed, denoise }
+}
+
+/**
+ * 从 UI 格式工作流（nodes + links + widgets_values）提取结构化参数。
+ * 不依赖固定节点名：class_type 正则匹配 + widgets_values 位置校验，覆盖常见
+ * 官方节点（Checkpoint / KSampler 族 / LoraLoader / EmptyLatent / CLIPTextEncode）；
+ * 正负向提示词沿 links 回溯到文本节点。提取不到任何参数时返回 null。
+ */
+export function extractUiWorkflowParams(text: string): ParsedParams | null {
+  // widgets_values 里的 64 位大整数 seed 先转字符串，避免 JSON.parse 丢精度（与 parseWorkflow 同理）
+  const safe = text.replace(/("(?:widgets_values)"\s*:\s*\[\s*)(\d{16,})/g, '$1"$2"')
+  let data: UiWorkflow
+  try {
+    const obj: unknown = JSON.parse(safe)
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+    data = obj as UiWorkflow
+  } catch {
+    return null
+  }
+  const nodes = Array.isArray(data.nodes) ? data.nodes : null
+  if (!nodes?.length) return null
+
+  const out: ParsedParams = {
+    positive: [],
+    negative: [],
+    models: [],
+    loras: [],
+    samplers: [],
+    nodeCount: nodes.length,
+  }
+
+  const linkSource = new Map<number, number>()
+  for (const l of data.links ?? []) {
+    if (Array.isArray(l) && l.length >= 3 && typeof l[0] === 'number') {
+      linkSource.set(l[0], l[1] as number)
+    }
+  }
+  // 文本节点（widgets_values[0] 为字符串）登记，供采样器经连线回溯正 / 负向提示词
+  const textByNode = new Map<number, string>()
+  const drafts: { node: UiNode; info: SamplerInfo }[] = []
+
+  for (const node of nodes) {
+    const cls = String(node.type ?? '')
+    const wv = Array.isArray(node.widgets_values) ? node.widgets_values : []
+    const bypassed = node.mode === 4
+
+    if (typeof wv[0] === 'string' && wv[0].trim() !== '' && !CONTROL_WORDS.has(wv[0])) {
+      textByNode.set(node.id, wv[0])
+    }
+
+    if (!bypassed && /KSampler|Sampler/i.test(cls)) {
+      const fields = samplerFromWidgets(wv)
+      if (fields) drafts.push({ node, info: { nodeId: String(node.id), classType: cls, ...fields } })
+    }
+
+    if (bypassed) continue
+    const firstText = asText(wv[0])
+    if (/CheckpointLoader|UNETLoader/i.test(cls) && firstText && !out.models.includes(firstText)) {
+      out.models.push(firstText)
+    }
+    if (/LoraLoader/i.test(cls) && firstText) {
+      const lora: LoraInfo = {
+        name: firstText,
+        strengthModel: asNum(wv[1]),
+        // ModelOnly 变体没有文本强度
+        strengthClip: /ModelOnly/i.test(cls) ? undefined : asNum(wv[2]),
+      }
+      if (!out.loras.some((l) => l.name === lora.name)) out.loras.push(lora)
+    }
+    if (/EmptyLatentImage|EmptySD3LatentImage|EmptyHunyuanLatentVideo/i.test(cls)) {
+      const w = asNum(wv[0])
+      const h = asNum(wv[1])
+      if (w !== undefined && h !== undefined) {
+        out.width = w
+        out.height = h
+      }
+      const b = asNum(wv[2])
+      if (b !== undefined) out.batch = b
+    }
+  }
+
+  const resolveText = (linkId: unknown): string | null => {
+    if (typeof linkId !== 'number') return null
+    const src = linkSource.get(linkId)
+    return (src !== undefined ? textByNode.get(src) : undefined) ?? null
+  }
+  for (const { node, info } of drafts) {
+    for (const inp of node.inputs ?? []) {
+      if (inp.name !== 'positive' && inp.name !== 'negative') continue
+      const t = resolveText(inp.link)
+      if (!t) continue
+      const slot = inp.name === 'positive' ? out.positive : out.negative
+      if (!slot.includes(t)) slot.push(t)
+    }
+    out.samplers.push(info)
+  }
+  out.samplers.sort((a, b) => (Number(a.nodeId) || 0) - (Number(b.nodeId) || 0))
+
+  const hasAny =
+    out.positive.length > 0 ||
+    out.negative.length > 0 ||
+    out.samplers.length > 0 ||
+    out.models.length > 0 ||
+    out.loras.length > 0
+  return hasAny ? out : null
+}

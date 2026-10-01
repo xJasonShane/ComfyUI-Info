@@ -42,7 +42,7 @@ import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
-import { addFiles, filteredItems, parsing, rangeIds, removeItem, stats, store } from './composables/store'
+import { addFiles, filteredItems, parsing, rangeIds, removeItem, retryAllFailed, stats, store } from './composables/store'
 import { buildExportCsv, buildExportJson, buildWorkflowZip } from './lib/export'
 import { copyText, downloadBinary, downloadText } from './lib/utils'
 import type { ImageItem, IncomingFile } from './types'
@@ -110,6 +110,13 @@ function onRemove(item: ImageItem) {
   }
 }
 
+// 批量重试全部解析失败的图片（O4）
+function onRetryAll() {
+  const n = retryAllFailed()
+  if (n) appMessage().success(`已重新排队 ${n} 张失败图片`)
+  else appMessage().info('没有可重试的失败项（存档失败项需重新拖入原文件）')
+}
+
 /* ---------- 多选与批量操作 ---------- */
 // 选择独立于筛选：切换筛选后已选条目保持（含当前筛选下不可见的），批量动作按 id 生效
 const selectedIds = ref(new Set<string>())
@@ -163,7 +170,9 @@ const exportOptions = [
   { label: '导出工作流 (ZIP)', key: 'zip' },
 ]
 
-function batchExport(key: string | number) {
+const exporting = ref(false)
+
+async function batchExport(key: string | number) {
   if (parsing.value) {
     appMessage().warning('扫描仍在进行，请等扫描完成后再导出')
     return
@@ -173,12 +182,20 @@ function batchExport(key: string | number) {
     appMessage().warning('所选图片中还没有可导出的结果')
     return
   }
-  const stamp = new Date().toISOString().slice(0, 10)
-  if (key === 'csv') downloadText(`comfyui-info-selected-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-  else if (key === 'zip') {
-    const zip = buildWorkflowZip(items)
-    if (zip) downloadBinary(`comfyui-info-selected-${stamp}.zip`, zip)
-  } else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
+  exporting.value = true
+  try {
+    // 先让按钮 loading 渲染出来，再执行同步的打包计算
+    await new Promise((r) => setTimeout(r, 30))
+    const stamp = new Date().toISOString().slice(0, 10)
+    if (key === 'csv') downloadText(`comfyui-info-selected-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+    else if (key === 'zip') {
+      const zip = buildWorkflowZip(items)
+      if (zip) downloadBinary(`comfyui-info-selected-${stamp}.zip`, zip)
+    } else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
+    appMessage().success(`已导出 ${items.length} 项`)
+  } finally {
+    exporting.value = false
+  }
 }
 
 /* ---------- 参数对比（选中恰好 2 张已解析图片） ---------- */
@@ -344,6 +361,16 @@ async function onDrop(e: DragEvent) {
           >
             <i class="dot" style="background: var(--danger)" /><b>{{ stats.error }}</b> 解析失败
           </span>
+          <NButton
+            v-if="stats.error"
+            size="tiny"
+            quaternary
+            type="error"
+            title="重试全部解析失败的图片"
+            @click="onRetryAll"
+          >
+            重试
+          </NButton>
           <span v-if="parsing" style="color: var(--accent)">扫描中…</span>
         </div>
 
@@ -389,7 +416,7 @@ async function onDrop(e: DragEvent) {
           </NButton>
           <NButton size="tiny" secondary @click="batchCopyPrompts">复制提示词</NButton>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
-            <NButton size="tiny" secondary>导出选中</NButton>
+            <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">导出选中</NButton>
           </NDropdown>
           <NPopconfirm @positive-click="batchRemove">
             <template #trigger>
@@ -405,7 +432,7 @@ async function onDrop(e: DragEvent) {
         <CompareDrawer v-model:show="showCompare" :a="comparePair?.[0] ?? null" :b="comparePair?.[1] ?? null" />
 
         <div v-if="dragging" class="drop-overlay">
-          <div class="inner">松开以添加图片 / 文件夹</div>
+          <div class="inner">松开以添加图片 / 文件夹 / 工作流文件</div>
         </div>
       </div>
     </NMessageProvider>

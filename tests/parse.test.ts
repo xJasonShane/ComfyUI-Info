@@ -15,9 +15,10 @@ import {
   hasSupportedSignature,
   internParseResult,
   readImageMetadata,
+  readTextMetadata,
   extractParams,
 } from '../src/lib/metadata'
-import { extractComfyParams } from '../src/lib/comfyExtract'
+import { extractComfyParams, extractUiWorkflowParams } from '../src/lib/comfyExtract'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { BROKEN, JOB_TIMEOUT_MS, ParsePool, ParseScheduler, WorkerEntry } from '../src/lib/parser'
 import type { ParseTransport } from '../src/lib/parser'
@@ -328,6 +329,139 @@ describe('EXIF UserComment', () => {
     })
     expect(extractJsonSubstring(`prefix ${workflow} 模板 {a|b}`)).toBe(workflow)
     expect(extractJsonSubstring('只有 { 未配平的花括号')).toBeNull()
+  })
+})
+
+describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
+  const uiWorkflow = {
+    last_node_id: 6,
+    last_link_id: 6,
+    nodes: [
+      { id: 1, type: 'CheckpointLoaderSimple', mode: 0, inputs: [], widgets_values: ['v1-5-pruned-emaonly.safetensors'] },
+      { id: 2, type: 'CLIPTextEncode', mode: 0, inputs: [], widgets_values: ['a cozy cabin, warm light'] },
+      { id: 3, type: 'CLIPTextEncode', mode: 0, inputs: [], widgets_values: ['blurry'] },
+      { id: 4, type: 'EmptyLatentImage', mode: 0, inputs: [], widgets_values: [768, 512, 2] },
+      { id: 5, type: 'LoraLoader', mode: 0, inputs: [], widgets_values: ['add_detail.safetensors', 0.8, 0.9] },
+      {
+        id: 6,
+        type: 'KSampler',
+        mode: 0,
+        inputs: [
+          { name: 'model', link: 1 },
+          { name: 'positive', link: 4 },
+          { name: 'negative', link: 5 },
+          { name: 'latent_image', link: 6 },
+        ],
+        widgets_values: [156680208662693, 'randomize', 20, 8, 'euler', 'normal', 1],
+      },
+    ],
+    links: [
+      [1, 1, 0, 6, 0, 'MODEL'],
+      [4, 2, 0, 6, 1, 'CONDITIONING'],
+      [5, 3, 0, 6, 2, 'CONDITIONING'],
+      [6, 4, 0, 6, 3, 'LATENT'],
+    ],
+  }
+
+  it('标准默认工作流：模型 / LoRA / 尺寸批量 / 采样参数与正负向提示词全部提取', () => {
+    const p = extractUiWorkflowParams(JSON.stringify(uiWorkflow))!
+    expect(p.nodeCount).toBe(6)
+    expect(p.models).toEqual(['v1-5-pruned-emaonly.safetensors'])
+    expect(p.loras).toEqual([{ name: 'add_detail.safetensors', strengthModel: 0.8, strengthClip: 0.9 }])
+    expect(p.width).toBe(768)
+    expect(p.height).toBe(512)
+    expect(p.batch).toBe(2)
+    expect(p.positive).toEqual(['a cozy cabin, warm light'])
+    expect(p.negative).toEqual(['blurry'])
+    expect(p.samplers).toEqual([
+      {
+        nodeId: '6',
+        classType: 'KSampler',
+        seed: '156680208662693',
+        steps: 20,
+        cfg: 8,
+        sampler: 'euler',
+        scheduler: 'normal',
+        denoise: 1,
+      },
+    ])
+  })
+
+  it('KSamplerAdvanced 布局（add_noise 开头）与 16 位以上大整数 seed 保精度', () => {
+    const wf = {
+      nodes: [
+        {
+          id: 9,
+          type: 'KSamplerAdvanced',
+          inputs: [],
+          widgets_values: ['enable', 10978932088412290000, 'fixed', 25, 7, 'dpmpp_2m', 'karras', 0.65],
+        },
+      ],
+    }
+    const p = extractUiWorkflowParams(JSON.stringify(wf))!
+    expect(p.samplers[0]).toMatchObject({
+      classType: 'KSamplerAdvanced',
+      seed: '10978932088412290000', // 预替换成字符串，不被 JSON.parse 降精度
+      steps: 25,
+      cfg: 7,
+      sampler: 'dpmpp_2m',
+      scheduler: 'karras',
+      denoise: 0.65,
+    })
+  })
+
+  it('bypass（mode=4）的采样器与加载节点不参与提取', () => {
+    const wf = {
+      nodes: [
+        { id: 1, type: 'CheckpointLoaderSimple', mode: 4, inputs: [], widgets_values: ['a.safetensors'] },
+        { id: 2, type: 'KSampler', mode: 4, inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] },
+      ],
+    }
+    expect(extractUiWorkflowParams(JSON.stringify(wf))).toBeNull()
+  })
+
+  it('无可提取参数（如仅 SaveImage）返回 null', () => {
+    const wf = { nodes: [{ id: 1, type: 'SaveImage', inputs: [], widgets_values: ['ComfyUI'] }] }
+    expect(extractUiWorkflowParams(JSON.stringify(wf))).toBeNull()
+    expect(extractUiWorkflowParams('not json')).toBeNull()
+  })
+
+  it('extractParams 路由：API prompt 损坏时回退 UI 工作流提取', () => {
+    const ui = JSON.stringify({
+      nodes: [
+        { id: 1, type: 'KSampler', inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] },
+      ],
+    })
+    expect(extractParams({ source: 'comfyui', prompt: '{"broken', workflow: ui })?.samplers).toHaveLength(1)
+  })
+})
+
+describe('readTextMetadata（F1：工作流 JSON / 参数文本直接解析）', () => {
+  it('API 格式 JSON → ComfyUI prompt', async () => {
+    const api = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5 } } })
+    const meta = await readTextMetadata(new File([api], 'wf.json'))
+    expect(meta.source).toBe('comfyui')
+    expect(meta.prompt).toBe(api)
+  })
+
+  it('UI 格式 JSON → ComfyUI workflow，且经 extractParams 走 O2 兜底提取', async () => {
+    const ui = JSON.stringify({
+      nodes: [{ id: 1, type: 'KSampler', inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] }],
+    })
+    const meta = await readTextMetadata(new File([ui], 'wf.json'))
+    expect(meta.source).toBe('comfyui')
+    expect(meta.workflow).toBe(ui)
+    expect(extractParams(meta)?.samplers).toHaveLength(1)
+  })
+
+  it('A1111 参数文本 → a1111；随机文本 / 空文件 → none 带线索', async () => {
+    const params = 'a cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 1'
+    expect((await readTextMetadata(new File([params], 'p.txt'))).source).toBe('a1111')
+    const rand = await readTextMetadata(new File(['hello world'], 'note.txt'))
+    expect(rand.source).toBe('none')
+    expect(rand.hints?.length).toBeGreaterThan(0)
+    const empty = await readTextMetadata(new File(['   '], 'empty.txt'))
+    expect(empty.source).toBe('none')
   })
 })
 

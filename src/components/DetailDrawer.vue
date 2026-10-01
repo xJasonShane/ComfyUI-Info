@@ -77,7 +77,7 @@ const corruptHint = computed(() => {
   const it = props.item
   if (!it) return ''
   if (!it.raw.prompt && !it.raw.parameters && it.raw.workflow) {
-    return '检测到 UI 工作流，但未内嵌 API 格式的 prompt，无法提取结构化参数；可在下方「UI 工作流」页签查看或下载'
+    return '检测到 UI 工作流，但无法从中提取结构化参数；可在下方「UI 工作流」页签查看或下载'
   }
   return it.raw.source === 'comfyui'
     ? '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查'
@@ -152,9 +152,9 @@ function downloadJson(text: string | undefined, suffix: string) {
       <div class="detail-view">
         <img v-if="item.url" :src="item.url" :alt="item.name" />
         <div v-else class="detail-noimg">
-          <Icon name="image" :size="26" :stroke="1.6" />
-          <span>图片未加载</span>
-          <span class="tip">重新拖入原文件即可回挂预览</span>
+          <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
+          <span>{{ item.metaOnly ? '参数文件（无预览图）' : '图片未加载' }}</span>
+          <span v-if="!item.metaOnly" class="tip">重新拖入原文件即可回挂预览</span>
         </div>
       </div>
 
@@ -174,7 +174,12 @@ function downloadJson(text: string | undefined, suffix: string) {
             <dl class="kv">
               <template v-for="([k, v], i) in generalRows" :key="i">
                 <dt>{{ k }}</dt>
-                <dd>{{ v }}</dd>
+                <dd>
+                  <span class="kv-val">{{ v }}</span>
+                  <button class="kv-copy" type="button" :title="`复制${k}`" @click="copy(v, k)">
+                    <Icon name="copy" :size="11" :stroke="2.2" />
+                  </button>
+                </dd>
               </template>
             </dl>
           </div>
@@ -190,7 +195,12 @@ function downloadJson(text: string | undefined, suffix: string) {
             <dl v-if="p.samplers.length === 1" class="kv">
               <template v-for="([k, v], i) in samplerRows" :key="i">
                 <dt>{{ k }}</dt>
-                <dd>{{ v }}</dd>
+                <dd>
+                  <span class="kv-val">{{ v }}</span>
+                  <button class="kv-copy" type="button" :title="`复制${k}`" @click="copy(v, k)">
+                    <Icon name="copy" :size="11" :stroke="2.2" />
+                  </button>
+                </dd>
               </template>
             </dl>
             <div v-else>
@@ -208,6 +218,9 @@ function downloadJson(text: string | undefined, suffix: string) {
                 {{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度
                 {{ l.strengthClip ?? '-' }}{{ l.hash ? ` · ${l.hash}` : '' }}）
               </span>
+              <button class="kv-copy" type="button" title="复制 LoRA 名称" @click="copy(l.name, 'LoRA 名称')">
+                <Icon name="copy" :size="11" :stroke="2.2" />
+              </button>
             </div>
           </div>
 

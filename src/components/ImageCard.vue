@@ -70,7 +70,18 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     @keydown.ctrl.space.prevent="$emit('select-toggle')"
     @keydown.meta.space.prevent="$emit('select-toggle')"
   >
-    <img v-if="!broken && !item.detached" :src="item.url" loading="lazy" alt="" @error="broken = true" />
+    <img
+      v-if="!broken && !item.detached && !item.metaOnly"
+      :src="item.url"
+      loading="lazy"
+      alt=""
+      @error="broken = true"
+    />
+    <div v-else-if="item.metaOnly" class="archived">
+      <Icon name="file-text" :size="20" :stroke="1.8" />
+      <span>参数文件</span>
+      <span class="tip">无预览图</span>
+    </div>
     <div v-else-if="item.detached" class="archived">
       <Icon name="image" :size="20" :stroke="1.8" />
       <span>已存档</span>

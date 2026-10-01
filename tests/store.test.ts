@@ -5,8 +5,9 @@ import type { ImageItem } from '../src/types'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
 vi.mock('../src/lib/metadata', () => ({
-  // 与真实实现一致：按扩展名放行，无扩展名走嗅探
+  // 与真实实现一致：按扩展名放行，无扩展名走嗅探，.json/.txt 为参数文件
   isSupportedImage: (f: File) => /\.(png|jpe?g|webp)$/i.test(f.name),
+  isMetaTextFile: (f: File) => /\.(json|txt)$/i.test(f.name),
   hasSupportedSignature: async () => true,
   clearInternPool: () => {},
 }))
@@ -33,8 +34,12 @@ let api: typeof import('../src/composables/store')
 let parser: typeof import('../src/lib/parser')
 
 beforeAll(async () => {
-  // store 模块顶层访问 localStorage / navigator / URL.createObjectURL，Node 环境需打桩
-  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
+  // store 模块顶层访问 localStorage / navigator / URL.createObjectURL，Node 环境需打桩（U2 需真实读写）
+  const storage = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => storage.get(k) ?? null,
+    setItem: (k: string, v: string) => void storage.set(k, v),
+  })
   vi.stubGlobal('navigator', { hardwareConcurrency: 4 })
   vi.stubGlobal(
     'URL',
@@ -284,6 +289,65 @@ it('解析中的项不计入来源统计，也不冒充「无元数据」', asyn
   expect(api.filteredItems.value).toHaveLength(0)
   api.store.sourceFilter = 'comfyui'
   expect(api.filteredItems.value).toHaveLength(2)
+})
+
+it('工作流 JSON / 参数文本文件直接入列解析，无预览 URL（F1）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  api.addFiles([{ file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) }])
+  expect(api.store.items.length).toBe(1)
+  expect(api.store.items[0].metaOnly).toBe(true)
+  expect(api.store.items[0].url).toBe('')
+  api.addFiles([{ file: new File(['Steps: 20'], 'params.txt', { lastModified: 2 }) }])
+  expect(api.store.items.length).toBe(2)
+  await flush()
+  expect(api.store.items.every((i) => i.status === 'done')).toBe(true)
+  // 指纹去重对参数文件同样生效
+  api.addFiles([{ file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) }])
+  expect(api.store.items.length).toBe(2)
+})
+
+it('retryAllFailed 批量重试有文件的失败项，存档失败项跳过（O4）', async () => {
+  vi.mocked(parser.parseImage)
+    .mockRejectedValueOnce(new Error('boom'))
+    .mockRejectedValueOnce(new Error('boom2'))
+  api.addFiles([file('a.png'), file('b.png')])
+  await flush()
+  expect(api.stats.value.error).toBe(2)
+  // 存档失败项没有文件，不可重试
+  api.restoreArchived([
+    {
+      key: 'c.png|1|7',
+      name: 'c.png',
+      size: 1,
+      mtime: 7,
+      status: 'error',
+      source: 'none',
+      raw: { source: 'none' },
+      error: 'x',
+      savedAt: 0,
+    },
+  ])
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  expect(api.retryAllFailed()).toBe(2)
+  expect(api.store.batchTotal).toBe(4) // 首轮 2 + 重试 2
+  await flush()
+  expect(api.stats.value).toEqual({ comfyui: 2, a1111: 0, none: 0, error: 1 })
+})
+
+it('筛选与搜索状态写入 localStorage（U2）', async () => {
+  api.store.sourceFilter = 'a1111'
+  api.store.modelFilter = 'm.safetensors'
+  api.store.search = 'seed:1'
+  await flush() // pre-flush watcher 落盘
+  const saved = JSON.parse(localStorage.getItem('cii:filters') ?? '{}') as {
+    search: string
+    model: string | null
+    source: string
+  }
+  expect(saved).toEqual({ search: 'seed:1', model: 'm.safetensors', source: 'a1111' })
+  api.store.sourceFilter = 'comfyui'
+  api.store.modelFilter = null
+  api.store.search = ''
 })
 
 it('扫描进行中解析结果按节拍批量应用，全部完成后立即应用（P1 聚合去抖）', async () => {

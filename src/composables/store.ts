@@ -1,6 +1,6 @@
 import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile, ParsedParams, RawMetadata } from '../types'
-import { clearInternPool, hasSupportedSignature, isSupportedImage } from '../lib/metadata'
+import { clearInternPool, hasSupportedSignature, isMetaTextFile, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import {
@@ -37,11 +37,38 @@ interface StoreState {
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
 
+/* ---------- 筛选 / 搜索状态持久化（U2）：刷新后还原上次的使用状态 ---------- */
+const FILTERS_KEY = 'cii:filters'
+const SOURCE_FILTERS: SourceFilter[] = ['all', 'comfyui', 'a1111', 'none', 'error']
+
+function loadStoredFilters(): {
+  search: string
+  modelFilter: string | null
+  sourceFilter: SourceFilter
+} {
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY)
+    if (!raw) return { search: '', modelFilter: null, sourceFilter: 'comfyui' }
+    const o = JSON.parse(raw) as { search?: unknown; model?: unknown; source?: unknown }
+    return {
+      search: typeof o.search === 'string' ? o.search : '',
+      modelFilter: typeof o.model === 'string' && o.model !== '' ? o.model : null,
+      sourceFilter: SOURCE_FILTERS.includes(o.source as SourceFilter)
+        ? (o.source as SourceFilter)
+        : 'comfyui',
+    }
+  } catch {
+    return { search: '', modelFilter: null, sourceFilter: 'comfyui' }
+  }
+}
+
+const storedFilters = loadStoredFilters()
+
 const state = reactive<StoreState>({
   items: [],
-  search: '',
-  modelFilter: null,
-  sourceFilter: 'comfyui',
+  search: storedFilters.search,
+  modelFilter: storedFilters.modelFilter,
+  sourceFilter: storedFilters.sourceFilter,
   sortMode: storedSort && SORT_MODES.includes(storedSort) ? storedSort : 'default',
   dark: localStorage.getItem('cii:theme') !== 'light',
   batchTotal: 0,
@@ -57,6 +84,17 @@ watch(
 watch(
   () => state.sortMode,
   (m) => localStorage.setItem('cii:sort', m),
+)
+
+watch(
+  () => [state.search, state.modelFilter, state.sourceFilter] as const,
+  ([search, model, source]) => {
+    try {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify({ search, model, source }))
+    } catch {
+      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+    }
+  },
 )
 
 /* ---------- 解析队列（有限并发） ---------- */
@@ -166,6 +204,21 @@ export function retryItem(item: ImageItem) {
   pump()
 }
 
+/** 批量重试全部可重试的失败项（O4）；存档失败项无文件，仍需重新拖入原文件。返回重新排队数量 */
+export function retryAllFailed(): number {
+  let n = 0
+  for (const item of [...state.items]) {
+    if (item.status !== 'error' || !item.file) continue
+    item.status = 'pending'
+    item.error = undefined
+    state.batchTotal++
+    queue.push(item)
+    n++
+  }
+  if (n) pump()
+  return n
+}
+
 /** 返回本次直接入列的新增数量（去重后）；无扩展名文件的嗅探确认是异步入列，不计入返回值 */
 export function addFiles(files: IncomingFile[]): number {
   const deferred: IncomingFile[] = []
@@ -173,6 +226,9 @@ export function addFiles(files: IncomingFile[]): number {
   for (const { file, path } of files) {
     if (isSupportedImage(file)) {
       added += enqueueFile(file, path)
+    } else if (isMetaTextFile(file)) {
+      // F1：工作流 JSON / 参数文本拖入即解析，无需配图
+      added += enqueueFile(file, path, true)
     } else {
       // 无扩展名 / 生僻扩展名：按文件头魔数嗅探，异步确认后再入列
       deferred.push({ file, path })
@@ -184,7 +240,7 @@ export function addFiles(files: IncomingFile[]): number {
 }
 
 /** 入列单个文件：返回是否新增（指纹已存在 / 存档回挂不产生解析任务，均不算新增） */
-function enqueueFile(file: File, path?: string): number {
+function enqueueFile(file: File, path?: string, metaOnly = false): number {
   const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
   if (seenKeys.has(key)) return 0
   // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
@@ -202,7 +258,8 @@ function enqueueFile(file: File, path?: string): number {
   const item = reactive<ImageItem>({
     id: `img-${++seq}`,
     file,
-    url: URL.createObjectURL(file),
+    // 参数文件无图片本体，不创建预览 URL
+    url: metaOnly ? '' : URL.createObjectURL(file),
     name: file.name,
     path,
     size: file.size,
@@ -210,6 +267,7 @@ function enqueueFile(file: File, path?: string): number {
     status: 'pending',
     source: 'none',
     raw: { source: 'none' },
+    metaOnly: metaOnly || undefined,
   })
   state.items.push(item)
   liveIds.add(item.id)

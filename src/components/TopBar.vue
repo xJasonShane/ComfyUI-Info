@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NDropdown, NInput, NPopconfirm, NSelect, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NDropdown, NInput, NPopconfirm, NPopover, NSelect, NTooltip, useMessage } from 'naive-ui'
 import Icon from './Icon.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
@@ -87,7 +87,9 @@ const exportOptions = [
   { label: '导出工作流 (ZIP)', key: 'zip' },
 ]
 
-function exportAs(key: string | number) {
+const exporting = ref(false)
+
+async function exportAs(key: string | number) {
   // 只导出已出结果的项（done / error）；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
   if (parsing.value) {
     message.warning('扫描仍在进行，请等扫描完成后再导出')
@@ -95,12 +97,20 @@ function exportAs(key: string | number) {
   }
   const items = filteredItems.value.filter((i) => i.status === 'done' || i.status === 'error')
   if (!items.length) return
-  const stamp = new Date().toISOString().slice(0, 10)
-  if (key === 'csv') downloadText(`comfyui-info-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-  else if (key === 'zip') {
-    const zip = buildWorkflowZip(items)
-    if (zip) downloadBinary(`comfyui-info-workflows-${stamp}.zip`, zip)
-  } else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
+  exporting.value = true
+  try {
+    // 先让按钮 loading 渲染出来，再执行同步的打包计算
+    await new Promise((r) => setTimeout(r, 30))
+    const stamp = new Date().toISOString().slice(0, 10)
+    if (key === 'csv') downloadText(`comfyui-info-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+    else if (key === 'zip') {
+      const zip = buildWorkflowZip(items)
+      if (zip) downloadBinary(`comfyui-info-workflows-${stamp}.zip`, zip)
+    } else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
+    message.success(`已导出 ${items.length} 项`)
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
@@ -157,7 +167,7 @@ function exportAs(key: string | number) {
       :options="exportOptions"
       @select="exportAs"
     >
-      <NButton size="small" secondary :disabled="filteredItems.length === 0">
+      <NButton size="small" secondary :loading="exporting" :disabled="exporting || filteredItems.length === 0">
         <template #icon><Icon name="download" /></template>
         导出
       </NButton>
@@ -176,16 +186,28 @@ function exportAs(key: string | number) {
       清空列表
     </NTooltip>
 
-    <NInput
-      v-model:value="store.search"
-      size="small"
-      round
-      clearable
-      placeholder="搜索提示词 / 模型 / LoRA / 文件名"
-      style="width: 210px"
-    >
-      <template #prefix><Icon name="search" :size="14" /></template>
-    </NInput>
+    <NPopover trigger="hover" placement="bottom-end" :style="{ maxWidth: '300px' }">
+      <template #trigger>
+        <NInput
+          v-model:value="store.search"
+          size="small"
+          round
+          clearable
+          placeholder="搜索提示词 / 模型 / 种子（悬停看语法）"
+          style="width: 230px"
+        >
+          <template #prefix><Icon name="search" :size="14" /></template>
+        </NInput>
+      </template>
+      <div class="search-help">
+        <b>搜索语法</b>
+        <p><code>model:xxx</code> 按模型名筛选</p>
+        <p><code>lora:xxx</code> 按 LoRA 名称或哈希</p>
+        <p><code>seed:123</code> 按种子（支持片段）</p>
+        <p><code>path:目录</code> 按相对路径</p>
+        <p>多个条件用空格分隔，全部满足才命中；普通关键词匹配提示词 / 文件名 / 路径</p>
+      </div>
+    </NPopover>
 
     <NSelect
       v-model:value="store.modelFilter"
@@ -250,7 +272,7 @@ function exportAs(key: string | number) {
     <input
       ref="fileInput"
       type="file"
-      accept=".png,.jpg,.jpeg,.webp"
+      accept=".png,.jpg,.jpeg,.webp,.json,.txt"
       multiple
       hidden
       @change="onPick"

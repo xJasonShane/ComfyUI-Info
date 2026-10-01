@@ -835,6 +835,40 @@ body {
   font-family: var(--font-mono);
   word-break: break-all;
   line-height: 1.55;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.kv dd .kv-val {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 参数行尾的一键复制按钮（U3） */
+.kv-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  align-self: center;
+}
+
+.kv-copy:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.kv-copy:focus-visible {
+  outline: 1.5px solid var(--accent);
 }
 
 .stage-row {
@@ -861,6 +895,33 @@ body {
 .stage-row .txt {
   color: var(--text-dim);
   word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 搜索语法悬停帮助（U1） */
+.search-help {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.search-help b {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.search-help p {
+  margin: 2px 0;
+  color: var(--text-dim);
+}
+
+.search-help code {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 
 .prompt-text {
