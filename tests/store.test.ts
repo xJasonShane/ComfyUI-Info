@@ -477,14 +477,84 @@ it('无扩展名文件经嗅探确认后异步入列', async () => {
 })
 
 it('parseQuery 拆分字段限定与普通关键词', () => {
+  const empty = { terms: [], model: [], lora: [], seed: [], path: [] }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
-    terms: ['cat'],
-    model: ['majic'],
-    lora: [],
-    seed: ['123'],
-    path: [],
+    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [] },
+    none: empty,
   })
-  expect(api.parseQuery('   ')).toEqual({ terms: [], model: [], lora: [], seed: [], path: [] })
+  expect(api.parseQuery('   ')).toEqual({ all: empty, none: empty })
+})
+
+it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', async () => {
+  const add = (name: string, parameters: string, path: string) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }), path }])
+  }
+  add(
+    'a.png',
+    'two words cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 111222333, Model: majicMIX',
+    'v1/a.png',
+  )
+  add('b.png', 'dog\nSteps: 30, Sampler: DPM++ 2M, Seed: 444555616, Model: dreamshaper', 'v2/b.png')
+  await flush()
+  api.store.sourceFilter = 'all'
+  api.store.sortMode = 'default'
+
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  // 排除条件
+  expect(names('cat -dog')).toEqual(['a.png'])
+  expect(names('-model:majic')).toEqual(['b.png'])
+  // 引号包裹：含空格的普通词
+  expect(names('"two words"')).toEqual(['a.png'])
+  // 种子范围（数字字符串比较，不丢精度）
+  expect(names('seed:>200000000')).toEqual(['b.png'])
+  expect(names('seed:<=111222333')).toEqual(['a.png'])
+  expect(names('seed:>=111222333')).toEqual(['a.png', 'b.png'])
+  expect(names('seed:<5')).toEqual([])
+  api.store.search = ''
+})
+
+it('按工作流聚类排序：同工作流相邻成组，组内新→旧（F3）', async () => {
+  const promptA = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5 } } })
+  const promptB = JSON.stringify({ '7': { class_type: 'KSampler', inputs: { seed: 9 } } })
+  vi.mocked(parser.parseImage).mockImplementation((f: File) =>
+    Promise.resolve({
+      raw: { source: 'comfyui', prompt: f.name.startsWith('a') ? promptA : promptB },
+    }),
+  )
+  const t0 = 1_700_000_000_000
+  api.addFiles([
+    { file: new File(['x'], 'a1.png', { lastModified: t0 }) },
+    { file: new File(['x'], 'b1.png', { lastModified: t0 + 1000 }) },
+    { file: new File(['x'], 'a2.png', { lastModified: t0 + 2000 }) },
+  ])
+  await flush()
+  api.store.sourceFilter = 'all'
+  api.store.sortMode = 'workflow'
+  // A 组（最新 t0+2000）排前，组内 a2 → a1；随后 B 组
+  expect(api.filteredItems.value.map((i) => i.name)).toEqual(['a2.png', 'a1.png', 'b1.png'])
+  const c = api.workflowClusters.value
+  const byName = (n: string) => api.store.items.find((i) => i.name === n)!.id
+  expect(c.get(byName('a2.png'))).toEqual({ group: 0, seq: 1, total: 2 })
+  expect(c.get(byName('a1.png'))).toEqual({ group: 0, seq: 2, total: 2 })
+  expect(c.get(byName('b1.png'))).toEqual({ group: 1, seq: 1, total: 1 })
+  api.store.sortMode = 'default'
+})
+
+it('预览 URL 惰性创建：入列为空，渲染时才生成（P2）', () => {
+  api.addFiles([file('a.png')])
+  const item = api.store.items[0]
+  expect(item.url).toBe('')
+  api.ensureItemUrl(item)
+  expect(item.url).toBe('blob:mock')
+  api.ensureItemUrl(item)
+  expect(item.url).toBe('blob:mock')
 })
 
 it('结构化搜索：字段限定与多条件 AND', async () => {

@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
+import { ensureItemUrl, store, workflowClusters } from '../composables/store'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ item: ImageItem; index: number; selected?: boolean }>()
 const emit = defineEmits<{ open: []; remove: []; 'select-toggle': []; 'select-range': [] }>()
 
 const broken = ref(false)
+
+// P2：卡片渲染时才创建预览 Blob URL（配合画廊虚拟滚动，只有可见窗口内的条目占内存）
+onMounted(() => ensureItemUrl(props.item))
+
+/** F3：聚类排序模式下展示「同工作流第 x/y 张」 */
+const cluster = computed(() =>
+  store.sortMode === 'workflow' ? workflowClusters.value.get(props.item.id) : undefined,
+)
 
 /** Ctrl/⌘+点击或点击指示器切换选中，Shift+点击区间选择，普通点击打开详情 */
 function onClick(e: MouseEvent) {
@@ -108,6 +117,9 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     >
       <Icon name="x" :size="12" :stroke="2.4" />
     </button>
+    <div v-if="cluster && cluster.total > 1" class="cluster-badge" title="同工作流出图序号">
+      同款 {{ cluster.seq }}/{{ cluster.total }}
+    </div>
     <div v-if="modelShort || dims" class="veil">
       <span class="model">{{ modelShort }}</span>
       <span class="dims">{{ dims }}</span>

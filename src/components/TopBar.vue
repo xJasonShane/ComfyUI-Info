@@ -204,8 +204,11 @@ async function exportAs(key: string | number) {
         <p><code>model:xxx</code> 按模型名筛选</p>
         <p><code>lora:xxx</code> 按 LoRA 名称或哈希</p>
         <p><code>seed:123</code> 按种子（支持片段）</p>
+        <p><code>seed:&gt;100</code> 种子范围（&gt; ≥ &lt; ≤）</p>
         <p><code>path:目录</code> 按相对路径</p>
-        <p>多个条件用空格分隔，全部满足才命中；普通关键词匹配提示词 / 文件名 / 路径</p>
+        <p><code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）</p>
+        <p><code>"model:a b"</code> 引号包裹可含空格</p>
+        <p>多个正向条件空格分隔，全部满足才命中</p>
       </div>
     </NPopover>
 

@@ -108,7 +108,7 @@ test('解析 → 详情 → 统计 → 搜索 → 导出 CSV 全链路', async (
   await expect(cards).toHaveCount(1) // 模型筛选命中同一张
 
   // 搜索：命中提示词 → 1 张；无命中 → 空态；清空恢复
-  const search = page.getByPlaceholder('搜索提示词 / 模型 / LoRA / 文件名')
+  const search = page.getByPlaceholder('搜索提示词 / 模型 / 种子（悬停看语法）')
   await search.fill('cozy')
   await expect(cards).toHaveCount(1)
   await search.fill('zzz-no-match')

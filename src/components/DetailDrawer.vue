@@ -5,7 +5,7 @@ import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
-import { retryItem } from '../composables/store'
+import { retryItem, ensureItemUrl } from '../composables/store'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
@@ -21,6 +21,15 @@ onBeforeUnmount(() => narrowQuery.removeEventListener('change', onNarrowChange))
 const drawerWidth = computed(() => (isNarrow.value ? '100%' : 940))
 
 const p = computed(() => props.item?.params)
+
+// P2：详情大图与抽屉浏览同样按需创建预览 URL
+watch(
+  () => props.item?.id,
+  () => {
+    if (props.item) ensureItemUrl(props.item)
+  },
+  { immediate: true },
+)
 
 const fileTime = computed(() => {
   if (!props.item) return ''

@@ -1,0 +1,15 @@
+{
+  "name": "ComfyUI·Info — ComfyUI 图片信息查看器",
+  "short_name": "ComfyUI·Info",
+  "description": "本地解析 ComfyUI / A1111 图片元数据：提示词、模型、采样参数与工作流提取，图片不上传",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#131110",
+  "theme_color": "#e8a33d",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

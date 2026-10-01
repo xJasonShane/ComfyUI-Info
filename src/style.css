@@ -330,6 +330,22 @@ body {
   opacity: 0.85;
 }
 
+/* F3：聚类排序模式下的「同款 x/y」角标 */
+.cluster-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--accent);
+  background: color-mix(in srgb, #000000cc, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+
 .card .card-remove {
   position: absolute;
   top: 8px;
@@ -566,12 +582,6 @@ body {
   font-size: 11px;
   color: var(--text-faint);
   text-align: center;
-}
-
-.more-row {
-  display: flex;
-  justify-content: center;
-  padding: 22px 0 6px;
 }
 
 /* ============ 空状态 ============ */

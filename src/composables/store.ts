@@ -19,8 +19,8 @@ import {
 } from '../lib/persist'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
-export type SortMode = 'default' | 'time-desc' | 'time-asc'
-const SORT_MODES: SortMode[] = ['default', 'time-desc', 'time-asc']
+export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'workflow'
+const SORT_MODES: SortMode[] = ['default', 'time-desc', 'time-asc', 'workflow']
 
 interface StoreState {
   items: ImageItem[]
@@ -258,8 +258,8 @@ function enqueueFile(file: File, path?: string, metaOnly = false): number {
   const item = reactive<ImageItem>({
     id: `img-${++seq}`,
     file,
-    // 参数文件无图片本体，不创建预览 URL
-    url: metaOnly ? '' : URL.createObjectURL(file),
+    // P2：预览 URL 惰性创建（ensureItemUrl），入列时先不占 Blob URL
+    url: '',
     name: file.name,
     path,
     size: file.size,
@@ -476,6 +476,16 @@ const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   'time-desc': (a, b) => errLast(a) - errLast(b) || b.mtime - a.mtime || byName(a, b),
   'time-asc': (a, b) =>
     errLast(a) - errLast(b) || a.mtime - b.mtime || byName(a, b),
+  // F3：同工作流聚类——组按组内最新时间排列，组内新→旧，失败项垫底
+  workflow: (a, b) => {
+    const ea = errLast(a)
+    const eb = errLast(b)
+    if (ea !== eb) return ea - eb
+    const ca = workflowClusters.value.get(a.id)
+    const cb = workflowClusters.value.get(b.id)
+    if (ca && cb && ca.group !== cb.group) return ca.group - cb.group
+    return b.mtime - a.mtime || byName(a, b)
+  },
 }
 
 export const stats = computed(() => {
@@ -548,7 +558,7 @@ function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
   return parts.join('\n').toLowerCase()
 }
 
-export interface ParsedQuery {
+export interface QueryConditions {
   terms: string[]
   model: string[]
   lora: string[]
@@ -556,21 +566,93 @@ export interface ParsedQuery {
   path: string[]
 }
 
+export interface ParsedQuery {
+  /** 正向条件：全部满足才命中 */
+  all: QueryConditions
+  /** O1：`-` 前缀排除条件，任一命中即整条不匹配 */
+  none: QueryConditions
+}
+
 const QUERY_FIELD_RE = /^(model|lora|seed|path):(.+)$/i
 
+/** O1：64 位种子不能安全转 Number，范围比较用「位数 + 字典序」比较非负整数字符串 */
+function compareSeed(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function hitSeed(cond: string, it: ImageItem): boolean {
+  const m = cond.match(/^(>=|<=|>|<)?(.+)$/)!
+  const seeds = (it.params?.samplers ?? []).map((s) => s.seed).filter((s): s is string => !!s)
+  if (!seeds.length) return false
+  if (!m[1]) return seeds.some((s) => s.includes(m[2]!))
+  const target = m[2]!
+  switch (m[1]) {
+    case '>':
+      return seeds.some((s) => compareSeed(s, target) > 0)
+    case '<':
+      return seeds.some((s) => compareSeed(s, target) < 0)
+    case '>=':
+      return seeds.some((s) => compareSeed(s, target) >= 0)
+    default:
+      return seeds.some((s) => compareSeed(s, target) <= 0)
+  }
+}
+
+function hitCondition(kind: keyof QueryConditions, value: string, it: ImageItem): boolean {
+  switch (kind) {
+    case 'terms':
+      return (it.searchText ?? it.name.toLowerCase()).includes(value)
+    case 'model':
+      return (it.params?.models ?? []).some((m) => m.toLowerCase().includes(value))
+    case 'lora':
+      return (it.params?.loras ?? []).some(
+        (l) => l.name.toLowerCase().includes(value) || (l.hash ?? '').toLowerCase().includes(value),
+      )
+    case 'seed':
+      return hitSeed(value, it)
+    case 'path':
+      return (it.path ?? it.name).toLowerCase().includes(value)
+  }
+}
+
+function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
+  for (const kind of Object.keys(conds) as (keyof QueryConditions)[]) {
+    for (const v of conds[kind]) {
+      if (hitCondition(kind, v, it) !== want) return false
+    }
+  }
+  return true
+}
+
 /**
- * 解析搜索框语法：`model:xxx` / `lora:xxx` / `seed:123` / `path:目录` 字段限定 +
- * 普通关键词，全部条件按 AND 组合；字段值不能含空格，大小写不敏感。
+ * 解析搜索框语法（O1 增强）：
+ * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
+ * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
+ * - `"model:a b"` 带引号的字段值可含空格
+ * - `-关键词` / `-model:xxx` 排除条件，任一命中即整条不匹配
+ * 正向条件按 AND 组合，大小写不敏感。
  */
 export function parseQuery(raw: string): ParsedQuery {
-  const out: ParsedQuery = { terms: [], model: [], lora: [], seed: [], path: [] }
-  for (const token of raw.trim().split(/\s+/)) {
+  const empty = (): QueryConditions => ({ terms: [], model: [], lora: [], seed: [], path: [] })
+  const out: ParsedQuery = { all: empty(), none: empty() }
+  const tokens = raw.trim().match(/"[^"]*"|\S+/g) ?? []
+  for (let token of tokens) {
+    let negated = false
+    if (token.startsWith('-') && token.length > 1) {
+      negated = true
+      token = token.slice(1)
+    }
+    if (token.startsWith('"') && token.endsWith('"') && token.length > 1) {
+      token = token.slice(1, -1)
+    }
     if (!token) continue
     const m = token.match(QUERY_FIELD_RE)
+    const bucket = negated ? out.none : out.all
     if (m) {
-      out[m[1]!.toLowerCase() as keyof Omit<ParsedQuery, 'terms'>].push(m[2]!.toLowerCase())
+      bucket[m[1]!.toLowerCase() as keyof Omit<QueryConditions, 'terms'>].push(m[2]!.toLowerCase())
     } else {
-      out.terms.push(token.toLowerCase())
+      bucket.terms.push(token.toLowerCase())
     }
   }
   return out
@@ -599,28 +681,9 @@ export const filteredItems = computed(() => {
     .sort(sorters[state.sortMode])
 })
 
-/** 搜索匹配：普通词命中搜索串，字段限定各自命中结构化参数，全部条件 AND */
+/** 搜索匹配：正向条件全 AND，排除条件任一命中即否决 */
 function matchQuery(it: ImageItem, query: ParsedQuery): boolean {
-  const fallbackHay = it.searchText ?? it.name.toLowerCase()
-  for (const term of query.terms) {
-    if (!fallbackHay.includes(term)) return false
-  }
-  for (const v of query.model) {
-    if (!(it.params?.models ?? []).some((m) => m.toLowerCase().includes(v))) return false
-  }
-  for (const v of query.lora) {
-    const hit = (it.params?.loras ?? []).some(
-      (l) => l.name.toLowerCase().includes(v) || (l.hash ?? '').toLowerCase().includes(v),
-    )
-    if (!hit) return false
-  }
-  for (const v of query.seed) {
-    if (!(it.params?.samplers ?? []).some((s) => (s.seed ?? '').includes(v))) return false
-  }
-  for (const v of query.path) {
-    if (!(it.path ?? it.name).toLowerCase().includes(v)) return false
-  }
-  return true
+  return matchConditions(query.all, it, true) && matchConditions(query.none, it, false)
 }
 
 /**
@@ -651,10 +714,61 @@ export const sortOptions: { label: string; value: SortMode }[] = [
   { label: '默认排序', value: 'default' },
   { label: '时间 新→旧', value: 'time-desc' },
   { label: '时间 旧→新', value: 'time-asc' },
+  { label: '按工作流聚类', value: 'workflow' },
 ]
+
+/**
+ * F3：工作流内容指纹。同串同引用来自 interning（本会话解析），存档恢复的是内容副本，
+ * 统一走 FNV-1a 哈希 + 长度兜底，同工作流的图（无论实文件还是存档）都能归入同组。
+ */
+function workflowKey(it: ImageItem): string {
+  const raw = it.raw.prompt ?? it.raw.parameters ?? it.raw.workflow
+  if (!raw) return `id:${it.id}` // 无元数据 / 失败项各自成组
+  let h = 0x811c9dc5
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return `${(h >>> 0).toString(36)}:${raw.length}`
+}
+
+/**
+ * F3：同工作流聚类信息（itemId → { group: 组序, seq/total: 组内序号 }）。
+ * 组按组内最新时间新→旧排组序，组内同规则编号；卡片在聚类模式下展示「第 x/y 张」。
+ */
+export const workflowClusters = computed(() => {
+  const groups = new Map<string, ImageItem[]>()
+  for (const it of state.items) {
+    const k = workflowKey(it)
+    const g = groups.get(k)
+    if (g) g.push(it)
+    else groups.set(k, [it])
+  }
+  const ordered = [...groups.values()]
+    .map((members) => ({
+      members,
+      latest: Math.max(...members.map((m) => m.mtime)),
+    }))
+    .sort((a, b) => b.latest - a.latest || b.members.length - a.members.length)
+  const out = new Map<string, { group: number; seq: number; total: number }>()
+  ordered.forEach(({ members }, gi) => {
+    const sorted = [...members].sort((a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name))
+    sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
+  })
+  return out
+})
 
 export function toggleDark() {
   state.dark = !state.dark
+}
+
+/**
+ * P2：预览 URL 惰性创建——由卡片 / 抽屉在渲染时调用。
+ * 入列时不再为每张图创建 Blob URL，万级扫描只有实际渲染过的条目才占 URL 与解码内存。
+ */
+export function ensureItemUrl(item: ImageItem): void {
+  if (item.url || item.metaOnly || item.detached || !item.file) return
+  item.url = URL.createObjectURL(item.file)
 }
 
 export { state as store }

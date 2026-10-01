@@ -71,17 +71,83 @@ watchEffect(() => {
   document.body.style.background = store.dark ? '#131110' : '#f5f1e9'
 })
 
-/* ---------- 分页加载 ---------- */
-const PAGE = 120
-const shown = ref(PAGE)
-watch(
-  () => [store.search, store.modelFilter, store.sourceFilter, store.sortMode],
-  () => {
-    shown.value = PAGE
-  },
+/* ---------- 画廊虚拟滚动（P3）：按行列窗口渲染，万级列表滚动恒定 DOM 量 ---------- */
+// 与 style.css .grid 的 minmax(206px, 1fr) / gap 13px 保持一致，保证列数计算与实际布局吻合
+const GRID_MIN = 206
+const GRID_GAP = 13
+const OVERSCAN_ROWS = 3
+
+const galleryRef = ref<HTMLElement | null>(null)
+const galleryWidth = ref(0)
+/** 画廊顶边滚出视口的像素数（未滚到为负，钳到 0 参与 row 计算） */
+const viewTop = ref(0)
+
+const cols = computed(() =>
+  Math.max(1, Math.floor((galleryWidth.value + GRID_GAP) / (GRID_MIN + GRID_GAP))),
 )
-const visibleItems = computed(() => filteredItems.value.slice(0, shown.value))
-const remaining = computed(() => filteredItems.value.length - visibleItems.value.length)
+const rowH = computed(() => {
+  if (!galleryWidth.value) return 0
+  const cardW = (galleryWidth.value - GRID_GAP * (cols.value - 1)) / cols.value
+  return cardW + GRID_GAP
+})
+const totalRows = computed(() => Math.ceil(filteredItems.value.length / cols.value))
+
+const startRow = computed(() =>
+  Math.max(0, Math.floor(Math.max(0, viewTop.value) / rowH.value) - OVERSCAN_ROWS),
+)
+const endRow = computed(() =>
+  Math.min(
+    totalRows.value,
+    Math.ceil((Math.max(0, viewTop.value) + window.innerHeight) / rowH.value) + OVERSCAN_ROWS,
+  ),
+)
+// 首帧未量得尺寸时先渲染一小页，量到后立即进入窗口化
+const visibleItems = computed(() => {
+  if (!rowH.value) return filteredItems.value.slice(0, 24)
+  return filteredItems.value.slice(startRow.value * cols.value, endRow.value * cols.value)
+})
+const topPad = computed(() => startRow.value * rowH.value)
+const bottomPad = computed(() => Math.max(0, (totalRows.value - endRow.value) * rowH.value))
+
+let scrollRaf = 0
+function updateViewTop() {
+  const el = galleryRef.value
+  if (!el) return
+  viewTop.value = -el.getBoundingClientRect().top
+}
+function onWinScroll() {
+  if (scrollRaf) return
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = 0
+    updateViewTop()
+  })
+}
+let resizeObserver: ResizeObserver | null = null
+onMounted(() => {
+  updateViewTop()
+  window.addEventListener('scroll', onWinScroll, { passive: true })
+  window.addEventListener('resize', onWinScroll)
+  if (typeof ResizeObserver !== 'undefined' && galleryRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      galleryWidth.value = galleryRef.value?.clientWidth ?? 0
+      updateViewTop()
+    })
+    resizeObserver.observe(galleryRef.value)
+    galleryWidth.value = galleryRef.value.clientWidth
+  }
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', onWinScroll)
+  window.removeEventListener('resize', onWinScroll)
+  resizeObserver?.disconnect()
+  if (scrollRaf) cancelAnimationFrame(scrollRaf)
+})
+// 画廊上方的统计行 / 工具栏高度变化会移动画廊顶边，主动校正窗口
+watch(
+  () => [store.items.length, filteredItems.value.length, store.sourceFilter, store.sortMode],
+  () => updateViewTop(),
+)
+
 // 被“来源 / 搜索 / 模型”筛选挡住的已解析图片数量（用于空状态引导）
 const hiddenCount = computed(() => {
   const shown = new Set(filteredItems.value)
@@ -374,31 +440,30 @@ async function onDrop(e: DragEvent) {
           <span v-if="parsing" style="color: var(--accent)">扫描中…</span>
         </div>
 
-        <main class="gallery">
-          <div v-if="visibleItems.length" class="grid" :class="{ selecting: selectedItems.length > 0 }">
-            <ImageCard
-              v-for="(it, idx) in visibleItems"
-              :key="it.id"
-              :item="it"
-              :index="idx"
-              :selected="selectedIds.has(it.id)"
-              @open="open(it)"
-              @remove="onRemove(it)"
-              @select-toggle="toggleSelect(it)"
-              @select-range="rangeSelect(it)"
-            />
-          </div>
+        <main ref="galleryRef" class="gallery">
+          <template v-if="filteredItems.length">
+            <div :style="{ height: topPad + 'px' }" aria-hidden="true" />
+            <div class="grid" :class="{ selecting: selectedItems.length > 0 }">
+              <ImageCard
+                v-for="(it, idx) in visibleItems"
+                :key="it.id"
+                :item="it"
+                :index="idx"
+                :selected="selectedIds.has(it.id)"
+                @open="open(it)"
+                @remove="onRemove(it)"
+                @select-toggle="toggleSelect(it)"
+                @select-range="rangeSelect(it)"
+              />
+            </div>
+            <div :style="{ height: bottomPad + 'px' }" aria-hidden="true" />
+          </template>
           <EmptyState
             v-else
             :filtered="store.items.length > 0"
             :hidden-count="hiddenCount"
             @show-all="showAll"
           />
-          <div v-if="remaining > 0" class="more-row">
-            <NButton size="small" secondary @click="shown += PAGE">
-              加载更多（还有 {{ remaining }} 张）
-            </NButton>
-          </div>
         </main>
 
         <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
