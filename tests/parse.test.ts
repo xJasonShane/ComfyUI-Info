@@ -825,6 +825,14 @@ describe('parseA1111Parameters', () => {
     expect(p.height).toBe(3072)
   })
 
+  it('64 位大种子保精度，不经过 Number 转换', () => {
+    // ComfyUI 生态的 Civitai 兼容保存节点写出的种子超过 Number 安全范围
+    const big = '1234567890123456789'
+    const p = parseA1111Parameters(`a cat\nSteps: 20, Sampler: Euler a, Seed: ${big}`)
+    expect(p.samplers[0].seed).toBe(big)
+    expect(p.samplers).toHaveLength(1)
+  })
+
   it('img2img（无 Hires 键）的 Denoising strength 保留在单阶段', () => {
     const p = parseA1111Parameters(
       'a cat\nNegative prompt: x\nSteps: 15, Sampler: Euler a, CFG scale: 6, Seed: 1, Denoising strength: 0.45, Size: 512x512',

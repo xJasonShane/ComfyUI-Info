@@ -289,30 +289,56 @@ async function acceptBySniff(incoming: IncomingFile) {
 }
 
 export function removeItem(item: ImageItem) {
-  const idx = state.items.indexOf(item)
-  if (idx < 0) return
-  state.items.splice(idx, 1)
-  liveIds.delete(item.id)
-  const key = recordKey(item)
-  seenKeys.delete(key)
-  if (item.detached) detachedByKey.delete(key)
-  dirtyItems.delete(key)
-  deletedKeys.add(key)
-  schedulePersist()
-  URL.revokeObjectURL(item.url)
-  if (inflight.has(item.id)) {
-    // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
-    // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
-  } else if (item.status === 'pending') {
-    // 未开始的直接出队
-    const qi = queue.indexOf(item)
-    if (qi >= 0) queue.splice(qi, 1)
-    state.batchTotal--
-  } else {
-    // done / error：两本账一起减
-    state.batchTotal--
-    state.batchDone--
+  removeItems([item])
+}
+
+/**
+ * 批量移除：单次遍历重建列表，统一维护指纹 / 存活账本与进度计数，整批 O(n)
+ * （逐条 removeItem 是 O(n·m)，万级列表批量删除会卡顿）。语义与单条移除一致：
+ * 不在当前列表中的项跳过；在途项不动计数（完成时对账），排队项整体出队，
+ * done / error 两本账一起减。
+ */
+export function removeItems(items: ImageItem[]) {
+  const removing = new Set<ImageItem>(items)
+  if (!removing.size) return
+  const removedItems: ImageItem[] = []
+  const keep: ImageItem[] = []
+  for (const it of state.items) {
+    if (removing.delete(it)) removedItems.push(it)
+    else keep.push(it)
   }
+  if (!removedItems.length) return
+  state.items = keep
+  const queuedIds = new Set<string>()
+  for (const it of removedItems) {
+    liveIds.delete(it.id)
+    const key = recordKey(it)
+    seenKeys.delete(key)
+    if (it.detached) detachedByKey.delete(key)
+    dirtyItems.delete(key)
+    deletedKeys.add(key)
+    URL.revokeObjectURL(it.url)
+    if (inflight.has(it.id)) {
+      // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
+      // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
+    } else if (it.status === 'pending') {
+      queuedIds.add(it.id)
+      state.batchTotal--
+    } else {
+      // done / error：两本账一起减
+      state.batchTotal--
+      state.batchDone--
+    }
+  }
+  // 排队项一次性出队（逐条 indexOf 是 O(队列长 × 移除数)）
+  if (queuedIds.size) {
+    let w = 0
+    for (let i = 0; i < queue.length; i++) {
+      if (!queuedIds.has(queue[i]!.id)) queue[w++] = queue[i]!
+    }
+    queue.length = w
+  }
+  schedulePersist()
 }
 
 export function clearAll() {
@@ -636,7 +662,8 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
 export function parseQuery(raw: string): ParsedQuery {
   const empty = (): QueryConditions => ({ terms: [], model: [], lora: [], seed: [], path: [] })
   const out: ParsedQuery = { all: empty(), none: empty() }
-  const tokens = raw.trim().match(/"[^"]*"|\S+/g) ?? []
+  // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏
+  const tokens = raw.trim().match(/-?"[^"]*"|\S+/g) ?? []
   for (let token of tokens) {
     let negated = false
     if (token.startsWith('-') && token.length > 1) {
@@ -720,16 +747,27 @@ export const sortOptions: { label: string; value: SortMode }[] = [
 /**
  * F3：工作流内容指纹。同串同引用来自 interning（本会话解析），存档恢复的是内容副本，
  * 统一走 FNV-1a 哈希 + 长度兜底，同工作流的图（无论实文件还是存档）都能归入同组。
+ * 按条目缓存指纹：长 JSON 的全量哈希在聚类排序的每次重算里是
+ * O(全部条目 × 串长) 的主线程开销，缓存后每条在 raw 不变期间至多算一次
+ * （raw 一经应用不再变化，以引用比对失效覆盖「结果应用前后」的唯一变更点）。
  */
+const workflowKeyCache = new WeakMap<ImageItem, { rawRef: string | undefined; key: string }>()
+
 function workflowKey(it: ImageItem): string {
   const raw = it.raw.prompt ?? it.raw.parameters ?? it.raw.workflow
-  if (!raw) return `id:${it.id}` // 无元数据 / 失败项各自成组
-  let h = 0x811c9dc5
-  for (let i = 0; i < raw.length; i++) {
-    h ^= raw.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
+  const cached = workflowKeyCache.get(it)
+  if (cached && cached.rawRef === raw) return cached.key
+  let key = `id:${it.id}` // 无元数据 / 失败项各自成组
+  if (raw) {
+    let h = 0x811c9dc5
+    for (let i = 0; i < raw.length; i++) {
+      h ^= raw.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    key = `${(h >>> 0).toString(36)}:${raw.length}`
   }
-  return `${(h >>> 0).toString(36)}:${raw.length}`
+  workflowKeyCache.set(it, { rawRef: raw, key })
+  return key
 }
 
 /**

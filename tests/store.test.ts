@@ -181,6 +181,48 @@ it('移除已完成条目：列表 / 指纹 / 计数同步，同名可重加', a
   expect(api.store.items.length).toBe(3)
 })
 
+it('批量移除排队项：整体出队、计数同步、指纹可重加', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'none' } })),
+  )
+  api.addFiles(
+    Array.from({ length: 10 }, (_, i) => ({
+      file: new File(['x'], `f${i}.png`, { lastModified: 1000 + i }),
+    })),
+  )
+  expect(api.store.batchTotal).toBe(10)
+
+  // 并发上限 8，末尾两个仍在排队：一次 removeItems 出队，不逐条 indexOf
+  const queued = api.store.items.slice(8)
+  api.removeItems(queued)
+  expect(api.store.items.length).toBe(8)
+  expect(api.store.batchTotal).toBe(8)
+
+  release()
+  await flush()
+  expect(api.store.batchDone).toBe(8)
+  expect(api.parsing.value).toBe(false)
+
+  // 指纹随移除释放：同一个 File 可重新加入
+  api.addFiles(queued.map((it) => ({ file: it.file! })))
+  expect(api.store.items.length).toBe(10)
+})
+
+it('批量移除已完成项：两本账同步减少（与单条移除语义一致）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  api.addFiles(Array.from({ length: 5 }, (_, i) => file(`g${i}.png`)))
+  await flush()
+  expect(api.store.batchDone).toBe(5)
+
+  api.removeItems(api.store.items.slice(1, 4))
+  expect(api.store.items.length).toBe(2)
+  expect(api.store.batchTotal).toBe(2)
+  expect(api.store.batchDone).toBe(2)
+  expect(api.parsing.value).toBe(false)
+})
+
 it('移除排队中的条目：出队且总数递减', async () => {
   let release!: () => void
   const gate = new Promise<void>((r) => (release = r))
@@ -483,6 +525,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     none: empty,
   })
   expect(api.parseQuery('   ')).toEqual({ all: empty, none: empty })
+  // 引号 + 否定组合：修复前分词正则先于 `-` 剥离执行，会在空格处被拆坏
+  expect(api.parseQuery('-"model:a b"')).toEqual({
+    all: empty,
+    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [] },
+  })
 })
 
 it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', async () => {
@@ -512,6 +559,8 @@ it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', as
   expect(names('-model:majic')).toEqual(['b.png'])
   // 引号包裹：含空格的普通词
   expect(names('"two words"')).toEqual(['a.png'])
+  // 引号 + 否定组合：含空格的字段值 / 普通词都能排除
+  expect(names('-"two words"')).toEqual(['b.png'])
   // 种子范围（数字字符串比较，不丢精度）
   expect(names('seed:>200000000')).toEqual(['b.png'])
   expect(names('seed:<=111222333')).toEqual(['a.png'])
@@ -544,6 +593,37 @@ it('按工作流聚类排序：同工作流相邻成组，组内新→旧（F3�
   expect(c.get(byName('a2.png'))).toEqual({ group: 0, seq: 1, total: 2 })
   expect(c.get(byName('a1.png'))).toEqual({ group: 0, seq: 2, total: 2 })
   expect(c.get(byName('b1.png'))).toEqual({ group: 1, seq: 1, total: 1 })
+  api.store.sortMode = 'default'
+})
+
+it('聚类指纹缓存随解析结果失效：结果应用前后分组正确更新', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const promptA = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5 } } })
+  vi.mocked(parser.parseImage).mockImplementation(() =>
+    gate.then(() => ({ raw: { source: 'comfyui', prompt: promptA } })),
+  )
+  api.addFiles([file('a1.png'), file('a2.png')])
+  api.store.sourceFilter = 'all'
+  api.store.sortMode = 'workflow'
+  // 结果应用前无 raw：各自成组（指纹缓存住 id 键）
+  expect(api.workflowClusters.value.get(api.store.items[0]!.id)).toEqual({
+    group: 0,
+    seq: 1,
+    total: 1,
+  })
+  expect(api.workflowClusters.value.get(api.store.items[1]!.id)).toEqual({
+    group: 1,
+    seq: 1,
+    total: 1,
+  })
+
+  release()
+  await flush()
+  // 应用后 raw 引用变化：缓存失效重新哈希，同工作流归入同组
+  const c = api.workflowClusters.value
+  expect(c.get(api.store.items[0]!.id)).toEqual({ group: 0, seq: 1, total: 2 })
+  expect(c.get(api.store.items[1]!.id)).toEqual({ group: 0, seq: 2, total: 2 })
   api.store.sortMode = 'default'
 })
 

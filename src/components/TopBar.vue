@@ -207,7 +207,7 @@ async function exportAs(key: string | number) {
         <p><code>seed:&gt;100</code> 种子范围（&gt; ≥ &lt; ≤）</p>
         <p><code>path:目录</code> 按相对路径</p>
         <p><code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）</p>
-        <p><code>"model:a b"</code> 引号包裹可含空格</p>
+        <p><code>"model:a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用</p>
         <p>多个正向条件空格分隔，全部满足才命中</p>
       </div>
     </NPopover>

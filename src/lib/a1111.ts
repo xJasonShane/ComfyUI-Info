@@ -97,7 +97,10 @@ export function parseA1111Parameters(text: string): ParsedParams {
 
   const steps = Number(pairs['Steps'])
   const cfg = Number(pairs['CFG scale'])
-  const seed = Number(pairs['Seed'])
+  // 种子保精度：ComfyUI 生态的 Civitai 兼容保存节点写出的 64 位种子超过 Number 安全范围，
+  // 过一遍 Number 会丢精度——校验为纯数字串后原样保留（与 parseWorkflow 的保精度策略一致）
+  const seed =
+    pairs['Seed'] !== undefined && /^\d+$/.test(pairs['Seed']) ? pairs['Seed'] : undefined
   const denoise = Number(pairs['Denoising strength'])
   // 出现 Hires* 键说明启用了高清修复：第二阶段按 img2img 重绘，未单独提供的参数继承一阶段
   const hires =
@@ -113,7 +116,7 @@ export function parseA1111Parameters(text: string): ParsedParams {
       cfg: Number.isFinite(cfg) ? cfg : undefined,
       sampler: pairs['Sampler'] || undefined,
       scheduler: pairs['Schedule type'] || undefined,
-      seed: Number.isFinite(seed) ? String(seed) : undefined,
+      seed,
       // Denoising strength 属于 img2img / 高清修复二阶段，txt2img 一阶段没有重绘幅度
       denoise: !hires && Number.isFinite(denoise) ? denoise : undefined,
     })
@@ -129,7 +132,7 @@ export function parseA1111Parameters(text: string): ParsedParams {
         cfg: Number.isFinite(hCfg) ? hCfg : undefined,
         sampler: pairs['Hires sampler'] || pairs['Sampler'] || undefined,
         scheduler: undefined,
-        seed: Number.isFinite(seed) ? String(seed) : undefined,
+        seed,
         denoise: Number.isFinite(hDenoise)
           ? hDenoise
           : Number.isFinite(denoise)

@@ -42,7 +42,7 @@ import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
-import { addFiles, filteredItems, parsing, rangeIds, removeItem, retryAllFailed, stats, store } from './composables/store'
+import { addFiles, filteredItems, parsing, rangeIds, removeItem, removeItems, retryAllFailed, stats, store } from './composables/store'
 import { buildExportCsv, buildExportJson, buildWorkflowZip } from './lib/export'
 import { copyText, downloadBinary, downloadText } from './lib/utils'
 import type { ImageItem, IncomingFile } from './types'
@@ -212,7 +212,7 @@ function clearSelection() {
 }
 
 function batchRemove() {
-  for (const it of selectedItems.value) removeItem(it)
+  removeItems(selectedItems.value)
   clearSelection()
 }
 
