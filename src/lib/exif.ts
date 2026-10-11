@@ -143,10 +143,6 @@ export function scanJpeg(bytes: Uint8Array): MetadataScan {
   return out
 }
 
-export function findJpegExifTiff(bytes: Uint8Array): Uint8Array | null {
-  return scanJpeg(bytes).exifTiff
-}
-
 /**
  * WebP（RIFF 容器）扫描：EXIF chunk（剥离 APP1 风格前缀）+ XMP chunk 检测。
  * EXIF / XMP 块位于图像数据之后，头部切片可能扫不到——VP8X 标志声明了
@@ -199,10 +195,6 @@ export function scanWebp(bytes: Uint8Array): MetadataScan {
   }
   rescan()
   return out
-}
-
-export function findWebpExifTiff(bytes: Uint8Array): Uint8Array | null {
-  return scanWebp(bytes).exifTiff
 }
 
 /** 读取 TIFF IFD0 中的 ASCII 字符串标签（如 Software 0x0131），用于诊断提示 */

@@ -5,8 +5,6 @@ import {
   extractUserCommentFromTiff,
   decodeUserComment,
   extractJsonSubstring,
-  findJpegExifTiff,
-  findWebpExifTiff,
   scanJpeg,
   scanWebp,
 } from '../src/lib/exif'
@@ -245,7 +243,7 @@ describe('EXIF UserComment', () => {
   it('JPEG ASCII 前缀', () => {
     const tiff = buildTiff(new Uint8Array(asciiUserComment(COMFY_PROMPT)))
     const jpeg = buildJpegWithExif(tiff)
-    const found = findJpegExifTiff(jpeg)
+    const found = scanJpeg(jpeg).exifTiff
     expect(found).not.toBeNull()
     const raw = extractUserCommentFromTiff(found!)
     expect(raw).not.toBeNull()
@@ -279,7 +277,7 @@ describe('EXIF UserComment', () => {
     full.set(chunkHeader, 12)
     full.set(tiff, 20)
     new DataView(full.buffer).setUint32(4, riffSize, true)
-    const found = findWebpExifTiff(full)
+    const found = scanWebp(full).exifTiff
     expect(found).not.toBeNull()
     expect(decodeUserComment(extractUserCommentFromTiff(found!)!)).toBe('hello')
   })

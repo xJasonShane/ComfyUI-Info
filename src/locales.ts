@@ -13,7 +13,6 @@ export type Locale = 'zh' | 'en'
 const zh = {
   /* 通用 */
   'common.copy': '复制',
-  'common.close': '关闭',
   'common.download': '下载',
   'common.retry': '重试',
   'common.copyFailed': '复制失败，请手动选择文本复制',
@@ -258,7 +257,6 @@ export type DictKey = keyof typeof zh
 /** en 与 zh 键一一对应：缺键 / 多键都是编译错误 */
 const en: Record<DictKey, string> = {
   'common.copy': 'Copy',
-  'common.close': 'Close',
   'common.download': 'Download',
   'common.retry': 'Retry',
   'common.copyFailed': 'Copy failed, please copy the text manually',
