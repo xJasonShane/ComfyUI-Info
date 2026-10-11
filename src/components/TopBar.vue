@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import {
+  NAlert,
   NButton,
   NDropdown,
   NInput,
+  NModal,
   NPopconfirm,
   NPopover,
   NSelect,
@@ -32,6 +34,7 @@ import {
   importArchive,
   modelOptions,
   parsing,
+  previewArchiveImport,
   retryPersistence,
   rescanAllDirectories,
   rescanDirectory,
@@ -46,7 +49,7 @@ import {
   toggleDark,
   toggleSafeMode,
 } from '../composables/store'
-import type { FilterPreset } from '../composables/store'
+import type { ArchiveImportPreview, FilterPreset } from '../composables/store'
 import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
 import { downloadText } from '../lib/utils'
@@ -220,6 +223,35 @@ const archiveOptions = computed(() => [
 ])
 
 const archiveInput = ref<HTMLInputElement | null>(null)
+const archivePreviewVisible = ref(false)
+const archiveImporting = ref(false)
+const archivePreview = ref<ArchiveImportPreview | null>(null)
+const archiveFileName = ref('')
+const archiveFileSize = ref(0)
+const pendingArchiveText = ref('')
+
+function formatArchiveSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function clearArchivePreview() {
+  archivePreviewVisible.value = false
+  archivePreview.value = null
+  pendingArchiveText.value = ''
+  archiveFileName.value = ''
+  archiveFileSize.value = 0
+}
+
+watch([archivePreviewVisible, archiveImporting], ([visible, importing]) => {
+  if (!visible && !importing) {
+    archivePreview.value = null
+    pendingArchiveText.value = ''
+    archiveFileName.value = ''
+    archiveFileSize.value = 0
+  }
+})
 
 async function onArchiveMenu(key: string | number) {
   if (key === 'export') {
@@ -242,7 +274,26 @@ async function onImportArchiveFile(e: Event) {
   input.value = ''
   if (!f) return
   try {
-    const { n, favs, tags } = await importArchive(await f.text())
+    const text = await f.text()
+    const preview = previewArchiveImport(text)
+    pendingArchiveText.value = text
+    archivePreview.value = preview
+    archiveFileName.value = f.name
+    archiveFileSize.value = f.size
+    archivePreviewVisible.value = true
+  } catch (err) {
+    message.error(
+      t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),
+    )
+  }
+}
+
+async function confirmArchiveImport() {
+  if (!pendingArchiveText.value || archiveImporting.value) return
+  archiveImporting.value = true
+  try {
+    const { n, favs, tags } = await importArchive(pendingArchiveText.value)
+    clearArchivePreview()
     if (n) message.success(t('msg.archiveImported', { n }))
     else message.info(t('msg.archiveAllExists'))
     if (favs) message.success(t('msg.archiveFavsMerged', { n: favs }))
@@ -251,6 +302,8 @@ async function onImportArchiveFile(e: Event) {
     message.error(
       t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),
     )
+  } finally {
+    archiveImporting.value = false
   }
 }
 
@@ -623,6 +676,71 @@ function savePreset() {
     <StatsDrawer v-model:show="showStats" />
 
     <ModelDrawer v-model:show="showModels" />
+
+    <NModal
+      v-model:show="archivePreviewVisible"
+      preset="card"
+      :title="t('archive.previewTitle')"
+      :closable="!archiveImporting"
+      :mask-closable="!archiveImporting"
+      style="width: 520px; max-width: calc(100vw - 32px)"
+    >
+      <div v-if="archivePreview" style="display: grid; gap: 12px">
+        <div style="color: var(--text-muted, #888); overflow-wrap: anywhere">
+          {{
+            t('archive.previewFile', {
+              name: archiveFileName,
+              size: formatArchiveSize(archiveFileSize),
+            })
+          }}
+        </div>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; color: var(--text-muted, #888)">
+          <span>
+            {{
+              t('archive.previewVersion', {
+                version: archivePreview.version ?? t('archive.previewLegacyVersion'),
+              })
+            }}
+          </span>
+          <span v-if="archivePreview.exportedAt">
+            {{ t('archive.previewDate', { date: archivePreview.exportedAt }) }}
+          </span>
+        </div>
+        <NAlert v-if="archivePreview.warningCount" type="warning" :show-icon="false">
+          {{ t('archive.previewWarnings', { n: archivePreview.warningCount }) }}
+        </NAlert>
+        <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px 16px">
+          <span>{{ t('archive.previewRecords') }}</span>
+          <strong>{{ archivePreview.records }}</strong>
+          <span>{{ t('archive.previewInvalid') }}</span>
+          <strong>{{ archivePreview.invalidRecords }}</strong>
+          <span>{{ t('archive.previewDuplicates') }}</span>
+          <strong>{{ archivePreview.duplicateRecords }}</strong>
+          <span>{{ t('archive.previewAlreadyPresent') }}</span>
+          <strong>{{ archivePreview.alreadyPresent }}</strong>
+          <span>{{ t('archive.previewWillImport') }}</span>
+          <strong>{{ archivePreview.willImport }}</strong>
+          <span>{{ t('archive.previewFavorites') }}</span>
+          <strong>{{ archivePreview.favorites }}</strong>
+          <span>{{ t('archive.previewNewFavorites') }}</span>
+          <strong>{{ archivePreview.newFavorites }}</strong>
+          <span>{{ t('archive.previewTagRecords') }}</span>
+          <strong>{{ archivePreview.tagRecords }}</strong>
+          <span>{{ t('archive.previewChangedTagRecords') }}</span>
+          <strong>{{ archivePreview.changedTagRecords }}</strong>
+        </div>
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <NButton :disabled="archiveImporting" @click="clearArchivePreview">
+            {{ t('archive.previewCancel') }}
+          </NButton>
+          <NButton type="primary" :loading="archiveImporting" @click="confirmArchiveImport">
+            {{ archiveImporting ? t('archive.previewImporting') : t('archive.previewConfirm') }}
+          </NButton>
+        </div>
+      </template>
+    </NModal>
 
     <input
       ref="fileInput"

@@ -25,16 +25,17 @@ import {
   clearPersisted,
   deletePersisted,
   fromRecord,
+  inspectArchive,
   importPersisted,
   loadDirBookmarks,
   loadPersisted,
-  parseArchive,
   probePersistence,
   putPersisted,
   recordKey,
   saveDirBookmark,
   serializeArchive,
   toRecord,
+  type ArchiveInspection,
   type DirBookmark,
   type PersistRecord,
 } from '../lib/persist'
@@ -1092,26 +1093,41 @@ async function restoreArchivedInChunks(records: PersistRecord[], cancelled = () 
 
 /* ---------- 存档备份（FEAT-6：防清库 / 跨设备迁移） ---------- */
 
-/** 当前列表全部可存档项 → 备份文本（含参数、诊断信息、收藏标记与标签，不含图片本体） */
-export function buildArchiveBackup(): { text: string; count: number } {
-  const records = state.items.map(toRecord).filter((r) => r !== null)
-  return { text: serializeArchive(records, [...favKeys], { ...itemTags }), count: records.length }
+export interface ArchiveImportPreview {
+  version?: number
+  exportedAt?: string
+  records: number
+  invalidRecords: number
+  duplicateRecords: number
+  alreadyPresent: number
+  willImport: number
+  favorites: number
+  newFavorites: number
+  tagRecords: number
+  changedTagRecords: number
+  warningCount: number
 }
 
-/**
- * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数与
- * 合并的收藏标记数、新增标签的指纹数（备份里的收藏 / 标签按指纹并入本机账本，
- * 存档卡片即带星标与标签）；持久化不可用时仅恢复到本会话内存。
- * 备份结构非法时抛错由调用方提示。
- */
-export async function importArchive(
-  text: string,
-): Promise<{ n: number; favs: number; tags: number }> {
-  const { records, favorites, tags } = parseArchive(text)
+interface PreparedArchiveImport {
+  inspection: ArchiveInspection
+  localRecords: PersistRecord[]
+  fresh: PersistRecord[]
+  localFavorites: string[]
+  localTags: Record<string, string[]>
+  duplicateRecords: number
+}
+
+/** Share identity remapping between preview and commit so the counts match the import path. */
+function prepareArchiveImport(text: string): PreparedArchiveImport {
+  const inspection = inspectArchive(text)
+  const { records, favorites, tags } = inspection
   // 来源 ID 是目录句柄的本机身份。当前机器已有同一来源时保留它以便幂等导入；
   // 外部备份的 ID 加 imported 前缀，重新选择本机目录时可按唯一旧路径别名迁移。
   const remappedKeys = new Map<string, string>()
-  const localRecords = records.map((rec) => {
+  const localRecords: PersistRecord[] = []
+  const localKeys = new Set<string>()
+  let duplicateRecords = inspection.duplicateRecords
+  for (const rec of records) {
     const alreadyKnown = seenKeys.has(rec.key) || detachedByKey.has(rec.key)
     const sourceId =
       rec.sourceId &&
@@ -1128,15 +1144,67 @@ export async function importArchive(
       mtime: rec.mtime,
     })
     remappedKeys.set(rec.key, key)
-    return { ...rec, sourceId, key }
-  })
-  const localFavorites = favorites.map((key) => remappedKeys.get(key) ?? key)
+    if (localKeys.has(key)) {
+      duplicateRecords++
+      continue
+    }
+    localKeys.add(key)
+    localRecords.push({ ...rec, sourceId, key })
+  }
+  const localFavorites = [...new Set(favorites.map((key) => remappedKeys.get(key) ?? key))]
   const localTags: Record<string, string[]> = {}
   for (const [key, names] of Object.entries(tags)) {
     const mapped = remappedKeys.get(key) ?? key
     localTags[mapped] = [...new Set([...(localTags[mapped] ?? []), ...names])]
   }
   const fresh = localRecords.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
+  return { inspection, localRecords, fresh, localFavorites, localTags, duplicateRecords }
+}
+
+/** Validate without mutation and report what the eventual import will add or skip. */
+export function previewArchiveImport(text: string): ArchiveImportPreview {
+  const prepared = prepareArchiveImport(text)
+  let newFavorites = 0
+  for (const key of prepared.localFavorites) if (!favKeys.has(key)) newFavorites++
+  let changedTagRecords = 0
+  for (const [key, names] of Object.entries(prepared.localTags)) {
+    const existing = itemTags[key] ?? []
+    if (names.some((name) => !existing.includes(name))) changedTagRecords++
+  }
+  return {
+    version: prepared.inspection.version,
+    exportedAt: prepared.inspection.exportedAt,
+    records: prepared.inspection.records.length,
+    invalidRecords: prepared.inspection.invalidRecords,
+    duplicateRecords: prepared.duplicateRecords,
+    alreadyPresent: prepared.localRecords.length - prepared.fresh.length,
+    willImport: prepared.fresh.length,
+    favorites: prepared.localFavorites.length,
+    newFavorites,
+    tagRecords: Object.keys(prepared.localTags).length,
+    changedTagRecords,
+    warningCount:
+      prepared.inspection.warningCount +
+      (prepared.duplicateRecords - prepared.inspection.duplicateRecords),
+  }
+}
+
+/** 当前列表全部可存档项 → 备份文本（含参数、诊断信息、收藏标记与标签，不含图片本体） */
+export function buildArchiveBackup(): { text: string; count: number } {
+  const records = state.items.map(toRecord).filter((r) => r !== null)
+  return { text: serializeArchive(records, [...favKeys], { ...itemTags }), count: records.length }
+}
+
+/**
+ * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数与
+ * 合并的收藏标记数、新增标签的指纹数（备份里的收藏 / 标签按指纹并入本机账本，
+ * 存档卡片即带星标与标签）；持久化不可用时仅恢复到本会话内存。
+ * 备份结构非法时抛错由调用方提示。
+ */
+export async function importArchive(
+  text: string,
+): Promise<{ n: number; favs: number; tags: number }> {
+  const { fresh, localFavorites, localTags } = prepareArchiveImport(text)
   if (persistAvailable) {
     const written = await importPersisted(fresh)
     restoreArchived(written)

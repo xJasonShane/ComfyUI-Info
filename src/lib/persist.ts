@@ -494,6 +494,18 @@ export async function clearDirBookmarks(): Promise<void> {
 
 const ARCHIVE_VERSION = 3
 
+export interface ArchiveInspection {
+  records: PersistRecord[]
+  favorites: string[]
+  tags: Record<string, string[]>
+  /** Missing version is accepted as an unversioned legacy archive. */
+  version?: number
+  exportedAt?: string
+  invalidRecords: number
+  duplicateRecords: number
+  warningCount: number
+}
+
 /**
  * 存档备份序列化：与存档记录同构（含参数与诊断信息，不含图片本体）。
  * favorites 为收藏标记的指纹键列表，tags 为「指纹键 → 标签名列表」映射
@@ -520,33 +532,266 @@ export function serializeArchive(
   )
 }
 
-/** 解析存档备份：剔除无法识别的条目；整体结构不对时抛错由调用方提示 */
-export function parseArchive(text: string): {
-  records: PersistRecord[]
-  favorites: string[]
-  tags: Record<string, string[]>
-} {
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value)
+
+const isImageSource = (value: unknown): value is ImageSource =>
+  value === 'comfyui' || value === 'a1111' || value === 'none'
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isFiniteOptionalNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function normalizeParsedParams(value: unknown): ParsedParams | null {
+  if (!isObject(value)) return null
+  if (
+    !isStringArray(value.positive) ||
+    !isStringArray(value.negative) ||
+    !isStringArray(value.models) ||
+    (value.vaes !== undefined && !isStringArray(value.vaes)) ||
+    (value.upscalers !== undefined && !isStringArray(value.upscalers)) ||
+    (value.controlNets !== undefined && !isStringArray(value.controlNets)) ||
+    !Array.isArray(value.loras) ||
+    !Array.isArray(value.samplers) ||
+    (value.nodeCount !== undefined &&
+      (typeof value.nodeCount !== 'number' || !Number.isFinite(value.nodeCount)))
+  )
+    return null
+  if (
+    (value.modelHash !== undefined && typeof value.modelHash !== 'string') ||
+    (value.rawText !== undefined && typeof value.rawText !== 'string') ||
+    !isFiniteOptionalNumber(value.width) ||
+    !isFiniteOptionalNumber(value.height) ||
+    !isFiniteOptionalNumber(value.batch) ||
+    !isFiniteOptionalNumber(value.clipSkip)
+  )
+    return null
+  if (
+    !value.loras.every(
+      (item) =>
+        isObject(item) &&
+        typeof item.name === 'string' &&
+        isFiniteOptionalNumber(item.strengthModel) &&
+        isFiniteOptionalNumber(item.strengthClip) &&
+        (item.hash === undefined || typeof item.hash === 'string'),
+    ) ||
+    !value.samplers.every(
+      (item) =>
+        isObject(item) &&
+        typeof item.nodeId === 'string' &&
+        typeof item.classType === 'string' &&
+        isFiniteOptionalNumber(item.steps) &&
+        isFiniteOptionalNumber(item.cfg) &&
+        isFiniteOptionalNumber(item.denoise) &&
+        (item.sampler === undefined || typeof item.sampler === 'string') &&
+        (item.scheduler === undefined || typeof item.scheduler === 'string') &&
+        (item.seed === undefined || typeof item.seed === 'string'),
+    )
+  )
+    return null
+  return {
+    positive: value.positive as string[],
+    negative: value.negative as string[],
+    models: value.models as string[],
+    loras: value.loras as ParsedParams['loras'],
+    samplers: value.samplers as ParsedParams['samplers'],
+    vaes: (value.vaes as string[] | undefined) ?? [],
+    upscalers: (value.upscalers as string[] | undefined) ?? [],
+    controlNets: (value.controlNets as string[] | undefined) ?? [],
+    nodeCount: (value.nodeCount as number | undefined) ?? 0,
+    ...(typeof value.modelHash === 'string' ? { modelHash: value.modelHash } : {}),
+    ...(typeof value.rawText === 'string' ? { rawText: value.rawText } : {}),
+    ...(typeof value.width === 'number' ? { width: value.width } : {}),
+    ...(typeof value.height === 'number' ? { height: value.height } : {}),
+    ...(typeof value.batch === 'number' ? { batch: value.batch } : {}),
+    ...(typeof value.clipSkip === 'number' ? { clipSkip: value.clipSkip } : {}),
+  }
+}
+
+/** Normalize archive records before they reach rendering, search, or persistence code. */
+function normalizeArchiveRecord(value: unknown): PersistRecord | null {
+  if (!isObject(value)) return null
+  const source = value.source
+  const status = value.status
+  const raw = value.raw
+  const params = value.params === undefined ? undefined : normalizeParsedParams(value.params)
+  if (
+    typeof value.key !== 'string' ||
+    !value.key.trim() ||
+    typeof value.name !== 'string' ||
+    !value.name.trim() ||
+    typeof value.size !== 'number' ||
+    !Number.isFinite(value.size) ||
+    value.size < 0 ||
+    typeof value.mtime !== 'number' ||
+    !Number.isFinite(value.mtime) ||
+    value.mtime < 0 ||
+    (status !== 'done' && status !== 'error') ||
+    !isImageSource(source) ||
+    !isObject(raw) ||
+    (raw.source !== undefined && (!isImageSource(raw.source) || raw.source !== source)) ||
+    (value.path !== undefined && typeof value.path !== 'string') ||
+    (value.sourceId !== undefined && (typeof value.sourceId !== 'string' || !value.sourceId)) ||
+    (value.error !== undefined && typeof value.error !== 'string') ||
+    (value.params !== undefined && !params)
+  )
+    return null
+
+  for (const key of ['prompt', 'workflow', 'parameters'] as const) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'string') return null
+  }
+  if (raw.hints !== undefined && !isStringArray(raw.hints)) return null
+  if (value.savedAt !== undefined && (typeof value.savedAt !== 'number' || !Number.isFinite(value.savedAt))) {
+    return null
+  }
+
+  const normalizedRaw: RawMetadata = {
+    source,
+    ...(typeof raw.prompt === 'string' ? { prompt: raw.prompt } : {}),
+    ...(typeof raw.workflow === 'string' ? { workflow: raw.workflow } : {}),
+    ...(typeof raw.parameters === 'string' ? { parameters: raw.parameters } : {}),
+    ...(Array.isArray(raw.hints) ? { hints: raw.hints as string[] } : {}),
+  }
+  return {
+    key: value.key,
+    name: value.name,
+    path: value.path as string | undefined,
+    sourceId: value.sourceId as string | undefined,
+    size: value.size,
+    mtime: value.mtime,
+    status,
+    source,
+    raw: normalizedRaw,
+    params: params ?? undefined,
+    error: value.error as string | undefined,
+    // Older archives may omit savedAt. mtime is the closest stable fallback.
+    savedAt: (value.savedAt as number | undefined) ?? value.mtime,
+  }
+}
+
+/** Inspect archive structure and records, retaining counts for a safe import preview. */
+export function inspectArchive(text: string): ArchiveInspection {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     throw new Error('不是有效的 JSON 文件')
   }
-  const o = parsed as { records?: unknown; favorites?: unknown; tags?: unknown }
-  if (!o || !Array.isArray(o.records)) throw new Error('缺少 records 数组，不是存档备份文件')
-  const favorites = Array.isArray(o.favorites)
-    ? o.favorites.filter((k): k is string => typeof k === 'string')
-    : []
-  const tags: Record<string, string[]> = {}
-  if (o.tags && typeof o.tags === 'object' && !Array.isArray(o.tags)) {
-    for (const [k, v] of Object.entries(o.tags as Record<string, unknown>)) {
-      if (Array.isArray(v)) {
-        const names = v.filter((t): t is string => typeof t === 'string' && t.trim() !== '')
-        if (names.length) tags[k] = [...new Set(names)]
+  if (!isObject(parsed) || !Array.isArray(parsed.records)) {
+    throw new Error('缺少 records 数组，不是存档备份文件')
+  }
+  const o = parsed
+  if (
+    o.version !== undefined &&
+    (typeof o.version !== 'number' ||
+      !Number.isInteger(o.version) ||
+      o.version < 1 ||
+      o.version > ARCHIVE_VERSION)
+  ) {
+    throw new Error(`不支持的存档版本：${String(o.version)}（当前支持 1–${ARCHIVE_VERSION}）`)
+  }
+
+  let warningCount = 0
+  if (o.count !== undefined) {
+    if (typeof o.count !== 'number' || !Number.isInteger(o.count) || o.count < 0) warningCount++
+    else if (o.count !== o.records.length) warningCount++
+  }
+  const exportedAt =
+    typeof o.exportedAt === 'string' && Number.isFinite(Date.parse(o.exportedAt))
+      ? o.exportedAt
+      : undefined
+  if (o.exportedAt !== undefined && exportedAt === undefined) warningCount++
+
+  const records: PersistRecord[] = []
+  const recordKeys = new Set<string>()
+  let invalidRecords = 0
+  let duplicateRecords = 0
+  for (const value of o.records) {
+    const rec = normalizeArchiveRecord(value)
+    if (!rec) {
+      invalidRecords++
+      continue
+    }
+    if (recordKeys.has(rec.key)) {
+      duplicateRecords++
+      continue
+    }
+    recordKeys.add(rec.key)
+    records.push(rec)
+  }
+  warningCount += invalidRecords + duplicateRecords
+
+  const favorites: string[] = []
+  const favoriteKeys = new Set<string>()
+  if (o.favorites !== undefined) {
+    if (!Array.isArray(o.favorites)) warningCount++
+    else {
+      for (const key of o.favorites) {
+        if (typeof key !== 'string' || !key.trim()) {
+          warningCount++
+          continue
+        }
+        if (favoriteKeys.has(key)) {
+          warningCount++
+          continue
+        }
+        favoriteKeys.add(key)
+        favorites.push(key)
       }
     }
   }
-  return { records: o.records.filter(isValidRecord), favorites, tags }
+  const tags: Record<string, string[]> = {}
+  if (o.tags !== undefined) {
+    if (!isObject(o.tags)) warningCount++
+    else {
+      for (const [key, value] of Object.entries(o.tags)) {
+        if (
+          !key.trim() ||
+          key === '__proto__' ||
+          key === 'constructor' ||
+          key === 'prototype' ||
+          !Array.isArray(value)
+        ) {
+          warningCount++
+          continue
+        }
+        const names: string[] = []
+        for (const name of value) {
+          if (typeof name !== 'string' || !name.trim()) {
+            warningCount++
+            continue
+          }
+          if (!names.includes(name)) names.push(name)
+          else warningCount++
+        }
+        if (names.length) tags[key] = names
+      }
+    }
+  }
+  return {
+    records,
+    favorites,
+    tags,
+    version: typeof o.version === 'number' ? o.version : undefined,
+    exportedAt,
+    invalidRecords,
+    duplicateRecords,
+    warningCount,
+  }
+}
+
+/** Parse archive payload while retaining the long-standing public return shape. */
+export function parseArchive(text: string): {
+  records: PersistRecord[]
+  favorites: string[]
+  tags: Record<string, string[]>
+} {
+  const { records, favorites, tags } = inspectArchive(text)
+  return { records, favorites, tags }
 }
 
 /** 导入存档：与库存同指纹（key）的记录跳过，返回实际写入的新记录 */
