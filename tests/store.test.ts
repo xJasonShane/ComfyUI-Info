@@ -1631,3 +1631,50 @@ describe('dirStats', () => {
     ])
   })
 })
+
+describe('resolutionStats', () => {
+  const mk = (id: string, width?: number, height?: number) => ({
+    id,
+    url: '',
+    name: `${id}.png`,
+    size: 1,
+    mtime: 1,
+    status: 'done' as const,
+    source: 'comfyui' as const,
+    raw: { source: 'comfyui' as const },
+    params: {
+      positive: [],
+      negative: [],
+      models: [],
+      loras: [],
+      samplers: [],
+      vaes: [],
+      upscalers: [],
+      controlNets: [],
+      nodeCount: 0,
+      ...(width !== undefined && height !== undefined ? { width, height } : {}),
+    },
+  })
+
+  it('按参数出图尺寸聚合频次（次数降序），无尺寸参数的条目不参与', () => {
+    api.store.items.push(
+      mk('1', 1024, 1024),
+      mk('2', 1024, 1024),
+      mk('3', 512, 768),
+      mk('4'), // 未解析出尺寸
+      // 解析中（无 params）不参与；与 usageStats 同语义：按参数 presence 计数
+      { ...mk('5'), status: 'pending' as const },
+    )
+    expect(api.resolutionStats.value).toEqual([
+      { name: '1024×1024', count: 2 },
+      { name: '512×768', count: 1 },
+    ])
+  })
+
+  it('点击分辨率写为 w/h 精确数值条件（统计抽屉 pick 的搜索语义）', () => {
+    api.store.items.push(mk('1', 1024, 1024), mk('2', 512, 768))
+    api.store.search = 'w:1024 h:1024'
+    expect(api.filteredItems.value.map((i) => i.name)).toEqual(['1.png'])
+    api.store.search = ''
+  })
+})

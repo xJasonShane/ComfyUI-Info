@@ -867,6 +867,23 @@ export const dirStats = computed<UsageStat[]>(() => {
 })
 
 /**
+ * 分辨率分布：按参数出图尺寸 w×h 聚合频次（次数降序，同频次按名排序，最多 20 条），
+ * 点击应用 `w:W h:H` 数值条件筛选。无参数尺寸的条目（未解析 / 纯提示词）不参与。
+ */
+export const resolutionStats = computed<UsageStat[]>(() => {
+  const freq = new Map<string, number>()
+  for (const it of state.items) {
+    const p = it.params
+    if (!p?.width || !p?.height) continue
+    const key = `${p.width}×${p.height}`
+    freq.set(key, (freq.get(key) ?? 0) + 1)
+  }
+  return Array.from(freq, ([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || nameCollator.compare(a.name, b.name))
+    .slice(0, DIR_STAT_LIMIT)
+})
+
+/**
  * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数 + VAE / 放大模型 /
  * ControlNet，按任意生成要素定位图片。
  * 在解析结果落定时（parseItem）构建一次并小写化，应用时挂上，筛选热路径不再重复拼接；
