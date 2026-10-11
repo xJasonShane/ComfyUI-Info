@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
 import {
@@ -29,6 +29,13 @@ const broken = ref(false)
 onMounted(() => {
   ensureItemUrl(props.item)
   if (props.item.detached) void ensureItemThumb(props.item)
+  // 任何滚动都收起预览：虚拟滚动 / 抽屉滚动会让固定定位的预览指向错误的卡片
+  window.addEventListener('scroll', hidePreview, { passive: true, capture: true })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', hidePreview, { capture: true })
+  hidePreview()
 })
 
 /** F3：聚类排序模式下展示「同工作流第 x/y 张」 */
@@ -49,6 +56,39 @@ const showImg = computed(
 )
 
 const imgSrc = computed(() => props.item.url || props.item.thumb)
+
+/* ---------- G1：悬停快速预览 ---------- */
+// 卡片是 1:1 裁切构图，看原比例要逐张开详情——悬停停顿 350ms 后在卡片旁
+// 浮出未裁切的大图（pointer-events:none 纯展示）。安全模式不弹（防走光语义优先）。
+const cardEl = ref<HTMLElement | null>(null)
+const previewPos = ref<{ x: number; y: number } | null>(null)
+let previewTimer = 0
+
+function hidePreview() {
+  if (previewTimer) {
+    clearTimeout(previewTimer)
+    previewTimer = 0
+  }
+  previewPos.value = null
+}
+
+function onCardEnter() {
+  hidePreview()
+  if (store.safeMode || props.item.metaOnly || props.item.status === 'error') return
+  if (!props.item.url && !props.item.thumb) return
+  previewTimer = window.setTimeout(() => {
+    previewTimer = 0
+    const rect = cardEl.value?.getBoundingClientRect()
+    if (!rect) return
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    // 优先卡片右侧，空间不足放左侧；纵向钳在视口上部（预览最高 60vh）
+    const w = Math.min(420, vw * 0.38)
+    const x = rect.right + 12 + w <= vw ? rect.right + 12 : Math.max(8, rect.left - 12 - w)
+    const y = Math.max(8, Math.min(rect.top, vh * 0.4))
+    previewPos.value = { x, y }
+  }, 350)
+}
 
 /** Ctrl/⌘+点击或点击指示器切换选中，Shift+点击区间选择，普通点击打开详情 */
 function onClick(e: MouseEvent) {
@@ -97,6 +137,7 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
 
 <template>
   <div
+    ref="cardEl"
     class="card"
     :class="{
       'card-error': item.status === 'error',
@@ -114,6 +155,8 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
         : displayPath
     "
     @click="onClick"
+    @mouseenter="onCardEnter"
+    @mouseleave="hidePreview"
     @keydown.enter.exact.prevent="$emit('open')"
     @keydown.space.exact.prevent="$emit('open')"
     @keydown.ctrl.space.prevent="$emit('select-toggle')"
@@ -181,5 +224,16 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
       <span class="model">{{ modelShort }}</span>
       <span class="dims">{{ dims }}</span>
     </div>
+    <!-- G1：悬停快速预览。Teleport 到 body：卡片入场动画的 transform 会让 fixed 定位
+         相对卡片而非视口，Portal 出去才拿得到真实视口坐标 -->
+    <Teleport to="body">
+      <img
+        v-if="previewPos"
+        class="card-quick-preview"
+        :src="imgSrc"
+        :style="{ left: `${previewPos.x}px`, top: `${previewPos.y}px` }"
+        alt=""
+      />
+    </Teleport>
   </div>
 </template>

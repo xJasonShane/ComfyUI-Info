@@ -8,6 +8,7 @@ import { computed } from 'vue'
 import { NButton, NInput, NPopover } from 'naive-ui'
 import Icon from './Icon.vue'
 import { clearSearchHistory, recentSearches, store } from '../composables/store'
+import { queryWarnings, type QueryWarning } from '../lib/query'
 import { t } from '../locales'
 
 /** 语法速查条目（随界面语言切换重渲染） */
@@ -28,6 +29,25 @@ const helpLines = computed(() => [
   t('help.quoted'),
   t('help.and'),
 ])
+
+/** 语法诊断（A5）：非法 date / seed / 数值值、未知字段等「永远不命中」的条件显式化 */
+const warnings = computed(() => queryWarnings(store.search))
+
+function warnText(w: QueryWarning): string {
+  switch (w.kind) {
+    case 'empty-value':
+      return t('search.warn.empty-value', { token: w.token })
+    case 'bad-date':
+      return t('search.warn.bad-date', { token: w.token })
+    case 'bad-seed':
+      return t('search.warn.bad-seed', { token: w.token })
+    case 'bad-num':
+      return t('search.warn.bad-num', { token: w.token })
+    case 'unknown-has':
+      return t('search.warn.unknown-has', { token: w.token })
+  }
+}
+const warningLines = computed(() => warnings.value.map(warnText))
 </script>
 
 <template>
@@ -47,6 +67,25 @@ const helpLines = computed(() => [
     <div class="search-help">
       <b>{{ t('help.title') }}</b>
       <p v-for="line in helpLines" :key="line" v-html="line" />
+    </div>
+  </NPopover>
+
+  <!-- 语法诊断（A5）：存在「永远不命中」的条件时显示警告入口，点开看具体原因 -->
+  <NPopover v-if="warnings.length" trigger="hover" placement="bottom-start">
+    <template #trigger>
+      <NButton
+        size="small"
+        quaternary
+        circle
+        type="warning"
+        :aria-label="t('search.warningAria')"
+        :title="t('search.warningAria')"
+      >
+        <template #icon><Icon name="alert-triangle" :size="15" /></template>
+      </NButton>
+    </template>
+    <div class="search-warning" role="alert">
+      <p v-for="(line, i) in warningLines" :key="i">{{ line }}</p>
     </div>
   </NPopover>
 

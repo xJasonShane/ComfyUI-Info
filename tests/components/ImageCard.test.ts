@@ -93,4 +93,44 @@ describe('ImageCard', () => {
     await wrapper.find('.card-fav').trigger('click')
     expect(wrapper.emitted('toggle-fav')).toHaveLength(1)
   })
+
+  it('悬停停顿 350ms 浮出未裁切预览，移出即收起；安全模式不弹（G1）', async () => {
+    vi.useFakeTimers()
+    try {
+      // 直挂 url 的实时项（非存档）：预览只在有可显示图时出现
+      const live: ImageItem = {
+        id: 'live-1',
+        url: 'blob:live',
+        name: 'a.png',
+        size: 1,
+        mtime: 1,
+        status: 'done',
+        source: 'comfyui',
+        raw: { source: 'comfyui' },
+      }
+      const w = mountCard(live)
+      await w.find('.card').trigger('mouseenter')
+      // 停顿未到：不弹（快速滑过不闪烁）
+      expect(document.querySelector('.card-quick-preview')).toBeNull()
+      await vi.advanceTimersByTimeAsync(350)
+      await w.vm.$nextTick()
+      const preview = document.querySelector<HTMLImageElement>('.card-quick-preview')
+      expect(preview).not.toBeNull()
+      expect(preview?.getAttribute('src')).toBe('blob:live')
+      // 移出即收起
+      await w.find('.card').trigger('mouseleave')
+      expect(document.querySelector('.card-quick-preview')).toBeNull()
+
+      // 安全模式：不弹（防走光语义优先于快捷预览）
+      store.safeMode = true
+      await w.find('.card').trigger('mouseenter')
+      await vi.advanceTimersByTimeAsync(350)
+      await w.vm.$nextTick()
+      expect(document.querySelector('.card-quick-preview')).toBeNull()
+      store.safeMode = false
+      w.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

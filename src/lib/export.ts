@@ -387,6 +387,27 @@ async function buildZip(entries: ZipEntry[]): Promise<Blob> {
 }
 
 /**
+ * ZIP 条目名消毒（C4）：逐段解析路径——剥除控制字符与盘符、折叠分隔符、消解
+ * `.` / `..` 段（越出根界直接钳掉），段内 Windows 非法字符替换为下划线。
+ * 产出永远是干净的相对路径，杜绝导入数据携带的恶意路径在解压端逃出目标目录（zip-slip）。
+ */
+function safeZipPath(s: string): string {
+  // 本正则的目的就是剥除控制字符——no-control-regex 在此属于误报
+  // eslint-disable-next-line no-control-regex
+  const cleaned = s.replace(/[\x00-\x1f\x7f]/g, '').replace(/^[a-zA-Z]:/, '')
+  const stack: string[] = []
+  for (const part of cleaned.split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      stack.pop()
+      continue
+    }
+    stack.push(part.replace(/[:*?"<>|]/g, '_'))
+  }
+  return stack.join('/')
+}
+
+/**
  * 把选中 / 筛选结果的工作流打包为 ZIP：
  * 每张图按相对路径展开 prompt.json / workflow.json（A1111 项为 parameters.txt），
  * 附 manifest.json（与 JSON 导出同构）。条目名为空时返回 null。
@@ -407,9 +428,8 @@ export async function buildWorkflowZip(items: ImageItem[]): Promise<Blob | null>
     return bytes
   }
   const entries: ZipEntry[] = []
-  const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   for (const it of items) {
-    const stem = safe((it.path ?? it.name).replace(/\.[^./\\]+$/, ''))
+    const stem = safeZipPath((it.path ?? it.name).replace(/\.[^./\\]+$/, ''))
     if (it.raw.prompt) {
       entries.push({ name: `${stem}.prompt.json`, data: encode(it.raw.prompt) })
     }
@@ -455,11 +475,10 @@ export async function buildImagesZip(items: ImageItem[]): Promise<Blob | null> {
     files.length,
     files.reduce((n, it) => n + (it.file?.size ?? 0), 0),
   )
-  const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   const used = new Set<string>()
   const entries: ZipEntry[] = []
   for (const it of files) {
-    const rawName = safe(it.path ?? it.name)
+    const rawName = safeZipPath(it.path ?? it.name)
     let name = rawName
     for (let n = 2; used.has(name); n++) {
       const dot = rawName.lastIndexOf('.')
@@ -486,12 +505,11 @@ export async function buildDatasetZip(items: ImageItem[]): Promise<Blob | null> 
     files.length * 2,
     files.reduce((n, it) => n + (it.file?.size ?? 0), 0),
   )
-  const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   const encoder = new TextEncoder()
   const used = new Set<string>()
   const entries: ZipEntry[] = []
   for (const it of files) {
-    const rawName = safe(it.path ?? it.name)
+    const rawName = safeZipPath(it.path ?? it.name)
     let name = rawName
     for (let n = 2; used.has(name); n++) {
       const dot = rawName.lastIndexOf('.')

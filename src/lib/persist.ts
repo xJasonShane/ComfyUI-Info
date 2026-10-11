@@ -382,6 +382,49 @@ export async function probePersistence(): Promise<boolean> {
   }
 }
 
+/* ---------- 持久存储与配额（C1）：防浏览器静默清库 ---------- */
+
+let storagePersisted: boolean | null = null
+
+/** 持久存储授予状态：true 已授予 / false 被拒或环境不支持 / null 尚未申请 */
+export function storagePersistedState(): boolean | null {
+  return storagePersisted
+}
+
+/**
+ * 申请持久存储：IndexedDB 属 best-effort 存储，磁盘压力下浏览器可静默整库驱逐
+ * ——对万级存档是最大的数据风险。persist() 授予后存档不再被自动清除
+ * （Chromium 对已交互站点自动授予，Firefox 弹权限条）。探测成功后申请一次，结果缓存。
+ */
+export function requestPersistentStorage(): void {
+  if (storagePersisted !== null) return
+  const storage = navigator.storage
+  if (!storage?.persist) {
+    storagePersisted = false
+    return
+  }
+  void storage
+    .persist()
+    .then((granted) => {
+      storagePersisted = granted
+    })
+    .catch(() => {
+      storagePersisted = false
+    })
+}
+
+/** 存档占用估算（UI 展示用）；环境不支持 / 读取失败返回 null */
+export async function storageEstimate(): Promise<{ usage: number; quota: number } | null> {
+  try {
+    const est = await navigator.storage?.estimate?.()
+    return est && typeof est.usage === 'number' && typeof est.quota === 'number'
+      ? { usage: est.usage, quota: est.quota }
+      : null
+  } catch {
+    return null
+  }
+}
+
 /** 读取全部存档：v3 记录按 blobs 物化，v2 旧记录原样可用并写回迁移 */
 export async function loadPersisted(): Promise<PersistRecord[]> {
   const db = await getDb()

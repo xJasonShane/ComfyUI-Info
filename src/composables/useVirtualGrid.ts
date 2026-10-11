@@ -48,8 +48,12 @@ export function useVirtualGrid(items: Ref<ImageItem[]>, cardMin: Ref<number>) {
     if (!rowH.value) return items.value.slice(0, FIRST_PAGE)
     return items.value.slice(startRow.value * cols.value, endRow.value * cols.value)
   })
-  const topPad = computed(() => startRow.value * rowH.value)
-  const bottomPad = computed(() => Math.max(0, (totalRows.value - endRow.value) * rowH.value))
+  // 首帧 galleryWidth 未量得时 rowH=0，startRow/endRow 是 Infinity/NaN——
+  // 与 visibleItems 的 FIRST_PAGE 守卫同理，padding 必须钳 0，否则 NaN 直入模板 style
+  const topPad = computed(() => (rowH.value ? startRow.value * rowH.value : 0))
+  const bottomPad = computed(() =>
+    rowH.value ? Math.max(0, (totalRows.value - endRow.value) * rowH.value) : 0,
+  )
 
   // 长列表滚深后提供一键回顶（万级图滚回顶部很痛苦）；viewTop 即画廊顶边滚出的像素
   const showBackTop = computed(() => viewTop.value > 600)

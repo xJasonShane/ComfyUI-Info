@@ -5,9 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# 同 PR / 分支连续 push 时取消在途流水线，省排队与算力（E3）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # e2e 挂起时兜底，不再烧满 6 小时默认上限（E3）
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,8 +26,19 @@ jobs:
       - run: npm run format:check
       # 类型检查覆盖 src + tests + e2e（build 里的 vue-tsc 只查 src，tests/e2e 另行守护）
       - run: npm run typecheck
-      - run: npm run test
+      # 单测 + 覆盖率门禁（vite.config 对 src/lib 设阈值棘轮，E3）
+      - run: npm run test:coverage
       - run: npm run build
+      # 单文件产物是核心体验指标：gzip 体积超预算直接红（E5，预算随版本显式上调）
+      - name: Enforce bundle size budget
+        run: |
+          SIZE=$(gzip -c dist/index.html | wc -c)
+          echo "dist/index.html gzip size: ${SIZE} bytes"
+          LIMIT=266240 # 260 KB
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::单文件产物 gzip ${SIZE}B 超出预算 ${LIMIT}B（260KB）。请检查新增依赖，或说明理由后上调预算。"
+            exit 1
+          fi
       - name: Upload dist for Pages deploy (main only)
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
@@ -33,9 +51,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}- # lockfile 无关变更不再全量重下浏览器（E3）
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
       - name: e2e smoke tests
         env:
           E2E_SKIP_BUILD: 1 # 上一步已构建（产物同时供 Pages 复用），webServer 直接 preview
         run: npm run test:e2e
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ github.run_id }}
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore

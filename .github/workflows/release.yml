@@ -1,0 +1,51 @@
+# E5：发布自动化——打 v* tag 触发，门禁通过后把单文件产物挂上 GitHub Release。
+# dist/index.html 双击即可离线使用，与 Pages 在线版构成双渠道分发。
+# （tag 指向的 commit 通常已在 main 上过完整 CI 含 e2e；此处复跑快速门禁作发布前防线。）
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - name: Enforce bundle size budget
+        run: |
+          SIZE=$(gzip -c dist/index.html | wc -c)
+          echo "dist/index.html gzip size: ${SIZE} bytes"
+          LIMIT=266240 # 260 KB
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::单文件产物 gzip ${SIZE}B 超出预算 ${LIMIT}B。"
+            exit 1
+          fi
+      - name: Attach offline build to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/index.html "comfyui-info-${GITHUB_REF_NAME}.html"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "comfyui-info-${GITHUB_REF_NAME}.html"

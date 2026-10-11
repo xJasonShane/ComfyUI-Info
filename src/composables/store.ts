@@ -34,8 +34,11 @@ import {
   probePersistence,
   putPersisted,
   recordKey,
+  requestPersistentStorage,
   saveDirBookmark,
   serializeArchive,
+  storageEstimate,
+  storagePersistedState,
   toRecord,
   type ArchiveInspection,
   type DirBookmark,
@@ -77,6 +80,10 @@ interface StoreState {
   /** IndexedDB 会话存档状态；失败时保留待写操作并提供手动重试 */
   persistenceStatus: PersistenceStatus
   persistenceError: string | null
+  /** 持久存储授予状态（C1）：true 已授予 / false 未授予 / null 环境不支持或未申请 */
+  storagePersisted: boolean | null
+  /** 存档占用估算（C1）：null 表示环境不支持或尚未读取 */
+  storageUsage: { usage: number; quota: number } | null
   /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
   dupeOnly: boolean
   /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
@@ -172,6 +179,8 @@ const state = reactive<StoreState>({
   autoRescanInterval: loadRescanInterval(),
   persistenceStatus: 'checking',
   persistenceError: null,
+  storagePersisted: null,
+  storageUsage: null,
   dupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
@@ -1058,7 +1067,18 @@ let clearBookmarksPending = false
 let bookmarkRevision = 0
 
 function persistenceErrorText(err: unknown): string {
+  // 配额满是最常见的可自愈失败：给可行动指引而非裸异常名（C1）
+  const name = err instanceof Error ? err.name : ''
+  if (name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+    return t('persistence.quota')
+  }
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+}
+
+/** 读取持久存储授予状态与占用估算写入响应式状态（C1），供状态徽章提示 */
+async function refreshStorageUsage() {
+  state.storagePersisted = storagePersistedState()
+  state.storageUsage = await storageEstimate()
 }
 
 function hasPendingPersistence(): boolean {
@@ -1263,6 +1283,7 @@ async function flushPersist() {
   else {
     state.persistenceStatus = 'saved'
     state.persistenceError = null
+    void refreshStorageUsage() // 存档体积随写入变化，成功后刷新占用估算（C1）
   }
 }
 
@@ -1281,6 +1302,9 @@ async function hydrate() {
       state.persistenceError = null
       return
     }
+    // 首次成功探测即申请持久存储（防浏览器磁盘压力下静默清库），并读取占用估算（C1）
+    requestPersistentStorage()
+    void refreshStorageUsage()
     if (!pendingClear && epoch === persistEpoch) {
       const records = await loadPersisted()
       await restoreArchivedInChunks(records, () => pendingClear || epoch !== persistEpoch)
@@ -1833,6 +1857,22 @@ const sameSourceIds = computed(() => {
 
 /** F4：同源重复条目总数（≥2 张的组内条目），0 表示当前没有同源组 */
 export const dupeCount = computed(() => sameSourceIds.value.size)
+
+/**
+ * G3：重复治理——每个同源组（同工作流同种子）只保留最新一张（seq 1，组内按
+ * mtime 新→旧编号），其余整批移除。作用于全库（组划分与筛选无关），
+ * 返回移除的条目数组，供调用方收起正打开的详情 / 对比抽屉。
+ */
+export function keepLatestOfDupes(): ImageItem[] {
+  const groups = sameSourceGroups.value
+  const toRemove: ImageItem[] = []
+  for (const it of state.items) {
+    const info = groups.get(it.id)
+    if (info && info.total > 1 && info.seq > 1) toRemove.push(it)
+  }
+  removeItems(toRemove)
+  return toRemove
+}
 
 /* ---------- 收藏星标：按去重指纹（recordKey）记忆，跨会话保留 ---------- */
 // 收藏是用户策展数据：清空列表 / 移除条目都不动账，同指纹文件重新拖入或存档恢复后自动生效

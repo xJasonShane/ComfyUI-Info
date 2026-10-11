@@ -291,6 +291,38 @@ describe('buildImagesZip', () => {
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
     expect(dv.getUint32(14, true)).toBe(0x3610a686 >>> 0)
   })
+
+  it('条目路径消毒：消解 .. 段 / 剥盘符 / 去控制字符与非法字符（C4 zip-slip）', async () => {
+    const text = async (path: string) => {
+      const blob = (await buildImagesZip([
+        makeItem({ path, name: 'a.png', file: new File(['x'], 'a.png') }),
+      ]))!
+      return new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()))
+    }
+    // .. 越界段被消解（弹空栈即钳掉），绝不产出「..」条目名
+    const up = await text('../../evil/a.png')
+    expect(up).not.toContain('../')
+    expect(up).toContain('evil/a.png')
+    // 盘符剥除、反斜杠折叠为正斜杠、Windows 非法字符替换
+    const win = await text('C:\\out\\bad:name.png')
+    expect(win).toContain('out/bad_name.png')
+    // 控制字符剥除
+    const ctl = await text('ok\x00\x1f/a.png')
+    expect(ctl).toContain('ok/a.png')
+  })
+
+  it('工作流打包同样走路径消毒：恶意路径不产生越界条目名（C4）', async () => {
+    const blob = (await buildWorkflowZip([
+      makeItem({
+        path: '../../evil/kit',
+        raw: { source: 'comfyui', prompt: '{"a":1}' },
+      }),
+    ]))!
+    const text = new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()))
+    expect(text).toContain('evil/kit.prompt.json')
+    // manifest.json 数据段合法携带原始 path，但条目名必须已消毒
+    expect(text).toContain('manifest.json')
+  })
 })
 
 describe('buildDatasetZip', () => {

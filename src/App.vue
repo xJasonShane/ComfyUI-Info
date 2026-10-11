@@ -40,7 +40,6 @@ import {
   enUS,
   zhCN,
 } from 'naive-ui'
-import type { GlobalThemeOverrides } from 'naive-ui'
 import TopBar from './components/TopBar.vue'
 import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
@@ -51,6 +50,7 @@ import {
   addFiles,
   favoriteFlags,
   filteredItems,
+  keepLatestOfDupes,
   parsing,
   rangeIds,
   removeItem,
@@ -68,33 +68,17 @@ import {
 } from './composables/store'
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
 import { copyText, humanBytes } from './lib/utils'
+import { applyThemeVariables, themeOverrides } from './theme'
 import { modelsVisible, randomPickRequest, statsVisible } from './composables/ui'
 import { useVirtualGrid } from './composables/useVirtualGrid'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
 
-/* ---------- 主题 ---------- */
-const darkOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#e8a33d',
-    primaryColorHover: '#f2b558',
-    primaryColorPressed: '#d18f2c',
-    primaryColorSuppl: '#e8a33d',
-    borderRadius: '8px',
-  },
-}
-const lightOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#b4741f',
-    primaryColorHover: '#c98427',
-    primaryColorPressed: '#9a621a',
-    primaryColorSuppl: '#b4741f',
-    borderRadius: '8px',
-  },
-}
+/* ---------- 主题（D5：色值单一来源在 theme.ts，同时驱动 naive 与 CSS 变量） ---------- */
+const themeOv = computed(() => themeOverrides(store.dark))
 watchEffect(() => {
   document.documentElement.classList.toggle('light', !store.dark)
-  document.body.style.background = store.dark ? '#131110' : '#f5f1e9'
+  applyThemeVariables(store.dark)
 })
 
 /* ---------- 画廊虚拟滚动（P3 / D3）：实现整体在 composables/useVirtualGrid.ts ---------- */
@@ -355,6 +339,16 @@ function batchRemove() {
   removeItems(removed)
   clearSelection()
   // 正打开的详情 / 对比图在被移除集合里时收起抽屉，避免裂图残影
+  const gone = new Set(removed)
+  closeDetailIfRemoved(gone)
+  closeCompareIfRemoved(gone)
+}
+
+/** G3：重复治理——「每组保留最新」，确认后整批移除各同源组的旧张 */
+function onKeepLatestDupes() {
+  const removed = keepLatestOfDupes()
+  if (!removed.length) return
+  appMessage().success(t('msg.dupesRemoved', { n: removed.length }))
   const gone = new Set(removed)
   closeDetailIfRemoved(gone)
   closeCompareIfRemoved(gone)
@@ -627,7 +621,7 @@ async function onDrop(e: DragEvent) {
 <template>
   <NConfigProvider
     :theme="store.dark ? darkTheme : null"
-    :theme-overrides="store.dark ? darkOverrides : lightOverrides"
+    :theme-overrides="themeOv"
     :locale="locale === 'en' ? enUS : zhCN"
     :date-locale="locale === 'en' ? dateEnUS : dateZhCN"
   >
@@ -705,6 +699,16 @@ async function onDrop(e: DragEvent) {
               <Icon name="x" :size="10" :stroke="2.4" />
             </button>
           </span>
+          <!-- G3：重复治理入口——只在「只看重复」筛选激活时出现 -->
+          <NPopconfirm v-if="store.dupeOnly" @positive-click="onKeepLatestDupes">
+            <template #trigger>
+              <button type="button" class="chip-clear" :title="t('chip.keepLatestConfirm')">
+                <Icon name="trash" :size="11" />
+                {{ t('chip.keepLatest') }}
+              </button>
+            </template>
+            {{ t('chip.keepLatestConfirm') }}
+          </NPopconfirm>
           <button type="button" class="chip-clear" @click="clearAllFilters">
             {{ t('chip.clearAll') }}
           </button>

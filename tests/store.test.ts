@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
+import { queryWarnings } from '../src/lib/query'
 import type { ImageItem, ParsedParams } from '../src/types'
 import type { PersistRecord } from '../src/lib/persist'
 
@@ -1162,6 +1163,23 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
   })
 })
 
+it('搜索语法诊断 queryWarnings：非法值 / 未知字段显式化（A5）', () => {
+  // 未闭合引号：按「匹配到串尾」的短语处理，不再退化为带引号字符的字面词
+  expect(api.parseQuery('"unclosed phrase').all.terms).toEqual(['unclosed phrase'])
+  expect(api.parseQuery('model:"unclosed').all.model).toEqual(['unclosed'])
+  // 非法 date 照常入桶（fail-closed 恒不命中），但给出可见警告
+  expect(queryWarnings('date:abc cat')).toEqual([{ kind: 'bad-date', token: 'date:abc' }])
+  expect(api.parseQuery('date:abc').all.date).toEqual(['abc'])
+  expect(queryWarnings('seed:>=').map((w) => w.kind)).toEqual(['bad-seed'])
+  expect(queryWarnings('steps:abc')).toEqual([{ kind: 'bad-num', token: 'steps:abc' }])
+  // 未知字段名退化为普通词搜索（不进字段桶也无需警告）
+  expect(api.parseQuery('foo:bar').all.terms).toEqual(['foo:bar'])
+  expect(queryWarnings('has:bogus')).toEqual([{ kind: 'unknown-has', token: 'has:bogus' }])
+  expect(queryWarnings('model:')).toEqual([{ kind: 'empty-value', token: 'model:' }])
+  // 合法查询零警告
+  expect(queryWarnings('cat model:majic seed:5 date:>2026-01 steps:>30 has:lora')).toEqual([])
+})
+
 it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', async () => {
   const add = (name: string, parameters: string, path: string) => {
     vi.mocked(parser.parseImage).mockResolvedValueOnce({
@@ -1499,6 +1517,36 @@ it('同源出图检测：同工作流同种子分组，只看重复筛选（FEAT
   expect(api.filteredItems.value.map((i) => i.name).sort()).toEqual(['a1.png', 'a2.png'])
   api.store.dupeOnly = false
   expect(api.filteredItems.value).toHaveLength(3)
+})
+
+it('keepLatestOfDupes：每组保留最新一张，其余整批移除（G3）', async () => {
+  const { extractComfyParams } = await import('../src/lib/comfyExtract')
+  const promptA = JSON.stringify({
+    '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20 } },
+  })
+  const promptB = JSON.stringify({
+    '3': { class_type: 'KSampler', inputs: { seed: 9, steps: 20 } },
+  })
+  vi.mocked(parser.parseImage).mockImplementation((f: File) => {
+    const prompt = f.name.startsWith('a') ? promptA : promptB
+    return Promise.resolve({
+      raw: { source: 'comfyui', prompt },
+      params: extractComfyParams(prompt) ?? undefined,
+    })
+  })
+  api.addFiles([
+    { file: new File(['x'], 'a1.png', { lastModified: 1000 }) },
+    { file: new File(['x'], 'a2.png', { lastModified: 2000 }) },
+    { file: new File(['x'], 'b1.png', { lastModified: 3000 }) },
+  ])
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  // a 组（同工作流同种子）只留最新的 a2，a1 移除；b1 单张自成一组不动
+  const removed = api.keepLatestOfDupes()
+  expect(removed.map((i) => i.name)).toEqual(['a1.png'])
+  expect(api.store.items.map((i) => i.name).sort()).toEqual(['a2.png', 'b1.png'])
+  expect(api.dupeCount.value).toBe(0)
 })
 
 it('统计增强：按天出图量与提示词高频词（FEAT-5）', async () => {

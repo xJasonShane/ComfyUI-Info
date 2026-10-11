@@ -52,7 +52,7 @@ import {
 import type { ArchiveImportPreview, FilterPreset } from '../composables/store'
 import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
-import { downloadText } from '../lib/utils'
+import { downloadText, humanBytes } from '../lib/utils'
 import { locale, t, toggleLocale } from '../locales'
 import {
   modelsVisible,
@@ -95,7 +95,20 @@ const persistenceTooltip = computed(() => {
   }
   if (store.persistenceStatus === 'saving') return t('persistence.saving')
   if (store.persistenceStatus === 'checking') return t('persistence.checking')
-  return t('persistence.okDetail')
+  // 已保存：附占用估算与持久存储授予状态（C1），「会不会被浏览器清库」可见可判断
+  const parts = [t('persistence.okDetail')]
+  if (store.storageUsage) {
+    parts.push(
+      t('persistence.usage', {
+        usage: humanBytes(store.storageUsage.usage),
+        quota: humanBytes(store.storageUsage.quota),
+      }),
+    )
+  }
+  if (store.storagePersisted !== null) {
+    parts.push(t(store.storagePersisted ? 'persistence.persisted' : 'persistence.notPersisted'))
+  }
+  return parts.join(' ')
 })
 // 统计抽屉显隐提升到 ui.ts：App 的全局 Esc（清空选择）需要感知抽屉是否打开
 const showStats = statsVisible

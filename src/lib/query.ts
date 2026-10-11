@@ -399,7 +399,20 @@ export function emptyConditions(): QueryConditions {
 /* ---------- 语法解析 ---------- */
 
 /**
- * 解析搜索框语法（O1 增强）：
+ * 搜索语法诊断（A5）：把「写了但永远不命中 / 被静默忽略」的条件显式化，
+ * 供搜索框给出可见警告——非法值不再表现为「整个列表默默清空」。
+ */
+export type QueryWarningKind = 'empty-value' | 'bad-date' | 'bad-seed' | 'bad-num' | 'unknown-has'
+
+export interface QueryWarning {
+  /** 警告类别（locales 查词键后缀） */
+  kind: QueryWarningKind
+  /** 触发警告的原文片段 */
+  token: string
+}
+
+/**
+ * 解析搜索框语法（O1 增强），并收集语法诊断（A5）。parseQuery 保持原语义（诊断不影响匹配）。
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
  * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
  * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx` / `controlnet:xxx`
@@ -410,15 +423,20 @@ export function emptyConditions(): QueryConditions {
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
  * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
- * - `"model:a b"` / `model:"a b"`：带引号的字段值可含空格（两种引号位置均可）
+ * - `"model:a b"` / `model:"a b"`：带引号的字段值可含空格（两种引号位置均可）；
+ *   未闭合引号按「匹配到串尾」处理（A5），不再退化为带引号字符的字面词
  * - `-关键词` / `-model:xxx` 排除条件，任一命中即整条不匹配
  * - 正向条件按 AND 组合，大小写不敏感。
  */
-export function parseQuery(raw: string): ParsedQuery {
+export function parseQueryDetailed(raw: string): {
+  query: ParsedQuery
+  warnings: QueryWarning[]
+} {
   const out: ParsedQuery = { all: emptyConditions(), none: emptyConditions() }
+  const warnings: QueryWarning[] = []
   // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏；
-  // 引号也可跟在冒号后（`model:"a b"`），同样作为整体 token
-  const tokens = raw.trim().match(/-?(?:[A-Za-z]+:)?"[^"]*"|\S+/g) ?? []
+  // 引号也可跟在冒号后（`model:"a b"`），同样作为整体 token；结尾引号可选（未闭合短语）
+  const tokens = raw.trim().match(/-?(?:[A-Za-z]+:)?"[^"]*"?|\S+/g) ?? []
   for (let token of tokens) {
     let negated = false
     if (token.startsWith('-') && token.length > 1) {
@@ -427,6 +445,9 @@ export function parseQuery(raw: string): ParsedQuery {
     }
     if (token.startsWith('"') && token.endsWith('"') && token.length > 1) {
       token = token.slice(1, -1)
+    } else if (token.startsWith('"')) {
+      // 未闭合引号：剥掉开头引号按普通（可含空格的）短语继续，不再保留字面引号字符
+      token = token.slice(1)
     }
     if (!token) continue
     const m = token.match(QUERY_FIELD_RE)
@@ -437,31 +458,55 @@ export function parseQuery(raw: string): ParsedQuery {
         if (def.kind === 'num') {
           const cond = parseNumCondition(def.num!, m[2]!)
           if (cond) bucket.num.push(cond)
+          else warnings.push({ kind: 'bad-num', token })
         } else if (m[2]) {
-          // `model:"a b"` 形态：值外侧的成对引号剥离后再入桶
+          // `model:"a b"` 形态：值外侧的成对引号剥离后再入桶；未闭合引号剥开头引号
           let value = m[2]
           if (value.length > 1 && value.startsWith('"') && value.endsWith('"')) {
             value = value.slice(1, -1)
+          } else if (value.startsWith('"')) {
+            value = value.slice(1)
           }
-          // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉。
-          // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
-          // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
-          if (value && (def.kind !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(value))) {
+          if (!value) {
+            // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉
+            warnings.push({ kind: 'empty-value', token })
+          } else if (def.kind === 'seed' && !/^(>=|<=|>|<)?\d+$/.test(value)) {
+            // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
+            // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略并警告
+            warnings.push({ kind: 'bad-seed', token })
+          } else if (def.kind === 'date' && !/^(>=|<=|>|<)?\d{4}(-\d{2})?(-\d{2})?$/.test(value)) {
+            // date 非法值照常入桶（保持 fail-closed：hitDate 匹配时判否，正向恒不命中），
+            // 但「整个列表静默清空」必须配可见警告，用户才知道是写错了
+            warnings.push({ kind: 'bad-date', token })
+            bucket.date.push(value.toLowerCase())
+          } else if (def.kind === 'has') {
             // has: 存在性条件只收已知要素名，未知值忽略（与空值字段同语义）
-            if (def.kind === 'has') {
-              const hf = HAS_FIELDS[value.toLowerCase()]
-              if (hf) bucket.has.push(hf)
-            } else {
-              bucket[def.kind].push(value.toLowerCase())
-            }
+            const hf = HAS_FIELDS[value.toLowerCase()]
+            if (hf) bucket.has.push(hf)
+            else warnings.push({ kind: 'unknown-has', token })
+          } else {
+            bucket[def.kind].push(value.toLowerCase())
           }
+        } else {
+          warnings.push({ kind: 'empty-value', token })
         }
       }
+      // 未知字段名（如 `foo:bar`）不进字段正则（QUERY_FIELD_RE 由 FIELD_DEFS 派生），
+      // 自然退化为普通词搜索，无需警告
     } else {
       bucket.terms.push(token.toLowerCase())
     }
   }
-  return out
+  return { query: out, warnings }
+}
+
+export function parseQuery(raw: string): ParsedQuery {
+  return parseQueryDetailed(raw).query
+}
+
+/** 搜索串的语法诊断（SearchBox 逐键调用；tokenize 一次开销可忽略） */
+export function queryWarnings(raw: string): QueryWarning[] {
+  return parseQueryDetailed(raw).warnings
 }
 
 // 解析结果按搜索串缓存（C1）：filteredItems 每拍失效（扫描期间约 200ms 一次）都会
@@ -487,7 +532,8 @@ export interface QueryToken {
 
 export function tokenizeQuery(raw: string): QueryToken[] {
   const out: QueryToken[] = []
-  for (const m of raw.matchAll(/-?(?:[A-Za-z]+:)?"[^"]*"|\S+/g)) {
+  // 与 parseQuery 同一 tokenizer（未闭合引号同为整体 token，chips 位置才一致）
+  for (const m of raw.matchAll(/-?(?:[A-Za-z]+:)?"[^"]*"?|\S+/g)) {
     out.push({ text: m[0], start: m.index, end: m.index + m[0].length })
   }
   return out
