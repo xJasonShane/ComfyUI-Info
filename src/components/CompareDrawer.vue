@@ -9,6 +9,14 @@ import { t } from '../locales'
 const props = defineProps<{ a: ImageItem | null; b: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
 
+const {
+  width: drawerWidth,
+  dragging: drawerDragging,
+  onResizerDown,
+  onResizerMove,
+  onResizerUp,
+} = useDrawerWidth('compare', 940)
+
 // FEAT-8：对比双方按需创建预览 URL，头部并排展示缩略图
 watch(
   () => [props.a?.id, props.b?.id],
@@ -31,8 +39,6 @@ interface DiffSection {
   title: string
   rows: DiffRow[]
 }
-
-const drawerWidth = useDrawerWidth(940)
 
 function textList(list: string[] | undefined): string | null {
   const s = (list ?? []).join('\n').trim()
@@ -171,37 +177,50 @@ const nameB = computed(() => props.b?.path ?? props.b?.name ?? '')
 
 <template>
   <NDrawer v-model:show="show" :width="drawerWidth" placement="right">
-    <div class="cmp">
-      <div class="cmp-head">
-        <span class="cmp-empty" />
-        <div class="cmp-item">
-          <img v-if="a?.url" :src="a.url" alt="" />
-          <span class="name" :title="nameA">{{ nameA }}</span>
-        </div>
-        <div class="cmp-item">
-          <img v-if="b?.url" :src="b.url" alt="" />
-          <span class="name" :title="nameB">{{ nameB }}</span>
-        </div>
-      </div>
-
-      <template v-if="sections.length">
-        <section v-for="sec in sections" :key="sec.title" class="cmp-section">
-          <div class="cmp-section-title">{{ sec.title }}</div>
-          <div
-            v-for="(row, i) in sec.rows"
-            :key="i"
-            class="cmp-row"
-            :class="{ diff: row.a !== row.b }"
-          >
-            <span class="label">{{ row.label }}</span>
-            <pre v-if="row.long" class="val" :class="{ empty: !row.a }">{{ row.a ?? '—' }}</pre>
-            <span v-else class="val" :class="{ empty: !row.a }">{{ row.a ?? '—' }}</span>
-            <pre v-if="row.long" class="val" :class="{ empty: !row.b }">{{ row.b ?? '—' }}</pre>
-            <span v-else class="val" :class="{ empty: !row.b }">{{ row.b ?? '—' }}</span>
+    <div class="drawer-shell" :class="{ resizing: drawerDragging }">
+      <div
+        class="drawer-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('app.resizeDrawer')"
+        :title="t('app.resizeDrawer')"
+        @pointerdown.prevent="onResizerDown"
+        @pointermove="onResizerMove"
+        @pointerup="onResizerUp"
+        @pointercancel="onResizerUp"
+      />
+      <div class="cmp">
+        <div class="cmp-head">
+          <span class="cmp-empty" />
+          <div class="cmp-item">
+            <img v-if="a?.url" :src="a.url" alt="" />
+            <span class="name" :title="nameA">{{ nameA }}</span>
           </div>
-        </section>
-      </template>
-      <p v-else class="cmp-none">{{ t('cmp.none') }}</p>
+          <div class="cmp-item">
+            <img v-if="b?.url" :src="b.url" alt="" />
+            <span class="name" :title="nameB">{{ nameB }}</span>
+          </div>
+        </div>
+
+        <template v-if="sections.length">
+          <section v-for="sec in sections" :key="sec.title" class="cmp-section">
+            <div class="cmp-section-title">{{ sec.title }}</div>
+            <div
+              v-for="(row, i) in sec.rows"
+              :key="i"
+              class="cmp-row"
+              :class="{ diff: row.a !== row.b }"
+            >
+              <span class="label">{{ row.label }}</span>
+              <pre v-if="row.long" class="val" :class="{ empty: !row.a }">{{ row.a ?? '—' }}</pre>
+              <span v-else class="val" :class="{ empty: !row.a }">{{ row.a ?? '—' }}</span>
+              <pre v-if="row.long" class="val" :class="{ empty: !row.b }">{{ row.b ?? '—' }}</pre>
+              <span v-else class="val" :class="{ empty: !row.b }">{{ row.b ?? '—' }}</span>
+            </div>
+          </section>
+        </template>
+        <p v-else class="cmp-none">{{ t('cmp.none') }}</p>
+      </div>
     </div>
   </NDrawer>
 </template>

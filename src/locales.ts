@@ -72,6 +72,7 @@ const zh = {
   /* 拖拽覆盖层 */
   'drop.hint': '松开以添加图片 / 文件夹 / 工作流文件',
   'app.backTop': '回到顶部',
+  'app.resizeDrawer': '拖拽调节抽屉宽度',
 
   /* TopBar */
   'topbar.subtitle': '图片信息查看器',
@@ -367,6 +368,7 @@ const en: Record<DictKey, string> = {
 
   'drop.hint': 'Drop to add images / folders / workflow files',
   'app.backTop': 'Back to top',
+  'app.resizeDrawer': 'Drag to resize the drawer',
 
   'topbar.subtitle': 'Image metadata viewer',
   'topbar.addImages': 'Add images',

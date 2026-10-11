@@ -21,7 +21,13 @@ const show = defineModel<boolean>('show', { default: false })
 const emit = defineEmits<{ nav: [dir: 1 | -1] }>()
 const message = useMessage()
 
-const drawerWidth = useDrawerWidth(940)
+const {
+  width: drawerWidth,
+  dragging: drawerDragging,
+  onResizerDown,
+  onResizerMove,
+  onResizerUp,
+} = useDrawerWidth('detail', 940)
 
 const p = computed(() => props.item?.params)
 
@@ -396,351 +402,371 @@ async function copyImage() {
 
 <template>
   <NDrawer v-model:show="show" :width="drawerWidth" placement="right">
-    <div v-if="item" class="detail">
-      <div class="detail-view">
-        <img
-          v-if="item.url"
-          :src="item.url"
-          :alt="item.name"
-          :title="t('detail.zoomIn')"
-          @load="onImgLoad"
-          @click="zoomed = true"
-        />
-        <div v-if="actualDims" class="img-dims" :title="dimsTitle">
-          {{ actualDims.w }} × {{ actualDims.h }} px<span v-if="dimsNote"> · {{ dimsNote }}</span>
-        </div>
-        <button
-          v-if="hasPrev"
-          class="img-nav prev"
-          type="button"
-          :title="t('detail.prev')"
-          :aria-label="t('detail.prev')"
-          @click="emit('nav', -1)"
-        >
-          <Icon name="chevron-left" :size="18" />
-        </button>
-        <button
-          v-if="hasNext"
-          class="img-nav next"
-          type="button"
-          :title="t('detail.next')"
-          :aria-label="t('detail.next')"
-          @click="emit('nav', 1)"
-        >
-          <Icon name="chevron-right" :size="18" />
-        </button>
-        <div v-if="item.url && item.file" class="img-actions">
-          <NButton
-            size="tiny"
-            secondary
-            :title="t('detail.copyImage')"
-            :aria-label="t('detail.copyImage')"
-            @click="copyImage"
-          >
-            <template #icon><Icon name="copy" :size="13" /></template>
-          </NButton>
-          <NButton
-            size="tiny"
-            secondary
-            :title="t('detail.downloadImage')"
-            :aria-label="t('detail.downloadImage')"
-            @click="downloadImage"
-          >
-            <template #icon><Icon name="download" :size="13" /></template>
-          </NButton>
-        </div>
-        <div v-else class="detail-noimg">
-          <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
-          <span>{{
-            item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded')
-          }}</span>
-          <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
-        </div>
-      </div>
+    <div class="drawer-shell" :class="{ resizing: drawerDragging }">
       <div
-        v-if="zoomed"
-        ref="overlayRef"
-        class="img-zoom"
-        :class="{ grab: zoomScale > 1, grabbing: panning }"
-        role="button"
-        :aria-label="zoomScale > 1 ? t('detail.zoomHint') : t('detail.zoomClose')"
-        @wheel.prevent="onZoomWheel"
-        @pointerdown="onZoomPointerDown"
-        @pointermove="onZoomPointerMove"
-        @pointerup="onZoomPointerUp"
-        @pointercancel="onZoomPointerUp"
-        @dblclick="onZoomDblClick"
-      >
-        <img :src="item.url" :alt="item.name" :style="{ transform: zoomStyle }" draggable="false" />
-        <span v-if="zoomScale > 1" class="zoom-level">{{ Math.round(zoomScale * 100) }}%</span>
-        <button
-          v-if="zoomScale > 1"
-          class="zoom-close"
-          type="button"
-          :aria-label="t('detail.zoomClose')"
-          :title="t('detail.zoomClose')"
-          @pointerdown.stop
-          @click.stop="zoomed = false"
-        >
-          <Icon name="x" :size="15" />
-        </button>
-      </div>
-
-      <div class="detail-panel">
-        <div class="fileline">
-          <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
-          <NButton
-            size="tiny"
-            quaternary
-            circle
-            :title="t('detail.copyPath')"
-            :aria-label="t('detail.copyPath')"
-            @click="copy(item.path ?? item.name, t('detail.copyPath'))"
+        class="drawer-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('app.resizeDrawer')"
+        :title="t('app.resizeDrawer')"
+        @pointerdown.prevent="onResizerDown"
+        @pointermove="onResizerMove"
+        @pointerup="onResizerUp"
+        @pointercancel="onResizerUp"
+      />
+      <div v-if="item" class="detail">
+        <div class="detail-view">
+          <img
+            v-if="item.url"
+            :src="item.url"
+            :alt="item.name"
+            :title="t('detail.zoomIn')"
+            @load="onImgLoad"
+            @click="zoomed = true"
+          />
+          <div v-if="actualDims" class="img-dims" :title="dimsTitle">
+            {{ actualDims.w }} × {{ actualDims.h }} px<span v-if="dimsNote"> · {{ dimsNote }}</span>
+          </div>
+          <button
+            v-if="hasPrev"
+            class="img-nav prev"
+            type="button"
+            :title="t('detail.prev')"
+            :aria-label="t('detail.prev')"
+            @click="emit('nav', -1)"
           >
-            <template #icon><Icon name="copy" :size="12" /></template>
-          </NButton>
-          <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
-          <span>{{ humanBytes(item.size) }}</span>
-          <NButton
-            size="tiny"
-            quaternary
-            circle
-            :title="playing ? t('detail.pause') : t('detail.play')"
-            :aria-label="playing ? t('detail.pause') : t('detail.play')"
-            :aria-pressed="playing"
-            @click="playing = !playing"
+            <Icon name="chevron-left" :size="18" />
+          </button>
+          <button
+            v-if="hasNext"
+            class="img-nav next"
+            type="button"
+            :title="t('detail.next')"
+            :aria-label="t('detail.next')"
+            @click="emit('nav', 1)"
           >
-            <template #icon><Icon :name="playing ? 'pause' : 'play'" :size="13" /></template>
-          </NButton>
-          <NButton
-            size="tiny"
-            quaternary
-            circle
-            :title="faved ? t('card.unfav') : t('card.fav')"
-            :aria-label="t('card.favAria')"
-            :aria-pressed="faved"
-            @click="toggleFavorite(item)"
-          >
-            <template #icon><Icon :name="faved ? 'star-filled' : 'star'" :size="14" /></template>
-          </NButton>
-          <NButton
-            size="tiny"
-            quaternary
-            circle
-            :aria-label="t('detail.close')"
-            @click="show = false"
-          >
-            <template #icon><Icon name="x" :size="13" /></template>
-          </NButton>
-        </div>
-
-        <template v-if="p">
-          <div class="section">
-            <div class="section-title">
-              <span>{{ t('detail.genParams') }}</span>
-              <NButton size="tiny" quaternary @click="copySummary">
-                <template #icon><Icon name="copy" :size="13" /></template>
-                {{ t('detail.copySummary') }}
-              </NButton>
-            </div>
-            <dl class="kv">
-              <template v-for="([k, v], i) in generalRows" :key="i">
-                <dt>{{ k }}</dt>
-                <dd>
-                  <span class="kv-val">{{ v }}</span>
-                  <button
-                    class="kv-copy"
-                    type="button"
-                    :title="t('detail.copyField', { name: k })"
-                    @click="copy(v, k)"
-                  >
-                    <Icon name="copy" :size="11" :stroke="2.2" />
-                  </button>
-                </dd>
-              </template>
-            </dl>
-          </div>
-
-          <div v-if="samplerRows.length" class="section">
-            <div class="section-title">
-              <span
-                >{{ t('detail.samplerParams')
-                }}<template v-if="p.samplers.length > 1">{{
-                  t('detail.stages', { n: p.samplers.length })
-                }}</template></span
-              >
-            </div>
-            <dl v-if="p.samplers.length === 1" class="kv">
-              <template v-for="([k, v], i) in samplerRows" :key="i">
-                <dt>{{ k }}</dt>
-                <dd>
-                  <span class="kv-val">{{ v }}</span>
-                  <button
-                    class="kv-copy"
-                    type="button"
-                    :title="t('detail.copyField', { name: k })"
-                    @click="copy(v, k)"
-                  >
-                    <Icon name="copy" :size="11" :stroke="2.2" />
-                  </button>
-                </dd>
-              </template>
-            </dl>
-            <div v-else>
-              <div v-for="s in p.samplers" :key="s.nodeId" class="stage-row">
-                <span class="txt">{{ stageText(s) }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="p.loras.length" class="section">
-            <div class="section-title">{{ t('detail.loraCount', { n: p.loras.length }) }}</div>
-            <div v-for="l in p.loras" :key="l.name" class="stage-row">
-              <span class="tag">{{ t('detail.loraTag') }}</span>
-              <span class="txt">
-                {{ l.name
-                }}{{
-                  t('detail.loraStrength', {
-                    m: l.strengthModel ?? '-',
-                    c: l.strengthClip ?? '-',
-                    hash: l.hash ? ` · ${l.hash}` : '',
-                  })
-                }}
-              </span>
-              <button
-                class="kv-copy"
-                type="button"
-                :title="t('detail.copyLoraName')"
-                @click="copy(l.name, t('detail.loraTag'))"
-              >
-                <Icon name="copy" :size="11" :stroke="2.2" />
-              </button>
-            </div>
-          </div>
-
-          <div v-if="positiveText" class="section">
-            <div class="section-title">
-              <span>{{ t('detail.positive') }}</span>
-              <NButton size="tiny" quaternary @click="copy(positiveText, t('detail.positive'))">
-                <template #icon><Icon name="copy" :size="13" /></template>
-                {{ t('common.copy') }}
-              </NButton>
-            </div>
-            <pre class="prompt-text">{{ positiveText }}</pre>
-          </div>
-
-          <div v-if="negativeText" class="section">
-            <div class="section-title">
-              <span>{{ t('detail.negative') }}</span>
-              <NButton size="tiny" quaternary @click="copy(negativeText, t('detail.negative'))">
-                <template #icon><Icon name="copy" :size="13" /></template>
-                {{ t('common.copy') }}
-              </NButton>
-            </div>
-            <pre class="prompt-text">{{ negativeText }}</pre>
-          </div>
-        </template>
-
-        <div v-else-if="item.status === 'error'" class="notice">
-          <span class="notice-title">{{ t('detail.parseFailed') }}</span>
-          <p class="err-message">{{ item.error ?? t('detail.unknownParseError') }}</p>
-          <NButton v-if="item.file" size="small" secondary @click="retryItem(item)">
-            <template #icon><Icon name="refresh" :size="13" /></template>
-            {{ t('common.retry') }}
-          </NButton>
-        </div>
-        <div v-else-if="item.status !== 'done'" class="notice">
-          {{ t('detail.parsingNow') }}
-          <br />
-          <span style="font-size: 12px; color: var(--text-faint)">{{
-            t('detail.parsingHint')
-          }}</span>
-        </div>
-        <div v-else-if="corruptRawText" class="notice">
-          <span class="notice-title">{{ t('detail.corruptTitle') }}</span>
-          <p class="err-message">{{ corruptHint }}</p>
-        </div>
-        <div v-else class="notice">
-          {{ t('detail.noMetadata') }}
-          <ul v-if="item.raw.hints?.length" class="hints">
-            <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
-          </ul>
-        </div>
-
-        <div v-if="showJsonTabs" class="section">
-          <NTabs v-model:value="tab" type="segment" size="small" animated>
-            <NTabPane v-if="item.raw.parameters" name="raw" :tab="t('detail.tabRaw')">
-              <pre class="json-pre">{{ item.raw.parameters }}</pre>
-              <div style="display: flex; gap: 8px; margin-top: 10px">
-                <NButton
-                  size="tiny"
-                  secondary
-                  @click="copy(item.raw.parameters, t('detail.tabRaw'))"
-                >
-                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
-                </NButton>
-              </div>
-            </NTabPane>
-            <NTabPane v-if="item.raw.prompt" name="prompt" :tab="t('detail.tabPrompt')">
-              <pre class="json-pre">{{ jsonText }}</pre>
-              <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
-                <NButton
-                  size="tiny"
-                  secondary
-                  @click="copy(item.raw.prompt, t('detail.tabPrompt'))"
-                >
-                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
-                </NButton>
-                <NButton
-                  size="tiny"
-                  secondary
-                  @click="downloadJson(item.raw.prompt, 'prompt.json')"
-                >
-                  <template #icon><Icon name="download" :size="13" /></template
-                  >{{ t('common.download') }}
-                </NButton>
-                <label class="pretty-toggle">
-                  <NSwitch v-model:value="prettyJson" size="small" />
-                  {{ t('detail.prettyJson') }}
-                </label>
-              </div>
-            </NTabPane>
-            <NTabPane
-              v-if="item.raw.source !== 'a1111'"
-              name="workflow"
-              :tab="t('detail.tabWorkflow')"
+            <Icon name="chevron-right" :size="18" />
+          </button>
+          <div v-if="item.url && item.file" class="img-actions">
+            <NButton
+              size="tiny"
+              secondary
+              :title="t('detail.copyImage')"
+              :aria-label="t('detail.copyImage')"
+              @click="copyImage"
             >
-              <pre class="json-pre">{{ jsonText }}</pre>
-              <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
-                <NButton
-                  size="tiny"
-                  secondary
-                  @click="copy(item.raw.workflow, t('detail.tabWorkflow'))"
-                >
-                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
-                </NButton>
-                <NButton
-                  size="tiny"
-                  secondary
-                  :disabled="!item.raw.workflow"
-                  @click="downloadJson(item.raw.workflow, 'workflow.json')"
-                >
-                  <template #icon><Icon name="download" :size="13" /></template
-                  >{{ t('common.download') }}
-                </NButton>
-                <label class="pretty-toggle">
-                  <NSwitch v-model:value="prettyJson" size="small" />
-                  {{ t('detail.prettyJson') }}
-                </label>
-              </div>
-              <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
-                {{ t('detail.workflowHint') }}
-              </p>
-            </NTabPane>
-          </NTabs>
+              <template #icon><Icon name="copy" :size="13" /></template>
+            </NButton>
+            <NButton
+              size="tiny"
+              secondary
+              :title="t('detail.downloadImage')"
+              :aria-label="t('detail.downloadImage')"
+              @click="downloadImage"
+            >
+              <template #icon><Icon name="download" :size="13" /></template>
+            </NButton>
+          </div>
+          <div v-else class="detail-noimg">
+            <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
+            <span>{{
+              item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded')
+            }}</span>
+            <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
+          </div>
+        </div>
+        <div
+          v-if="zoomed"
+          ref="overlayRef"
+          class="img-zoom"
+          :class="{ grab: zoomScale > 1, grabbing: panning }"
+          role="button"
+          :aria-label="zoomScale > 1 ? t('detail.zoomHint') : t('detail.zoomClose')"
+          @wheel.prevent="onZoomWheel"
+          @pointerdown="onZoomPointerDown"
+          @pointermove="onZoomPointerMove"
+          @pointerup="onZoomPointerUp"
+          @pointercancel="onZoomPointerUp"
+          @dblclick="onZoomDblClick"
+        >
+          <img
+            :src="item.url"
+            :alt="item.name"
+            :style="{ transform: zoomStyle }"
+            draggable="false"
+          />
+          <span v-if="zoomScale > 1" class="zoom-level">{{ Math.round(zoomScale * 100) }}%</span>
+          <button
+            v-if="zoomScale > 1"
+            class="zoom-close"
+            type="button"
+            :aria-label="t('detail.zoomClose')"
+            :title="t('detail.zoomClose')"
+            @pointerdown.stop
+            @click.stop="zoomed = false"
+          >
+            <Icon name="x" :size="15" />
+          </button>
         </div>
 
-        <p class="kbd-hint">{{ t('detail.kbdHint') }}</p>
+        <div class="detail-panel">
+          <div class="fileline">
+            <span style="flex: 1" :title="item.path ?? item.name">{{
+              item.path ?? item.name
+            }}</span>
+            <NButton
+              size="tiny"
+              quaternary
+              circle
+              :title="t('detail.copyPath')"
+              :aria-label="t('detail.copyPath')"
+              @click="copy(item.path ?? item.name, t('detail.copyPath'))"
+            >
+              <template #icon><Icon name="copy" :size="12" /></template>
+            </NButton>
+            <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
+            <span>{{ humanBytes(item.size) }}</span>
+            <NButton
+              size="tiny"
+              quaternary
+              circle
+              :title="playing ? t('detail.pause') : t('detail.play')"
+              :aria-label="playing ? t('detail.pause') : t('detail.play')"
+              :aria-pressed="playing"
+              @click="playing = !playing"
+            >
+              <template #icon><Icon :name="playing ? 'pause' : 'play'" :size="13" /></template>
+            </NButton>
+            <NButton
+              size="tiny"
+              quaternary
+              circle
+              :title="faved ? t('card.unfav') : t('card.fav')"
+              :aria-label="t('card.favAria')"
+              :aria-pressed="faved"
+              @click="toggleFavorite(item)"
+            >
+              <template #icon><Icon :name="faved ? 'star-filled' : 'star'" :size="14" /></template>
+            </NButton>
+            <NButton
+              size="tiny"
+              quaternary
+              circle
+              :aria-label="t('detail.close')"
+              @click="show = false"
+            >
+              <template #icon><Icon name="x" :size="13" /></template>
+            </NButton>
+          </div>
+
+          <template v-if="p">
+            <div class="section">
+              <div class="section-title">
+                <span>{{ t('detail.genParams') }}</span>
+                <NButton size="tiny" quaternary @click="copySummary">
+                  <template #icon><Icon name="copy" :size="13" /></template>
+                  {{ t('detail.copySummary') }}
+                </NButton>
+              </div>
+              <dl class="kv">
+                <template v-for="([k, v], i) in generalRows" :key="i">
+                  <dt>{{ k }}</dt>
+                  <dd>
+                    <span class="kv-val">{{ v }}</span>
+                    <button
+                      class="kv-copy"
+                      type="button"
+                      :title="t('detail.copyField', { name: k })"
+                      @click="copy(v, k)"
+                    >
+                      <Icon name="copy" :size="11" :stroke="2.2" />
+                    </button>
+                  </dd>
+                </template>
+              </dl>
+            </div>
+
+            <div v-if="samplerRows.length" class="section">
+              <div class="section-title">
+                <span
+                  >{{ t('detail.samplerParams')
+                  }}<template v-if="p.samplers.length > 1">{{
+                    t('detail.stages', { n: p.samplers.length })
+                  }}</template></span
+                >
+              </div>
+              <dl v-if="p.samplers.length === 1" class="kv">
+                <template v-for="([k, v], i) in samplerRows" :key="i">
+                  <dt>{{ k }}</dt>
+                  <dd>
+                    <span class="kv-val">{{ v }}</span>
+                    <button
+                      class="kv-copy"
+                      type="button"
+                      :title="t('detail.copyField', { name: k })"
+                      @click="copy(v, k)"
+                    >
+                      <Icon name="copy" :size="11" :stroke="2.2" />
+                    </button>
+                  </dd>
+                </template>
+              </dl>
+              <div v-else>
+                <div v-for="s in p.samplers" :key="s.nodeId" class="stage-row">
+                  <span class="txt">{{ stageText(s) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="p.loras.length" class="section">
+              <div class="section-title">{{ t('detail.loraCount', { n: p.loras.length }) }}</div>
+              <div v-for="l in p.loras" :key="l.name" class="stage-row">
+                <span class="tag">{{ t('detail.loraTag') }}</span>
+                <span class="txt">
+                  {{ l.name
+                  }}{{
+                    t('detail.loraStrength', {
+                      m: l.strengthModel ?? '-',
+                      c: l.strengthClip ?? '-',
+                      hash: l.hash ? ` · ${l.hash}` : '',
+                    })
+                  }}
+                </span>
+                <button
+                  class="kv-copy"
+                  type="button"
+                  :title="t('detail.copyLoraName')"
+                  @click="copy(l.name, t('detail.loraTag'))"
+                >
+                  <Icon name="copy" :size="11" :stroke="2.2" />
+                </button>
+              </div>
+            </div>
+
+            <div v-if="positiveText" class="section">
+              <div class="section-title">
+                <span>{{ t('detail.positive') }}</span>
+                <NButton size="tiny" quaternary @click="copy(positiveText, t('detail.positive'))">
+                  <template #icon><Icon name="copy" :size="13" /></template>
+                  {{ t('common.copy') }}
+                </NButton>
+              </div>
+              <pre class="prompt-text">{{ positiveText }}</pre>
+            </div>
+
+            <div v-if="negativeText" class="section">
+              <div class="section-title">
+                <span>{{ t('detail.negative') }}</span>
+                <NButton size="tiny" quaternary @click="copy(negativeText, t('detail.negative'))">
+                  <template #icon><Icon name="copy" :size="13" /></template>
+                  {{ t('common.copy') }}
+                </NButton>
+              </div>
+              <pre class="prompt-text">{{ negativeText }}</pre>
+            </div>
+          </template>
+
+          <div v-else-if="item.status === 'error'" class="notice">
+            <span class="notice-title">{{ t('detail.parseFailed') }}</span>
+            <p class="err-message">{{ item.error ?? t('detail.unknownParseError') }}</p>
+            <NButton v-if="item.file" size="small" secondary @click="retryItem(item)">
+              <template #icon><Icon name="refresh" :size="13" /></template>
+              {{ t('common.retry') }}
+            </NButton>
+          </div>
+          <div v-else-if="item.status !== 'done'" class="notice">
+            {{ t('detail.parsingNow') }}
+            <br />
+            <span style="font-size: 12px; color: var(--text-faint)">{{
+              t('detail.parsingHint')
+            }}</span>
+          </div>
+          <div v-else-if="corruptRawText" class="notice">
+            <span class="notice-title">{{ t('detail.corruptTitle') }}</span>
+            <p class="err-message">{{ corruptHint }}</p>
+          </div>
+          <div v-else class="notice">
+            {{ t('detail.noMetadata') }}
+            <ul v-if="item.raw.hints?.length" class="hints">
+              <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
+            </ul>
+          </div>
+
+          <div v-if="showJsonTabs" class="section">
+            <NTabs v-model:value="tab" type="segment" size="small" animated>
+              <NTabPane v-if="item.raw.parameters" name="raw" :tab="t('detail.tabRaw')">
+                <pre class="json-pre">{{ item.raw.parameters }}</pre>
+                <div style="display: flex; gap: 8px; margin-top: 10px">
+                  <NButton
+                    size="tiny"
+                    secondary
+                    @click="copy(item.raw.parameters, t('detail.tabRaw'))"
+                  >
+                    <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
+                  </NButton>
+                </div>
+              </NTabPane>
+              <NTabPane v-if="item.raw.prompt" name="prompt" :tab="t('detail.tabPrompt')">
+                <pre class="json-pre">{{ jsonText }}</pre>
+                <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
+                  <NButton
+                    size="tiny"
+                    secondary
+                    @click="copy(item.raw.prompt, t('detail.tabPrompt'))"
+                  >
+                    <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
+                  </NButton>
+                  <NButton
+                    size="tiny"
+                    secondary
+                    @click="downloadJson(item.raw.prompt, 'prompt.json')"
+                  >
+                    <template #icon><Icon name="download" :size="13" /></template
+                    >{{ t('common.download') }}
+                  </NButton>
+                  <label class="pretty-toggle">
+                    <NSwitch v-model:value="prettyJson" size="small" />
+                    {{ t('detail.prettyJson') }}
+                  </label>
+                </div>
+              </NTabPane>
+              <NTabPane
+                v-if="item.raw.source !== 'a1111'"
+                name="workflow"
+                :tab="t('detail.tabWorkflow')"
+              >
+                <pre class="json-pre">{{ jsonText }}</pre>
+                <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
+                  <NButton
+                    size="tiny"
+                    secondary
+                    @click="copy(item.raw.workflow, t('detail.tabWorkflow'))"
+                  >
+                    <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
+                  </NButton>
+                  <NButton
+                    size="tiny"
+                    secondary
+                    :disabled="!item.raw.workflow"
+                    @click="downloadJson(item.raw.workflow, 'workflow.json')"
+                  >
+                    <template #icon><Icon name="download" :size="13" /></template
+                    >{{ t('common.download') }}
+                  </NButton>
+                  <label class="pretty-toggle">
+                    <NSwitch v-model:value="prettyJson" size="small" />
+                    {{ t('detail.prettyJson') }}
+                  </label>
+                </div>
+                <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
+                  {{ t('detail.workflowHint') }}
+                </p>
+              </NTabPane>
+            </NTabs>
+          </div>
+
+          <p class="kbd-hint">{{ t('detail.kbdHint') }}</p>
+        </div>
       </div>
     </div>
   </NDrawer>

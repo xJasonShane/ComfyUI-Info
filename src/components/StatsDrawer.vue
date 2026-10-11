@@ -18,7 +18,13 @@ import { t } from '../locales'
 
 const show = defineModel<boolean>('show', { default: false })
 
-const drawerWidth = useDrawerWidth(560)
+const {
+  width: drawerWidth,
+  dragging: drawerDragging,
+  onResizerDown,
+  onResizerMove,
+  onResizerUp,
+} = useDrawerWidth('stats', 560)
 
 interface StatSection {
   title: string
@@ -81,48 +87,67 @@ async function exportStats() {
 
 <template>
   <NDrawer v-model:show="show" :width="drawerWidth" placement="right">
-    <div class="stats">
-      <div class="stats-head">
-        <span class="stats-title">{{ t('stats.title') }}</span>
-        <span class="stats-sub">{{ t('stats.sub') }}</span>
-        <NButton
-          size="tiny"
-          secondary
-          :loading="statsExporting"
-          :title="t('stats.exportTitle')"
-          @click="exportStats"
-        >
-          {{ t('stats.exportCsv') }}
-        </NButton>
-        <NButton size="tiny" quaternary circle :aria-label="t('stats.close')" @click="show = false">
-          <template #icon><Icon name="x" :size="13" /></template>
-        </NButton>
-      </div>
+    <div class="drawer-shell" :class="{ resizing: drawerDragging }">
+      <div
+        class="drawer-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('app.resizeDrawer')"
+        :title="t('app.resizeDrawer')"
+        @pointerdown.prevent="onResizerDown"
+        @pointermove="onResizerMove"
+        @pointerup="onResizerUp"
+        @pointercancel="onResizerUp"
+      />
+      <div class="stats">
+        <div class="stats-head">
+          <span class="stats-title">{{ t('stats.title') }}</span>
+          <span class="stats-sub">{{ t('stats.sub') }}</span>
+          <NButton
+            size="tiny"
+            secondary
+            :loading="statsExporting"
+            :title="t('stats.exportTitle')"
+            @click="exportStats"
+          >
+            {{ t('stats.exportCsv') }}
+          </NButton>
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :aria-label="t('stats.close')"
+            @click="show = false"
+          >
+            <template #icon><Icon name="x" :size="13" /></template>
+          </NButton>
+        </div>
 
-      <template v-if="hasAny">
-        <section v-for="sec in sections" :key="sec.kind" class="stats-section">
-          <div class="stats-section-title">{{ sec.title }} ({{ sec.list.length }})</div>
-          <div v-if="sec.list.length" class="stats-list">
-            <button
-              v-for="s in sec.list"
-              :key="s.name"
-              type="button"
-              class="stat-row"
-              :title="t('stats.filterHint', { title: sec.title, name: s.name })"
-              @click="pick(sec.kind, s.name)"
-            >
-              <span class="stat-name">{{ s.name }}</span>
-              <i
-                class="stat-bar"
-                :style="{ width: `${Math.max(8, (s.count / maxCount(sec.list)) * 100)}%` }"
-              />
-              <span class="stat-count">{{ s.count }}</span>
-            </button>
-          </div>
-          <p v-else class="stats-empty">{{ t('stats.emptySection') }}</p>
-        </section>
-      </template>
-      <p v-else class="stats-empty">{{ t('stats.empty') }}</p>
+        <template v-if="hasAny">
+          <section v-for="sec in sections" :key="sec.kind" class="stats-section">
+            <div class="stats-section-title">{{ sec.title }} ({{ sec.list.length }})</div>
+            <div v-if="sec.list.length" class="stats-list">
+              <button
+                v-for="s in sec.list"
+                :key="s.name"
+                type="button"
+                class="stat-row"
+                :title="t('stats.filterHint', { title: sec.title, name: s.name })"
+                @click="pick(sec.kind, s.name)"
+              >
+                <span class="stat-name">{{ s.name }}</span>
+                <i
+                  class="stat-bar"
+                  :style="{ width: `${Math.max(8, (s.count / maxCount(sec.list)) * 100)}%` }"
+                />
+                <span class="stat-count">{{ s.count }}</span>
+              </button>
+            </div>
+            <p v-else class="stats-empty">{{ t('stats.emptySection') }}</p>
+          </section>
+        </template>
+        <p v-else class="stats-empty">{{ t('stats.empty') }}</p>
+      </div>
     </div>
   </NDrawer>
 </template>
