@@ -137,10 +137,11 @@ async function exportAs(key: string | number) {
 }
 
 /* ---------- 存档备份（FEAT-6：导出 / 导入，防清库与跨设备迁移） ---------- */
-const archiveOptions = [
+// 与 exportOptions 同理用 computed：标签在渲染时取值，随界面语言切换刷新
+const archiveOptions = computed(() => [
   { label: t('archive.export'), key: 'export' },
   { label: t('archive.import'), key: 'import' },
-]
+])
 
 const archiveInput = ref<HTMLInputElement | null>(null)
 
