@@ -42,8 +42,10 @@ function readEntryValue(
   const total = count * byteSizeOfType(type)
   let dataOffset = entry + 8
   if (total > 4) dataOffset = view.getUint32(entry + 8, little)
-  if (dataOffset < 0 || dataOffset + count > tiff.byteLength) return null
-  return tiff.subarray(dataOffset, dataOffset + count)
+  // 边界按总字节数（count × 类型宽度）校验：条目值占 total 字节，按 count 越界检查
+  // 会放过短读（subarray 自动钳制不致崩溃，但会截短取值），格式声明异常时宁可放弃
+  if (dataOffset < 0 || dataOffset + total > tiff.byteLength) return null
+  return tiff.subarray(dataOffset, dataOffset + total)
 }
 
 function walkIfd(tiff: Uint8Array, view: DataView, offset: number, little: boolean): IfdWalkResult {
