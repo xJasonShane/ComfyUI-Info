@@ -1531,6 +1531,10 @@ it('排序模式：按文件时间新旧排列，失败项始终靠后', async (
   expect(names()).toEqual(['b.png', 'c.png', 'a.png', 'e.png'])
   api.store.sortMode = 'time-desc'
   expect(names()).toEqual(['a.png', 'c.png', 'b.png', 'e.png']) // 失败项脱离时间线靠后
+  api.store.sortMode = 'name-asc'
+  expect(names()).toEqual(['a.png', 'b.png', 'c.png', 'e.png']) // 跨来源全局按名，失败项垫底
+  api.store.sortMode = 'name-desc'
+  expect(names()).toEqual(['c.png', 'b.png', 'a.png', 'e.png'])
   api.store.sortMode = 'default'
   expect(names()).toEqual(['a.png', 'b.png', 'c.png', 'e.png']) // 来源 + 文件名，失败项垫底
 })

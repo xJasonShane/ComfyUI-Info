@@ -35,6 +35,8 @@ const zh = {
   'sort.default': '默认排序',
   'sort.timeDesc': '时间 新→旧',
   'sort.timeAsc': '时间 旧→新',
+  'sort.nameAsc': '文件名 A→Z',
+  'sort.nameDesc': '文件名 Z→A',
   'sort.workflow': '按工作流聚类',
 
   /* 状态行（App） */
@@ -316,6 +318,8 @@ const en: Record<DictKey, string> = {
   'sort.default': 'Default',
   'sort.timeDesc': 'Time new→old',
   'sort.timeAsc': 'Time old→new',
+  'sort.nameAsc': 'Name A→Z',
+  'sort.nameDesc': 'Name Z→A',
   'sort.workflow': 'By workflow',
 
   'stat.loaded': 'Loaded',

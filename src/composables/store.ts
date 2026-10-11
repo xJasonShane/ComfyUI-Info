@@ -29,8 +29,15 @@ import {
 } from '../lib/persist'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
-export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'workflow'
-const SORT_MODES: SortMode[] = ['default', 'time-desc', 'time-asc', 'workflow']
+export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc' | 'workflow'
+const SORT_MODES: SortMode[] = [
+  'default',
+  'time-desc',
+  'time-asc',
+  'name-asc',
+  'name-desc',
+  'workflow',
+]
 
 interface StoreState {
   items: ImageItem[]
@@ -735,6 +742,9 @@ const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
   'time-desc': (a, b) => errLast(a) - errLast(b) || b.mtime - a.mtime || byName(a, b),
   'time-asc': (a, b) => errLast(a) - errLast(b) || a.mtime - b.mtime || byName(a, b),
+  // 文件名排序：跨来源全局按名排（default 先按来源分组再按名），失败项同样垫底
+  'name-asc': (a, b) => errLast(a) - errLast(b) || byName(a, b),
+  'name-desc': (a, b) => errLast(a) - errLast(b) || byName(b, a),
   // F3：同工作流聚类——组按组内最新时间排列，组内新→旧，失败项垫底
   workflow: (a, b) => {
     const ea = errLast(a)
@@ -1320,6 +1330,8 @@ export const sortOptions = computed<{ label: string; value: SortMode }[]>(() => 
   { label: t('sort.default'), value: 'default' },
   { label: t('sort.timeDesc'), value: 'time-desc' },
   { label: t('sort.timeAsc'), value: 'time-asc' },
+  { label: t('sort.nameAsc'), value: 'name-asc' },
+  { label: t('sort.nameDesc'), value: 'name-desc' },
   { label: t('sort.workflow'), value: 'workflow' },
 ])
 
