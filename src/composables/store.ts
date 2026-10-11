@@ -60,6 +60,8 @@ interface StoreState {
   favOnly: boolean
   /** 画廊缩略图最小列宽（px，150–420）：卡片大小调节偏好 */
   thumbSize: number
+  /** 安全模式：画廊缩略图模糊显示（悬停临时揭示），公共场合 / 屏幕分享防走光（偏好记忆） */
+  safeMode: boolean
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
@@ -114,6 +116,9 @@ function loadThumbSize(): number {
   }
 }
 
+/* ---------- 安全模式偏好：缩略图模糊防走光，仅在用户切换时落盘 ---------- */
+const SAFE_MODE_KEY = 'cii:safe'
+
 const state = reactive<StoreState>({
   items: [],
   search: storedFilters.search,
@@ -129,6 +134,7 @@ const state = reactive<StoreState>({
   dupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
+  safeMode: localStorage.getItem(SAFE_MODE_KEY) === '1',
 })
 
 if (!storedTheme && schemeQuery) {
@@ -1522,6 +1528,16 @@ export function toggleDark() {
   // 未设置过偏好的用户始终保留「跟随系统」语义
   try {
     localStorage.setItem('cii:theme', state.dark ? 'dark' : 'light')
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+/** 安全模式开关：缩略图模糊 ↔ 直接显示，显式偏好落盘 */
+export function toggleSafeMode() {
+  state.safeMode = !state.safeMode
+  try {
+    localStorage.setItem(SAFE_MODE_KEY, state.safeMode ? '1' : '0')
   } catch {
     // 配额 / 环境限制时忽略：仅影响下次刷新的还原
   }

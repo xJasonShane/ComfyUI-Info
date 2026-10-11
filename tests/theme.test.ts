@@ -105,3 +105,22 @@ describe('缩略图大小偏好', () => {
     expect((await importStore()).store.thumbSize).toBe(206)
   })
 })
+
+describe('安全模式偏好', () => {
+  it('默认关闭，切换后写入偏好，再切回写 0', async () => {
+    stubEnv({ prefersLight: true })
+    const api = await importStore()
+    expect(api.store.safeMode).toBe(false)
+    api.toggleSafeMode()
+    expect(api.store.safeMode).toBe(true)
+    expect(localStorage.getItem('cii:safe')).toBe('1')
+    api.toggleSafeMode()
+    expect(localStorage.getItem('cii:safe')).toBe('0')
+  })
+
+  it('重启恢复已保存的偏好', async () => {
+    stubEnv({ prefersLight: true })
+    localStorage.setItem('cii:safe', '1')
+    expect((await importStore()).store.safeMode).toBe(true)
+  })
+})

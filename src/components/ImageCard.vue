@@ -90,7 +90,11 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
 <template>
   <div
     class="card"
-    :class="{ 'card-error': item.status === 'error', 'card-selected': selected }"
+    :class="{
+      'card-error': item.status === 'error',
+      'card-selected': selected,
+      safe: store.safeMode,
+    }"
     :style="{ '--i': index }"
     role="button"
     tabindex="0"

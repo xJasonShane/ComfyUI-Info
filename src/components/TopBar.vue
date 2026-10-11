@@ -38,6 +38,7 @@ import {
   store,
   switchRescanTarget,
   toggleDark,
+  toggleSafeMode,
 } from '../composables/store'
 import type { FilterPreset } from '../composables/store'
 import { exportItems, exportOptions } from '../lib/export'
@@ -493,6 +494,18 @@ function savePreset() {
       </template>
       {{ t('topbar.statsTooltip') }}
     </NTooltip>
+
+    <NButton
+      size="small"
+      quaternary
+      circle
+      :aria-label="store.safeMode ? t('topbar.safeModeOn') : t('topbar.safeModeOff')"
+      :aria-pressed="store.safeMode"
+      :title="store.safeMode ? t('topbar.safeModeOn') : t('topbar.safeModeOff')"
+      @click="toggleSafeMode"
+    >
+      <template #icon><Icon :name="store.safeMode ? 'eye-off' : 'eye'" /></template>
+    </NButton>
 
     <NButton
       size="small"
