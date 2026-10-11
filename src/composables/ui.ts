@@ -1,5 +1,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
+/** 统计抽屉显隐（TopBar 按钮 / App 的 Esc 全局键共用一份状态） */
+export const statsVisible = ref(false)
+
 /** 窄屏断点（与 style.css 的移动端断点保持一致） */
 const NARROW_QUERY = '(max-width: 959.98px)'
 

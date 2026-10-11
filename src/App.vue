@@ -58,6 +58,7 @@ import {
 } from './composables/store'
 import { exportItems, exportOptions } from './lib/export'
 import { copyText } from './lib/utils'
+import { statsVisible } from './composables/ui'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
 
@@ -299,6 +300,42 @@ function onKeydown(e: KeyboardEvent) {
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+
+/* ---------- 全局键盘批量操作：Ctrl/⌘+A 全选筛选结果、Esc 清空选择 ---------- */
+function inEditable(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return (
+    !!el &&
+    (el.tagName === 'INPUT' ||
+      el.tagName === 'TEXTAREA' ||
+      el.tagName === 'SELECT' ||
+      el.isContentEditable)
+  )
+}
+
+function onGlobalKeys(e: KeyboardEvent) {
+  if (inEditable(e.target)) return
+  // Ctrl/⌘+A：全选当前筛选结果（输入框内的原生全选不受影响）
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    if (!filteredItems.value.length) return
+    e.preventDefault()
+    selectAllFiltered()
+    return
+  }
+  // Esc：先清空选择；任一抽屉打开时 Esc 属于关抽屉（NDrawer closeOnEsc），不动选择
+  if (
+    e.key === 'Escape' &&
+    selectedIds.value.size &&
+    !showDetail.value &&
+    !showCompare.value &&
+    !statsVisible.value
+  ) {
+    e.preventDefault()
+    clearSelection()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeys))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeys))
 
 /* ---------- 剪贴板粘贴添加（FEAT-10）：Ctrl / ⌘+V 直接贴入图片或参数文件 ---------- */
 function onPaste(e: ClipboardEvent) {

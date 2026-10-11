@@ -39,6 +39,7 @@ import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
 import { downloadText } from '../lib/utils'
 import { locale, t, toggleLocale } from '../locales'
+import { statsVisible } from '../composables/ui'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
@@ -46,7 +47,8 @@ const message = useMessage()
 // Chromium 系走 File System Access 选择器（可记住目录、一键重扫），其余回退 webkitdirectory
 const fsPickSupported = supportsDirectoryPicker()
 const scanning = ref(false)
-const showStats = ref(false)
+// 统计抽屉显隐提升到 ui.ts：App 的全局 Esc（清空选择）需要感知抽屉是否打开
+const showStats = statsVisible
 
 /** webkitRelativePath 仅在目录选择时有值，普通多选为空串——退回 undefined 让去重退化为文件名 */
 function onPick(e: Event) {
