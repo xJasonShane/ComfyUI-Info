@@ -822,6 +822,26 @@ export const keywordStats = computed<UsageStat[]>(() => {
     .slice(0, KEYWORD_LIMIT)
 })
 
+const DIR_STAT_LIMIT = 20
+
+/**
+ * 按目录聚合出图量：取相对路径的父目录（浏览器文件 API 统一为 `/` 分隔），
+ * 无路径信息的条目（单选添加）不参与；次数降序，最多 20 条，点击应用 `path:` 筛选。
+ */
+export const dirStats = computed<UsageStat[]>(() => {
+  const freq = new Map<string, number>()
+  for (const it of state.items) {
+    if (it.status !== 'done' || !it.path) continue
+    const i = it.path.lastIndexOf('/')
+    if (i <= 0) continue
+    const dir = it.path.slice(0, i)
+    freq.set(dir, (freq.get(dir) ?? 0) + 1)
+  }
+  return Array.from(freq, ([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || nameCollator.compare(a.name, b.name))
+    .slice(0, DIR_STAT_LIMIT)
+})
+
 /**
  * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数 + VAE / 放大模型 /
  * ControlNet，按任意生成要素定位图片。

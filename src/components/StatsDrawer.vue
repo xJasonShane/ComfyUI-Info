@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NButton, NDrawer } from 'naive-ui'
-import { dailyCounts, keywordStats, store, usageStats } from '../composables/store'
+import { dailyCounts, dirStats, keywordStats, store, usageStats } from '../composables/store'
 import type { UsageStat } from '../composables/store'
 import Icon from './Icon.vue'
 import { useDrawerWidth } from '../composables/ui'
@@ -15,7 +15,7 @@ const drawerWidth = useDrawerWidth(560)
 
 interface StatSection {
   title: string
-  kind: 'model' | 'lora' | 'sampler' | 'day' | 'keyword'
+  kind: 'model' | 'lora' | 'sampler' | 'day' | 'keyword' | 'dir'
   list: UsageStat[]
 }
 
@@ -28,6 +28,7 @@ const sections = computed<StatSection[]>(() => [
     kind: 'day',
     list: dailyCounts.value.map((d) => ({ name: d.day, count: d.count })),
   },
+  { title: t('stats.dirs'), kind: 'dir', list: dirStats.value },
   { title: t('stats.keywords'), kind: 'keyword', list: keywordStats.value },
 ])
 const hasAny = computed(() => sections.value.some((s) => s.list.length > 0))
@@ -37,12 +38,14 @@ const maxCount = (list: UsageStat[]): number => list[0]?.count ?? 1
 
 /**
  * 点击统计项 → 应用对应筛选并关闭抽屉。模型走 modelFilter 精确筛选；
+ * 目录写入 `path:"…"`（引号形式支持含空格的目录名）；
  * LoRA / 采样器 / 高频词写入搜索框：含空格的名称会被 parseQuery 拆成多词 AND，
  * 而搜索串（searchText）包含完整名称，逐词命中等价于整名命中。
  * 日期行写入 `date:` 条件（本地时区按天匹配 mtime，见 store 的 hitDate）。
  */
 function pick(kind: StatSection['kind'], name: string) {
   if (kind === 'model') store.modelFilter = name
+  else if (kind === 'dir') store.search = `path:"${name}"`
   else store.search = kind === 'day' ? `date:${name}` : name
   show.value = false
 }

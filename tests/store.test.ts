@@ -1235,3 +1235,33 @@ describe('usageStats', () => {
     ])
   })
 })
+
+describe('dirStats', () => {
+  const mk = (id: string, path?: string) => ({
+    id,
+    url: '',
+    name: `${id}.png`,
+    path,
+    size: 1,
+    mtime: 1,
+    status: 'done' as const,
+    source: 'comfyui' as const,
+    raw: { source: 'comfyui' as const },
+  })
+
+  it('按父目录聚合出图量（次数降序），无目录部分的条目不参与', () => {
+    api.store.items.push(
+      mk('1', 'out/2026-01/a.png'),
+      mk('2', 'out/2026-01/b.png'),
+      mk('3', 'out/2026-02/c.png'),
+      mk('4', 'bare.png'), // 无目录部分（单文件拖入等）
+      mk('5'), // 单选添加无路径信息
+      // 非已解析项不参与
+      { ...mk('6', 'out/2026-01/d.png'), status: 'pending' as const },
+    )
+    expect(api.dirStats.value).toEqual([
+      { name: 'out/2026-01', count: 2 },
+      { name: 'out/2026-02', count: 1 },
+    ])
+  })
+})
