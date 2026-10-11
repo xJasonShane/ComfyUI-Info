@@ -36,6 +36,7 @@ import {
   saveDirBookmark,
   serializeArchive,
   toRecord,
+  type DirBookmark,
   type PersistRecord,
 } from '../lib/persist'
 
@@ -207,10 +208,85 @@ const recordKeyCache = new WeakMap<ImageItem, string>()
 function recordKeyOf(it: ImageItem): string {
   let k = recordKeyCache.get(it)
   if (k === undefined) {
-    k = recordKey({ path: it.path, name: it.name, size: it.size, mtime: it.mtime })
+    k = recordKey({
+      path: it.path,
+      name: it.name,
+      sourceId: it.sourceId,
+      size: it.size,
+      mtime: it.mtime,
+    })
     recordKeyCache.set(it, k)
   }
   return k
+}
+
+/** 旧版来源无 ID 时使用的别名键；仅在能唯一对应一个条目时用于安全迁移 / 回挂。 */
+function legacyRecordKey(it: Pick<ImageItem, 'path' | 'name' | 'size' | 'mtime'>): string {
+  return recordKey({ path: it.path, name: it.name, size: it.size, mtime: it.mtime })
+}
+
+const legacyItemsByKey = new Map<string, Set<ImageItem>>()
+
+function indexLegacyItem(item: ImageItem) {
+  const key = legacyRecordKey(item)
+  let group = legacyItemsByKey.get(key)
+  if (!group) legacyItemsByKey.set(key, (group = new Set()))
+  group.add(item)
+}
+
+function unindexLegacyItem(item: ImageItem) {
+  const key = legacyRecordKey(item)
+  const group = legacyItemsByKey.get(key)
+  group?.delete(item)
+  if (group?.size === 0) legacyItemsByKey.delete(key)
+}
+
+/** 将旧 / 外部存档的唯一匹配项绑定到当前目录，并迁移收藏、标签和 IndexedDB 主键。 */
+function adoptSourceId(item: ImageItem, sourceId: string): boolean {
+  const oldKey = recordKeyOf(item)
+  const newKey = recordKey({
+    path: item.path,
+    name: item.name,
+    sourceId,
+    size: item.size,
+    mtime: item.mtime,
+  })
+  if (oldKey === newKey) return true
+  if (seenKeys.has(newKey)) return false
+
+  if (item.detached) detachedByKey.delete(oldKey)
+  else seenKeys.delete(oldKey)
+  dirtyItems.delete(oldKey)
+  const pendingThumb = dirtyThumbs.get(oldKey)
+  if (pendingThumb) {
+    dirtyThumbs.delete(oldKey)
+    dirtyThumbs.set(newKey, pendingThumb)
+  }
+  item.sourceId = sourceId
+  recordKeyCache.delete(item)
+  if (item.detached) detachedByKey.set(newKey, item)
+  else seenKeys.add(newKey)
+
+  migrateUserMetadataKey(oldKey, newKey)
+  if (persistAvailable) {
+    deletedKeys.add(oldKey)
+    markDirty(item)
+  }
+  return true
+}
+
+function migrateUserMetadataKey(oldKey: string, newKey: string) {
+  if (favKeys.has(oldKey)) {
+    favKeys.delete(oldKey)
+    favKeys.add(newKey)
+    persistFavorites()
+  }
+  const oldTags = itemTags[oldKey]
+  if (oldTags?.length) {
+    itemTags[newKey] = [...new Set([...(itemTags[newKey] ?? []), ...oldTags])]
+    delete itemTags[oldKey]
+    persistTags()
+  }
 }
 
 /* ---------- 解析队列（有限并发） ---------- */
@@ -349,15 +425,15 @@ export function retryAllFailed(): number {
 export function addFiles(files: IncomingFile[]): number {
   const deferred: IncomingFile[] = []
   let added = 0
-  for (const { file, path } of files) {
+  for (const { file, path, sourceId } of files) {
     if (isSupportedImage(file)) {
-      added += enqueueFile(file, path)
+      added += enqueueFile(file, path, false, sourceId)
     } else if (isMetaTextFile(file)) {
       // F1：工作流 JSON / 参数文本拖入即解析，无需配图
-      added += enqueueFile(file, path, true)
+      added += enqueueFile(file, path, true, sourceId)
     } else {
       // 无扩展名 / 生僻扩展名：按文件头魔数嗅探，异步确认后再入列
-      deferred.push({ file, path })
+      deferred.push({ file, path, sourceId })
     }
   }
   pump()
@@ -366,17 +442,38 @@ export function addFiles(files: IncomingFile[]): number {
 }
 
 /** 入列单个文件：返回是否新增（指纹已存在 / 存档回挂不产生解析任务，均不算新增） */
-function enqueueFile(file: File, path?: string, metaOnly = false): number {
-  const key = recordKey({ path, name: file.name, size: file.size, mtime: file.lastModified })
+function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: string): number {
+  const identity = { path, name: file.name, sourceId, size: file.size, mtime: file.lastModified }
+  let key = recordKey(identity)
   if (seenKeys.has(key)) return 0
   // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
-  const archived = detachedByKey.get(key)
+  let archived = detachedByKey.get(key)
+  if (!archived && sourceId) {
+    // 升级前 / 跨设备备份里的记录没有本机目录 ID。仅当路径指纹唯一时迁移，
+    // 避免同名目录中的记录被错误吸收到当前来源。
+    const legacyGroup = legacyItemsByKey.get(legacyRecordKey(identity))
+    if (legacyGroup?.size === 1) {
+      const candidate = legacyGroup.values().next().value as ImageItem | undefined
+      const canAdopt =
+        candidate &&
+        candidate.detached &&
+        candidate.sourceId !== sourceId &&
+        (!candidate.sourceId ||
+          candidate.sourceId.startsWith('imported:'))
+      if (candidate && canAdopt && adoptSourceId(candidate, sourceId)) {
+        key = recordKeyOf(candidate)
+        if (candidate.detached) archived = candidate
+        else return 0
+      }
+    }
+  }
   if (archived) {
     archived.file = file
     archived.url = URL.createObjectURL(file)
     archived.detached = false
     seenKeys.add(key)
     detachedByKey.delete(key)
+    markDirty(archived)
     return 0
   }
   seenKeys.add(key)
@@ -388,6 +485,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false): number {
     url: '',
     name: file.name,
     path,
+    sourceId,
     size: file.size,
     mtime: file.lastModified,
     status: 'pending',
@@ -397,6 +495,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false): number {
   })
   state.items.push(item)
   liveIds.add(item.id)
+  indexLegacyItem(item)
   state.batchTotal++
   batchCounted.add(item)
   queue.push(item)
@@ -407,7 +506,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false): number {
 async function acceptBySniff(incoming: IncomingFile) {
   try {
     if (await hasSupportedSignature(incoming.file)) {
-      enqueueFile(incoming.file, incoming.path)
+      enqueueFile(incoming.file, incoming.path, false, incoming.sourceId)
     }
   } catch {
     // 读取失败按不支持处理
@@ -440,6 +539,7 @@ export function removeItems(items: ImageItem[]) {
   for (const it of removedItems) {
     liveIds.delete(it.id)
     const key = recordKeyOf(it)
+    unindexLegacyItem(it)
     seenKeys.delete(key)
     if (it.detached) detachedByKey.delete(key)
     dirtyItems.delete(key)
@@ -481,6 +581,7 @@ export function clearAll() {
   seenKeys.clear()
   liveIds.clear()
   detachedByKey.clear()
+  legacyItemsByKey.clear()
   queue.length = 0
   inflight.clear()
   scanEpoch++ // 在途目录枚举的后续批次按代际丢弃，不得把清掉的文件找回
@@ -507,50 +608,113 @@ export function clearAll() {
 /* ---------- 目录书签（FEAT-7 多目录：切换重扫目标 / 一键重扫） ---------- */
 // 句柄不放进 reactive 状态：代理对象无法结构化克隆回写 IndexedDB，界面只依赖 rescanName / dirBookmarks
 let rescanHandle: FileSystemDirectoryHandle | null = null
-const dirBookmarks = new Map<string, { handle: FileSystemDirectoryHandle; savedAt: number }>()
+let rescanBookmarkId: string | null = null
+const dirBookmarks = new Map<string, DirBookmark>()
+const bookmarkLabelToId = new Map<string, string>()
+let directoryIdSeq = 0
+let hydrationPromise: Promise<void> = Promise.resolve()
 
-function refreshDirNames() {
-  state.dirBookmarks = [...dirBookmarks.entries()]
-    .sort((a, b) => b[1].savedAt - a[1].savedAt)
-    .map(([name]) => name)
+function newDirectorySourceId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return uuid
+    ? `dir:${uuid}`
+    : `dir:${Date.now().toString(36)}:${(++directoryIdSeq).toString(36)}:${Math.random().toString(36).slice(2)}`
 }
 
-/** 记住目录并设为当前重扫目标（加入 / 刷新书签，同名覆盖） */
-export async function setRescanHandle(handle: FileSystemDirectoryHandle) {
+/** 为当前句柄取稳定身份；FileSystemDirectoryHandle.isSameEntry 可跨重新选择识别同一目录。 */
+export async function getDirectorySourceId(handle: FileSystemDirectoryHandle): Promise<string> {
+  // 先完成 IndexedDB 书签恢复，避免启动早期选择目录时给已记住的来源误分配新 ID。
+  await hydrationPromise
+  const comparable = handle as FileSystemDirectoryHandle & {
+    isSameEntry?: (other: FileSystemHandle) => Promise<boolean>
+  }
+  for (const [id, bookmark] of dirBookmarks) {
+    if (bookmark.handle === handle) return id
+    if (!comparable.isSameEntry) continue
+    try {
+      if (await comparable.isSameEntry(bookmark.handle)) return id
+    } catch {
+      // 浏览器可能因旧句柄失效而拒绝比较；该项按不同来源处理，不能误合并。
+    }
+  }
+  return newDirectorySourceId()
+}
+
+function refreshDirNames() {
+  const sorted = [...dirBookmarks.values()].sort((a, b) => b.savedAt - a.savedAt)
+  const totals = new Map<string, number>()
+  for (const bookmark of sorted) totals.set(bookmark.name, (totals.get(bookmark.name) ?? 0) + 1)
+  const seen = new Map<string, number>()
+  bookmarkLabelToId.clear()
+  const labels = sorted.map((bookmark) => {
+    const occurrence = (seen.get(bookmark.name) ?? 0) + 1
+    seen.set(bookmark.name, occurrence)
+    const baseLabel =
+      (totals.get(bookmark.name) ?? 0) > 1
+        ? `${bookmark.name} (${occurrence})`
+        : bookmark.name
+    let label = baseLabel
+    if (bookmarkLabelToId.has(label)) label = `${baseLabel} · ${bookmark.id.slice(-4)}`
+    let suffix = 2
+    while (bookmarkLabelToId.has(label)) label = `${baseLabel} · ${bookmark.id.slice(-4)}-${suffix++}`
+    bookmarkLabelToId.set(label, bookmark.id)
+    return label
+  })
+  state.dirBookmarks = labels
+  state.rescanName = rescanBookmarkId
+    ? sorted.find((bookmark) => bookmark.id === rescanBookmarkId)?.name ?? null
+    : null
+  // When names collide, the visible label carries the ordinal used by the menu.
+  if (rescanBookmarkId) {
+    const index = sorted.findIndex((bookmark) => bookmark.id === rescanBookmarkId)
+    if (index >= 0) state.rescanName = labels[index] ?? state.rescanName
+  }
+}
+
+/** 记住目录并设为当前重扫目标；同名但不同句柄的目录保留为独立书签。 */
+export async function setRescanHandle(
+  handle: FileSystemDirectoryHandle,
+  sourceId?: string,
+): Promise<string> {
+  const id = sourceId ?? (await getDirectorySourceId(handle))
   rescanHandle = handle
-  state.rescanName = handle.name
-  dirBookmarks.set(handle.name, { handle, savedAt: Date.now() })
+  rescanBookmarkId = id
+  dirBookmarks.set(id, { id, name: handle.name, handle, savedAt: Date.now() })
   refreshDirNames()
   syncAutoRescanTimer()
   try {
     // 句柄持久化不可用的浏览器（不支持结构化克隆）仅本次会话有效
-    if (persistAvailable) await saveDirBookmark(handle)
+    if (persistAvailable) await saveDirBookmark(handle, id)
   } catch {
     // 忽略：重扫按钮仍在本会话可用
   }
+  return id
 }
 
 /** 切换当前重扫目标为已记住的目录（不立即扫描）；无此书签返回 false */
-export function switchRescanTarget(name: string): boolean {
-  const bm = dirBookmarks.get(name)
+export function switchRescanTarget(label: string): boolean {
+  const id = bookmarkLabelToId.get(label) ?? (dirBookmarks.has(label) ? label : null)
+  const bm = id ? dirBookmarks.get(id) : undefined
   if (!bm) return false
   rescanHandle = bm.handle
-  state.rescanName = name
+  rescanBookmarkId = bm.id
+  refreshDirNames()
   syncAutoRescanTimer()
   return true
 }
 
 /** 不再记住当前目录（仅移除该书签，其余书签保留） */
 export function forgetRescanHandle() {
-  const name = state.rescanName
-  if (name) {
-    dirBookmarks.delete(name)
+  const id = rescanBookmarkId
+  if (id) {
+    dirBookmarks.delete(id)
     refreshDirNames()
   }
   rescanHandle = null
+  rescanBookmarkId = null
   state.rescanName = null
   syncAutoRescanTimer() // 自动重扫随当前目标消失停表；偏好保留，下次记住目录时自动恢复
-  if (persistAvailable && name) void removeDirBookmark(name).catch(() => {})
+  if (persistAvailable && id) void removeDirBookmark(id).catch(() => {})
 }
 
 /** 清除全部目录书签（含当前重扫目标） */
@@ -558,13 +722,17 @@ export function clearAllDirBookmarks() {
   dirBookmarks.clear()
   refreshDirNames()
   rescanHandle = null
+  rescanBookmarkId = null
   state.rescanName = null
   syncAutoRescanTimer()
   if (persistAvailable) void clearPersistedBookmarks().catch(() => {})
 }
 
 /** 扫描单个目录句柄（增量入列）：返回新增数，无权限 / 枚举失败返回 null（F3 抽取复用） */
-async function scanDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<number | null> {
+async function scanDirectoryHandle(
+  handle: FileSystemDirectoryHandle,
+  sourceId: string,
+): Promise<number | null> {
   // 代际号在入口捕获（含权限等待之前）：清空列表前发起的整轮扫描都属旧代际
   const epoch = scanEpoch
   if (!(await ensureReadPermission(handle))) return null
@@ -574,7 +742,7 @@ async function scanDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<n
       // 代际检查：clearAll 后在途枚举的后续批次不再入列——seenKeys 已清空，
       // 继续入列会把刚清掉的文件全部当新文件重新解析（「清空后自己回来」）
       if (epoch !== scanEpoch) return
-      added += addFiles(files)
+      added += addFiles(files.map((file) => ({ ...file, sourceId })))
     })
   } catch {
     // 目录被删除 / 移动（U 盘拔出等）：本拍按不可用处理。手动重扫由调用方提示无权限，
@@ -589,8 +757,8 @@ async function scanDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<n
  * 分批边扫边入列；返回新增入列的文件数，无句柄或未获授权返回 null。
  */
 export async function rescanDirectory(): Promise<number | null> {
-  if (!rescanHandle) return null
-  return scanDirectoryHandle(rescanHandle)
+  if (!rescanHandle || !rescanBookmarkId) return null
+  return scanDirectoryHandle(rescanHandle, rescanBookmarkId)
 }
 
 /**
@@ -600,8 +768,8 @@ export async function rescanDirectory(): Promise<number | null> {
 export async function rescanAllDirectories(): Promise<{ added: number; failed: number }> {
   let added = 0
   let failed = 0
-  for (const { handle } of dirBookmarks.values()) {
-    const n = await scanDirectoryHandle(handle)
+  for (const [id, { handle }] of dirBookmarks) {
+    const n = await scanDirectoryHandle(handle, id)
     if (n === null) failed++
     else added += n
   }
@@ -685,6 +853,7 @@ export function restoreArchived(records: PersistRecord[]) {
     const item = reactive<ImageItem>(fromRecord(rec))
     detachedByKey.set(rec.key, item)
     liveIds.add(item.id)
+    indexLegacyItem(item)
     state.items.push(item)
   }
 }
@@ -763,13 +932,14 @@ async function hydrate() {
     // 恢复全部目录书签（FEAT-7），最近记住的作为当前重扫目标
     const bookmarks = await loadDirBookmarks()
     for (const bm of bookmarks) {
-      dirBookmarks.set(bm.name, { handle: bm.handle, savedAt: bm.savedAt })
+      dirBookmarks.set(bm.id, bm)
     }
     refreshDirNames()
     const latest = bookmarks[0]
     if (latest) {
       rescanHandle = latest.handle
-      state.rescanName = latest.name
+      rescanBookmarkId = latest.id
+      refreshDirNames()
       syncAutoRescanTimer() // 偏好为开时恢复自动监视（权限需重新授权时各拍静默重试）
     }
   } catch (err) {
@@ -825,18 +995,50 @@ export async function importArchive(
   text: string,
 ): Promise<{ n: number; favs: number; tags: number }> {
   const { records, favorites, tags } = parseArchive(text)
-  const fresh = records.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
+  // 来源 ID 是目录句柄的本机身份。当前机器已有同一来源时保留它以便幂等导入；
+  // 外部备份的 ID 加 imported 前缀，重新选择本机目录时可按唯一旧路径别名迁移。
+  const remappedKeys = new Map<string, string>()
+  const localRecords = records.map((rec) => {
+    const alreadyKnown = seenKeys.has(rec.key) || detachedByKey.has(rec.key)
+    const sourceId =
+      rec.sourceId &&
+      !rec.sourceId.startsWith('imported:') &&
+      !dirBookmarks.has(rec.sourceId) &&
+      !alreadyKnown
+        ? `imported:${rec.sourceId}`
+        : rec.sourceId
+    const key = recordKey({
+      path: rec.path,
+      name: rec.name,
+      sourceId,
+      size: rec.size,
+      mtime: rec.mtime,
+    })
+    remappedKeys.set(rec.key, key)
+    return { ...rec, sourceId, key }
+  })
+  const localFavorites = favorites.map((key) => remappedKeys.get(key) ?? key)
+  const localTags: Record<string, string[]> = {}
+  for (const [key, names] of Object.entries(tags)) {
+    const mapped = remappedKeys.get(key) ?? key
+    localTags[mapped] = [...new Set([...(localTags[mapped] ?? []), ...names])]
+  }
+  const fresh = localRecords.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
   if (persistAvailable) {
     const written = await importPersisted(fresh)
     restoreArchived(written)
     return {
       n: written.length,
-      favs: mergeArchivedFavorites(favorites),
-      tags: mergeArchivedTags(tags),
+      favs: mergeArchivedFavorites(localFavorites),
+      tags: mergeArchivedTags(localTags),
     }
   }
   restoreArchived(fresh)
-  return { n: fresh.length, favs: mergeArchivedFavorites(favorites), tags: mergeArchivedTags(tags) }
+  return {
+    n: fresh.length,
+    favs: mergeArchivedFavorites(localFavorites),
+    tags: mergeArchivedTags(localTags),
+  }
 }
 
 /** 把备份携带的收藏指纹并入本机账本（幂等：已存在的跳过），返回实际新增数 */
@@ -867,7 +1069,7 @@ function mergeArchivedTags(tags: Record<string, string[]>): number {
   if (added) persistTags()
   return added
 }
-void hydrate()
+hydrationPromise = hydrate()
 
 /* ---------- 派生数据 ---------- */
 export const parsing = computed(() => state.batchDone < state.batchTotal)

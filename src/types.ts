@@ -70,6 +70,8 @@ export interface ImageItem {
   name: string
   /** 相对路径（含文件名）：目录选择来自 webkitRelativePath，拖拽目录来自 entry.fullPath；单选文件无目录信息时缺省 */
   path?: string
+  /** 目录来源的稳定标识（File System Access API）；区分同名目录中的同路径文件 */
+  sourceId?: string
   size: number
   /** 文件修改时间（毫秒）：新添加取自 file.lastModified，存档项来自持久化记录 */
   mtime: number
@@ -94,4 +96,6 @@ export interface ImageItem {
 export interface IncomingFile {
   file: File
   path?: string
+  /** 目录来源 ID；目录句柄重扫时保持不变 */
+  sourceId?: string
 }

@@ -28,6 +28,7 @@ import {
   filteredItems,
   filterPresets,
   forgetRescanHandle,
+  getDirectorySourceId,
   importArchive,
   modelOptions,
   parsing,
@@ -94,13 +95,16 @@ async function onPickFolder() {
   if (!handle) return
   scanning.value = true
   try {
+    const sourceId = await getDirectorySourceId(handle)
     // 分批入列：遍历期间解析已并行开跑；总数为 0 表示目录里没有图片文件（未加入任何项）
-    const count = await collectDirectoryFiles(handle, addFiles)
+    const count = await collectDirectoryFiles(handle, (files) =>
+      addFiles(files.map((file) => ({ ...file, sourceId }))),
+    )
     if (!count) {
       message.warning(t('msg.dirEmpty', { name: handle.name }))
       return
     }
-    await setRescanHandle(handle)
+    await setRescanHandle(handle, sourceId)
   } finally {
     scanning.value = false
   }

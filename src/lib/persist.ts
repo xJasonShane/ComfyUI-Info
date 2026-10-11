@@ -24,6 +24,8 @@ export interface PersistRecord {
   key: string
   name: string
   path?: string
+  /** File System Access 目录来源 ID；旧版记录缺省时仍可由路径指纹回挂 */
+  sourceId?: string
   size: number
   mtime: number
   status: 'done' | 'error'
@@ -36,14 +38,16 @@ export interface PersistRecord {
   thumbB64?: string
 }
 
-/** 存档主键 = 去重指纹（路径或文件名|大小|修改时间）：回挂匹配与去重共用同一构造 */
+/** 存档主键 = 来源 ID（如有）+ 路径或文件名 + 大小 + 修改时间；回挂与去重共用此构造。 */
 export function recordKey(it: {
   path?: string
   name: string
+  sourceId?: string
   size: number
   mtime: number
 }): string {
-  return `${it.path ?? it.name}|${it.size}|${it.mtime}`
+  const pathKey = `${it.path ?? it.name}|${it.size}|${it.mtime}`
+  return it.sourceId ? `source:${encodeURIComponent(it.sourceId)}|${pathKey}` : pathKey
 }
 
 let archivedSeq = 0
@@ -57,6 +61,7 @@ export function toRecord(item: ImageItem): PersistRecord | null {
     key: recordKey(item),
     name: item.name,
     path: item.path,
+    sourceId: item.sourceId,
     size: item.size,
     mtime: item.mtime,
     status: item.status === 'error' ? 'error' : 'done',
@@ -76,6 +81,7 @@ export function fromRecord(rec: PersistRecord): ImageItem {
     url: '',
     name: rec.name,
     path: rec.path,
+    sourceId: rec.sourceId,
     size: rec.size,
     mtime: rec.mtime,
     status: rec.status,
@@ -95,6 +101,7 @@ function isValidRecord(value: unknown): value is PersistRecord {
     typeof rec.key === 'string' &&
     typeof rec.name === 'string' &&
     typeof rec.mtime === 'number' &&
+    (rec.sourceId === undefined || typeof rec.sourceId === 'string') &&
     (rec.status === 'done' || rec.status === 'error') &&
     !!rec.raw
   )
@@ -131,6 +138,7 @@ export interface StoredRecord {
   key: string
   name: string
   path?: string
+  sourceId?: string
   size: number
   mtime: number
   status: 'done' | 'error'
@@ -174,6 +182,7 @@ export function splitPersistRecord(rec: PersistRecord): { stored: StoredRecord; 
     key: rec.key,
     name: rec.name,
     path: rec.path,
+    sourceId: rec.sourceId,
     size: rec.size,
     mtime: rec.mtime,
     status: rec.status,
@@ -226,6 +235,7 @@ export function materializeRecord(
     key: stored.key,
     name: stored.name,
     path: stored.path,
+    sourceId: stored.sourceId,
     size: stored.size,
     mtime: stored.mtime,
     status: stored.status,
@@ -246,6 +256,7 @@ function isStoredRecord(value: unknown): value is StoredRecord {
     typeof rec.key === 'string' &&
     typeof rec.name === 'string' &&
     typeof rec.mtime === 'number' &&
+    (rec.sourceId === undefined || typeof rec.sourceId === 'string') &&
     (rec.status === 'done' || rec.status === 'error') &&
     typeof rec.source === 'string'
   )
@@ -399,27 +410,33 @@ export async function clearPersisted(): Promise<void> {
   await settled(tx)
 }
 
-/* ---------- 目录书签（FEAT-7 多目录：按目录名存储，可切换重扫目标） ---------- */
+/* ---------- 目录书签（FEAT-7 多目录：按来源 ID 存储，可切换重扫目标） ---------- */
 
 export interface DirBookmark {
+  /** 句柄身份键；同名目录使用不同 ID */
+  id: string
   name: string
   handle: FileSystemDirectoryHandle
   savedAt: number
 }
 
-/** 保存 / 更新目录书签（以目录名为键，同名覆盖并刷新时间） */
-export async function saveDirBookmark(handle: FileSystemDirectoryHandle): Promise<void> {
+/** 保存 / 更新目录书签；调用方提供的 ID 让同名目录可以并存。 */
+export async function saveDirBookmark(
+  handle: FileSystemDirectoryHandle,
+  id = handle.name,
+): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(HANDLE_STORE, 'readwrite')
-  tx.objectStore(HANDLE_STORE).put({ id: handle.name, handle, savedAt: Date.now() })
+  tx.objectStore(HANDLE_STORE).put({ id, name: handle.name, handle, savedAt: Date.now() })
   await settled(tx)
 }
 
-/** 读取全部书签（新→旧）；v2 单一 'last' 行一次性迁移为按目录名存储 */
+/** 读取全部书签（新→旧）；迁移旧版单一 'last' 行时保留独立身份，避免覆盖同名目录。 */
 export async function loadDirBookmarks(): Promise<DirBookmark[]> {
   const db = await getDb()
   const rows = (await getAllFrom(db, HANDLE_STORE)) as {
     id?: string
+    name?: string
     handle?: FileSystemDirectoryHandle
     savedAt?: number
   }[]
@@ -428,19 +445,29 @@ export async function loadDirBookmarks(): Promise<DirBookmark[]> {
   for (const row of rows) {
     if (!row?.handle) continue
     if (row.id === 'last') {
-      legacy = { name: row.handle.name, handle: row.handle, savedAt: row.savedAt ?? 0 }
+      legacy = {
+        id: 'legacy:last',
+        name: row.handle.name,
+        handle: row.handle,
+        savedAt: row.savedAt ?? 0,
+      }
     } else if (typeof row.id === 'string') {
-      out.push({ name: row.id, handle: row.handle, savedAt: row.savedAt ?? 0 })
+      out.push({
+        id: row.id,
+        name: typeof row.name === 'string' ? row.name : row.handle.name,
+        handle: row.handle,
+        savedAt: row.savedAt ?? 0,
+      })
     }
   }
   if (legacy) {
     out.push(legacy)
-    void saveDirBookmark(legacy.handle)
-      .then(() => {
-        // 目录恰好名为 "last" 时迁移写入与旧行同键，不能再删
-        if (legacy!.name !== 'last') return removeDirBookmarkRow('last')
-      })
-      .catch(() => {})
+    try {
+      await saveDirBookmark(legacy.handle, legacy.id)
+      await removeDirBookmarkRow('last')
+    } catch {
+      // 迁移失败时保留旧行，下次启动继续尝试；当前会话仍可使用已读取的句柄。
+    }
   }
   return out.sort((a, b) => b.savedAt - a.savedAt)
 }
@@ -452,8 +479,8 @@ async function removeDirBookmarkRow(id: string): Promise<void> {
   await settled(tx)
 }
 
-export async function removeDirBookmark(name: string): Promise<void> {
-  await removeDirBookmarkRow(name)
+export async function removeDirBookmark(id: string): Promise<void> {
+  await removeDirBookmarkRow(id)
 }
 
 export async function clearDirBookmarks(): Promise<void> {
