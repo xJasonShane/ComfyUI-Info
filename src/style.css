@@ -966,6 +966,17 @@ body {
   white-space: pre;
 }
 
+.pretty-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .notice {
   border: 1px dashed var(--border-strong);
   border-radius: 12px;

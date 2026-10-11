@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NDrawer, NTabPane, NTabs, useMessage } from 'naive-ui'
+import { NButton, NDrawer, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
@@ -145,10 +145,27 @@ function stageText(s: SamplerInfo): string {
 const positiveText = computed(() => p.value?.positive.join('\n') ?? '')
 const negativeText = computed(() => p.value?.negative.join('\n') ?? '')
 
+/* ---------- JSON 页签格式化显示（仅影响展示；复制 / 下载始终使用原文） ---------- */
+const prettyJson = ref(false)
+
+/** pretty-print；JSON 损坏无法解析时原样展示，与「原文排查」场景兼容 */
+function prettyOrRaw(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
 const jsonText = computed(() => {
   if (!props.item) return ''
-  if (tab.value === 'workflow') return props.item.raw.workflow ?? t('detail.noWorkflow')
-  return props.item.raw.prompt ?? ''
+  if (tab.value === 'workflow') {
+    const raw = props.item.raw.workflow
+    if (!raw) return t('detail.noWorkflow')
+    return prettyJson.value ? prettyOrRaw(raw) : raw
+  }
+  const raw = props.item.raw.prompt ?? ''
+  return raw && prettyJson.value ? prettyOrRaw(raw) : raw
 })
 
 async function copy(value: string | undefined, label: string) {
@@ -327,18 +344,22 @@ function downloadJson(text: string | undefined, suffix: string) {
             </NTabPane>
             <NTabPane v-if="item.raw.prompt" name="prompt" :tab="t('detail.tabPrompt')">
               <pre class="json-pre">{{ jsonText }}</pre>
-              <div style="display: flex; gap: 8px; margin-top: 10px">
+              <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
                 <NButton size="tiny" secondary @click="copy(item.raw.prompt, t('detail.tabPrompt'))">
                   <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
                 <NButton size="tiny" secondary @click="downloadJson(item.raw.prompt, 'prompt.json')">
                   <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
                 </NButton>
+                <label class="pretty-toggle">
+                  <NSwitch v-model:value="prettyJson" size="small" />
+                  {{ t('detail.prettyJson') }}
+                </label>
               </div>
             </NTabPane>
             <NTabPane v-if="item.raw.source !== 'a1111'" name="workflow" :tab="t('detail.tabWorkflow')">
               <pre class="json-pre">{{ jsonText }}</pre>
-              <div style="display: flex; gap: 8px; margin-top: 10px">
+              <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
                 <NButton size="tiny" secondary @click="copy(item.raw.workflow, t('detail.tabWorkflow'))">
                   <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
@@ -350,6 +371,10 @@ function downloadJson(text: string | undefined, suffix: string) {
                 >
                   <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
                 </NButton>
+                <label class="pretty-toggle">
+                  <NSwitch v-model:value="prettyJson" size="small" />
+                  {{ t('detail.prettyJson') }}
+                </label>
               </div>
               <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
                 {{ t('detail.workflowHint') }}
