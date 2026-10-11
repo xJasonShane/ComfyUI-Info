@@ -84,12 +84,13 @@ function loadStoredFilters(): {
 
 const storedFilters = loadStoredFilters()
 
-// FEAT-8：主题显式偏好优先，未设置过时跟随系统 prefers-color-scheme
+// FEAT-8：主题显式偏好优先；未设置过时跟随系统 prefers-color-scheme 并实时跟随切换
+// （系统变化驱动的翻转不落盘——显式偏好只在 toggleDark 里写入，写入后不再跟随系统）
 const storedTheme = localStorage.getItem('cii:theme')
-const prefersLight =
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-color-scheme: light)').matches
+const schemeQuery =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: light)')
+    : null
 
 const state = reactive<StoreState>({
   items: [],
@@ -97,7 +98,7 @@ const state = reactive<StoreState>({
   modelFilter: storedFilters.modelFilter,
   sourceFilter: storedFilters.sourceFilter,
   sortMode: storedSort && SORT_MODES.includes(storedSort) ? storedSort : 'default',
-  dark: storedTheme ? storedTheme === 'dark' : !prefersLight,
+  dark: storedTheme ? storedTheme === 'dark' : !(schemeQuery?.matches ?? false),
   batchTotal: 0,
   batchDone: 0,
   rescanName: null,
@@ -107,10 +108,13 @@ const state = reactive<StoreState>({
   favOnly: false,
 })
 
-watch(
-  () => state.dark,
-  (d) => localStorage.setItem('cii:theme', d ? 'dark' : 'light'),
-)
+if (!storedTheme && schemeQuery) {
+  schemeQuery.addEventListener('change', (e) => {
+    // 用户手动切换后（toggleDark 落盘）显式偏好优先，不再跟随系统
+    if (localStorage.getItem('cii:theme') !== null) return
+    state.dark = !e.matches
+  })
+}
 
 watch(
   () => state.sortMode,
@@ -1271,6 +1275,13 @@ export function toggleFavorite(item: ImageItem) {
 
 export function toggleDark() {
   state.dark = !state.dark
+  // 显式偏好只在用户切换时落盘；系统跟随（见 schemeQuery 监听）不写入，
+  // 未设置过偏好的用户始终保留「跟随系统」语义
+  try {
+    localStorage.setItem('cii:theme', state.dark ? 'dark' : 'light')
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
 }
 
 /**
