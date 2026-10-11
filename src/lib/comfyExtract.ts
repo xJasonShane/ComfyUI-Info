@@ -326,7 +326,7 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
   // 出图尺寸：从最后一个采样器的 latent_image 沿链向上回溯（主采样器之后不再有改变尺寸的节点），
   // 从后往前逐个采样器尝试以兼容分支图；链上找不到显式宽高（如 img2img）时保持未定义
   for (let i = out.samplers.length - 1; i >= 0 && out.width === undefined; i--) {
-    const node = map[out.samplers[i].nodeId]
+    const node = map[out.samplers[i]!.nodeId]
     const latent = ((node?.inputs ?? {}) as NodeInputs).latent_image
     if (!isLink(latent)) continue
     const info = resolveLatent(latent[0])

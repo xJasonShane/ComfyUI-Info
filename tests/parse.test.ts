@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { deflateSync } from 'node:zlib'
 import { readPngTexts, parsePngChunks } from '../src/lib/png'
 import {
+  extractExifThumbnail,
   extractUserCommentFromTiff,
   decodeUserComment,
   extractJsonSubstring,
@@ -13,6 +14,7 @@ import {
   hasSupportedSignature,
   internParseResult,
   readImageMetadata,
+  readImageMetadataWithThumb,
   readTextMetadata,
   extractParams,
 } from '../src/lib/metadata'
@@ -1249,5 +1251,84 @@ describe('ParseScheduler（回退编排）', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/* ---------- EXIF 内嵌缩略图（F2） ---------- */
+
+/** 构造带 UserComment（ExifIFD）与 IFD1 缩略图的 TIFF：缩略图经 next-IFD 链寻址 */
+function buildTiffWithCommentAndThumb(comment: Uint8Array, thumb: Uint8Array): Uint8Array {
+  const ifd0 = 8
+  const exifIfd = ifd0 + 2 + 12 + 4
+  const ifd1 = exifIfd + 2 + 12 + 4
+  const commentOff = ifd1 + 2 + 24 + 4
+  const thumbOff = commentOff + comment.length
+  const buf = new Uint8Array(thumbOff + thumb.length)
+  const v = new DataView(buf.buffer)
+  buf.set([0x49, 0x49], 0) // II 小端
+  v.setUint16(2, 42, true)
+  v.setUint32(4, ifd0, true)
+  v.setUint16(ifd0, 1, true)
+  v.setUint16(ifd0 + 2, 0x8769, true)
+  v.setUint16(ifd0 + 4, 4, true)
+  v.setUint32(ifd0 + 6, 1, true)
+  v.setUint32(ifd0 + 10, exifIfd, true)
+  v.setUint32(ifd0 + 14, ifd1, true) // next → IFD1（缩略图）
+  v.setUint16(exifIfd, 1, true)
+  v.setUint16(exifIfd + 2, 0x9286, true)
+  v.setUint16(exifIfd + 4, 7, true)
+  v.setUint32(exifIfd + 6, comment.length, true)
+  v.setUint32(exifIfd + 10, commentOff, true)
+  v.setUint32(exifIfd + 14, 0, true)
+  v.setUint16(ifd1, 2, true)
+  // 条目一：JPEGInterchangeFormat（0x0201，LONG 内联）→ 缩略图偏移
+  v.setUint16(ifd1 + 2, 0x0201, true)
+  v.setUint16(ifd1 + 4, 4, true)
+  v.setUint32(ifd1 + 6, 1, true)
+  v.setUint32(ifd1 + 10, thumbOff, true)
+  // 条目二：JPEGInterchangeFormatLength（0x0202，LONG 内联）→ 缩略图字节数
+  v.setUint16(ifd1 + 14, 0x0202, true)
+  v.setUint16(ifd1 + 16, 4, true)
+  v.setUint32(ifd1 + 18, 1, true)
+  v.setUint32(ifd1 + 22, thumb.length, true)
+  v.setUint32(ifd1 + 26, 0, true) // IFD1 next = 0（条目区 2+24 字节之后）
+  buf.set(comment, commentOff)
+  buf.set(thumb, thumbOff)
+  return buf
+}
+
+describe('EXIF 内嵌缩略图提取（F2）', () => {
+  const thumb = Uint8Array.from([0xff, 0xd8, 0xff, 0xdb, 1, 2, 3, 0xff, 0xd9])
+
+  it('从 IFD1 链提取内嵌 JPEG 缩略图', () => {
+    const comment = Buffer.concat([
+      Buffer.from('ASCII\0\0\0', 'latin1'),
+      Buffer.from('cat\nSteps: 20'),
+    ])
+    const tiff = buildTiffWithCommentAndThumb(new Uint8Array(comment), thumb)
+    expect(Array.from(extractExifThumbnail(tiff)!)).toEqual(Array.from(thumb))
+  })
+
+  it('无 next-IFD / 坏指针 / 非法长度返回 null', () => {
+    const comment = Buffer.from('ASCII\0\0\0x', 'latin1')
+    const tiff = buildTiffWithCommentAndThumb(new Uint8Array(comment), thumb)
+    // 抹掉 IFD0 的 next 指针（置于 0）
+    new DataView(tiff.buffer).setUint32(22, 0, true)
+    expect(extractExifThumbnail(tiff)).toBeNull()
+    expect(extractExifThumbnail(new Uint8Array([1, 2, 3]))).toBeNull()
+    expect(extractExifThumbnail(Uint8Array.from([77, 77, 0, 42, 0, 0, 0, 8, 0, 0]))).toBeNull()
+  })
+
+  it('JPEG 完整链路：readImageMetadataWithThumb 附带缩略图（参数与缩略图同源）', async () => {
+    const comment = Buffer.concat([
+      Buffer.from('ASCII\0\0\0', 'latin1'),
+      Buffer.from('cat\nSteps: 20, Sampler: Euler a, Seed: 42, Model: majicMIX'),
+    ])
+    const tiff = buildTiffWithCommentAndThumb(new Uint8Array(comment), thumb)
+    const { raw, thumb: got } = await readImageMetadataWithThumb(
+      new File([buildJpegWithExif(tiff)], 'a.jpg'),
+    )
+    expect(raw.source).toBe('a1111')
+    expect(Array.from(got!)).toEqual(Array.from(thumb))
   })
 })

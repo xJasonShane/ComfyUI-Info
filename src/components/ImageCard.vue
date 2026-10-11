@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
 import {
+  ensureItemThumb,
   ensureItemUrl,
   favoriteFlags,
   sameSourceGroups,
@@ -23,8 +24,12 @@ const emit = defineEmits<{
 
 const broken = ref(false)
 
-// P2：卡片渲染时才创建预览 Blob URL（配合画廊虚拟滚动，只有可见窗口内的条目占内存）
-onMounted(() => ensureItemUrl(props.item))
+// P2：卡片渲染时才创建预览 Blob URL（配合画廊虚拟滚动，只有可见窗口内的条目占内存）；
+// F2：存档卡片同时惰性取回缩略图（base64 → objectURL），无原文件也能预览
+onMounted(() => {
+  ensureItemUrl(props.item)
+  if (props.item.detached) void ensureItemThumb(props.item)
+})
 
 /** F3：聚类排序模式下展示「同工作流第 x/y 张」 */
 const cluster = computed(() =>
@@ -37,10 +42,13 @@ const dupe = computed(() => sameSourceGroups.value.get(props.item.id))
 /** 收藏标记：favoriteFlags 全量表按 id 取值 */
 const faved = computed(() => favoriteFlags.value.get(props.item.id) ?? false)
 
-/** FEAT-8：URL 未创建前不渲染空 src 的 img（覆盖空占位而非「无法预览」） */
+/** FEAT-8：URL 未创建前不渲染空 src 的 img（覆盖空占位而非「无法预览」）；
+ * F2：存档项无文件 URL 时以内嵌缩略图兜底 */
 const showImg = computed(
-  () => !broken.value && !props.item.detached && !props.item.metaOnly && !!props.item.url,
+  () => !broken.value && !props.item.metaOnly && !!(props.item.url || props.item.thumb),
 )
+
+const imgSrc = computed(() => props.item.url || props.item.thumb)
 
 /** Ctrl/⌘+点击或点击指示器切换选中，Shift+点击区间选择，普通点击打开详情 */
 function onClick(e: MouseEvent) {
@@ -111,7 +119,7 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     @keydown.ctrl.space.prevent="$emit('select-toggle')"
     @keydown.meta.space.prevent="$emit('select-toggle')"
   >
-    <img v-if="showImg" :src="item.url" loading="lazy" alt="" @error="broken = true" />
+    <img v-if="showImg" :src="imgSrc" loading="lazy" alt="" @error="broken = true" />
     <div v-else-if="item.metaOnly" class="archived">
       <Icon name="file-text" :size="20" :stroke="1.8" />
       <span>{{ t('card.metaFile') }}</span>

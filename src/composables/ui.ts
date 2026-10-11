@@ -1,13 +1,21 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { readJSON, writeJSON } from '../lib/prefs'
 
 /** 统计抽屉显隐（TopBar 按钮 / App 的 Esc 全局键共用一份状态） */
 export const statsVisible = ref(false)
+
+/** 模型库抽屉显隐（F4，TopBar 按钮 / App 的 Esc 全局键共用一份状态） */
+export const modelsVisible = ref(false)
 
 /**
  * 随机抽一张的请求信号：TopBar 按钮自增计数，App watch 后从当前筛选结果
  * 随机打开详情。计数信号而非回调注册——与 statsVisible 同一「共享 UI 状态」模式
  */
 export const randomPickRequest = ref(0)
+
+/** F10：空状态主按钮 → TopBar 隐藏 input 的请求信号（同一计数信号模式） */
+export const openFilePickerRequest = ref(0)
+export const openFolderPickerRequest = ref(0)
 
 /** 窄屏断点（与 style.css 的移动端断点保持一致） */
 const NARROW_QUERY = '(max-width: 959.98px)'
@@ -20,27 +28,20 @@ const DRAWER_WIDTH_KEY = 'cii:drawer-widths'
 const DRAWER_MIN = 420
 
 function loadDrawerWidths(): Record<string, number> {
-  try {
-    const o = JSON.parse(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '{}') as Record<string, unknown>
-    const out: Record<string, number> = {}
-    for (const [k, v] of Object.entries(o)) {
-      if (typeof v === 'number' && Number.isFinite(v) && v >= DRAWER_MIN) out[k] = Math.round(v)
-    }
-    return out
-  } catch {
-    return {}
+  const o = readJSON(DRAWER_WIDTH_KEY)
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return {}
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v) && v >= DRAWER_MIN) out[k] = Math.round(v)
   }
+  return out
 }
 
 const drawerWidths = loadDrawerWidths()
 
 function persistDrawerWidth(key: string, w: number) {
   drawerWidths[key] = w
-  try {
-    localStorage.setItem(DRAWER_WIDTH_KEY, JSON.stringify(drawerWidths))
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  writeJSON(DRAWER_WIDTH_KEY, drawerWidths)
 }
 
 /**

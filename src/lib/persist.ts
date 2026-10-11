@@ -32,6 +32,8 @@ export interface PersistRecord {
   params?: ParsedParams
   error?: string
   savedAt: number
+  /** F2：EXIF 内嵌缩略图（base64 JPEG）——瞬态字段，序列化备份时剥离，经 blobs store 持久化 */
+  thumbB64?: string
 }
 
 /** 存档主键 = 去重指纹（路径或文件名|大小|修改时间）：回挂匹配与去重共用同一构造 */
@@ -63,6 +65,7 @@ export function toRecord(item: ImageItem): PersistRecord | null {
     params: item.params ? toRaw(item.params) : undefined,
     error: item.error,
     savedAt: Date.now(),
+    thumbB64: item.thumbB64,
   }
 }
 
@@ -80,6 +83,7 @@ export function fromRecord(rec: PersistRecord): ImageItem {
     raw: rec.raw,
     params: rec.params,
     error: rec.error,
+    thumbB64: rec.thumbB64,
     detached: true,
   }
 }
@@ -135,11 +139,13 @@ export interface StoredRecord {
   hints?: string[]
   error?: string
   savedAt: number
-  /** 以下四者为 blobs 引用（内容哈希），undefined = 无此内容 */
+  /** 以下五者为 blobs 引用（内容哈希），undefined = 无此内容 */
   prompt?: string
   workflow?: string
   parameters?: string
   rawText?: string
+  /** F2：EXIF 缩略图（base64 JPEG 文本） */
+  thumb?: string
   params?: Omit<ParsedParams, 'rawText'>
 }
 
@@ -179,6 +185,7 @@ export function splitPersistRecord(rec: PersistRecord): { stored: StoredRecord; 
     workflow: ref(rec.raw.workflow),
     parameters: ref(rec.raw.parameters),
     rawText: ref(rec.params?.rawText),
+    thumb: ref(rec.thumbB64),
     params,
   }
   return { stored, blobs }
@@ -214,6 +221,7 @@ export function materializeRecord(
     }
     if (rawText !== undefined) params.rawText = rawText
   }
+  const thumb = pick(stored.thumb)
   return {
     key: stored.key,
     name: stored.name,
@@ -226,6 +234,7 @@ export function materializeRecord(
     params,
     error: stored.error,
     savedAt: stored.savedAt,
+    thumbB64: thumb,
   }
 }
 
@@ -474,7 +483,8 @@ export function serializeArchive(
       version: ARCHIVE_VERSION,
       exportedAt: new Date().toISOString(),
       count: records.length,
-      records,
+      // 缩略图是本地浏览的便利数据，不入备份（体积换体验，重新解析原图可再得）
+      records: records.map((r) => ({ ...r, thumbB64: undefined })),
       ...(favorites?.length ? { favorites } : {}),
       ...(tags && Object.keys(tags).length ? { tags } : {}),
     },

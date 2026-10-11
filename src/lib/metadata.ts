@@ -8,6 +8,7 @@ import { readPngTexts, parsePngChunks, isPng } from './png'
 import { extractComfyParams, extractUiWorkflowParams } from './comfyExtract'
 import { parseA1111Parameters } from './a1111'
 import {
+  extractExifThumbnail,
   extractTiffAsciiTag,
   extractUserCommentFromTiff,
   decodeUserComment,
@@ -34,7 +35,7 @@ async function readHeadUntil(
   enough: (bytes: Uint8Array) => boolean,
 ): Promise<Uint8Array> {
   for (let stage = 0; ; stage++) {
-    const size = Math.min(stage < HEAD_STAGES.length ? HEAD_STAGES[stage] : file.size, file.size)
+    const size = Math.min(stage < HEAD_STAGES.length ? HEAD_STAGES[stage]! : file.size, file.size)
     const bytes = await readHead(file, size)
     if (enough(bytes) || size >= file.size) return bytes
   }
@@ -230,9 +231,19 @@ async function detectKind(file: File): Promise<ImageKind | null> {
   return byContent ?? byExt
 }
 
-export async function readImageMetadata(file: File): Promise<RawMetadata> {
-  // 文本类元数据文件（工作流 JSON / 参数文本）走独立解析路径
-  if (isMetaTextFile(file)) return readTextMetadata(file)
+export interface ImageMetadataResult {
+  raw: RawMetadata
+  /** F2：EXIF IFD1 内嵌缩略图（原始 JPEG 字节）；无 eXIf / 无缩略图时缺省 */
+  thumb?: Uint8Array
+}
+
+/**
+ * 元数据读取（F2 起）：与 readImageMetadata 同一链路，额外摘出 EXIF 内嵌缩略图——
+ * TIFF 已在切片里，顺带取 IFD1 无额外 I/O；缩略图供存档卡片在无原文件时预览。
+ */
+export async function readImageMetadataWithThumb(file: File): Promise<ImageMetadataResult> {
+  // 文本类元数据文件（工作流 JSON / 参数文本）走独立解析路径，无缩略图
+  if (isMetaTextFile(file)) return { raw: await readTextMetadata(file) }
   const kind = await detectKind(file)
 
   if (kind === 'png') {
@@ -240,32 +251,37 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
     const bytes = await readHeadUntil(file, (b) => parsePngChunks(b).complete)
     const { texts, chunks } = await readPngTexts(bytes)
     if (texts['prompt'] || texts['workflow']) {
-      return { source: 'comfyui', prompt: texts['prompt'], workflow: texts['workflow'] }
+      return { raw: { source: 'comfyui', prompt: texts['prompt'], workflow: texts['workflow'] } }
     }
     if (texts['parameters']) {
-      return judgeParametersText(texts['parameters'])
+      return { raw: judgeParametersText(texts['parameters']) }
     }
     // PNG eXIf 块（部分工具把 EXIF 存在独立块里）
     const exifChunk = chunks.find((c) => c.type === 'eXIf')
     if (exifChunk) {
-      const raw = extractUserCommentFromTiff(exifChunk.data)
-      const text = raw ? decodeUserComment(raw) : null
-      if (text) {
-        const m = judgeUserCommentText(text)
-        if (m) return m
+      const userRaw = extractUserCommentFromTiff(exifChunk.data)
+      const text = userRaw ? decodeUserComment(userRaw) : null
+      const m = text ? judgeUserCommentText(text) : null
+      let raw: RawMetadata
+      if (m) {
+        raw = m
+      } else {
+        const software = extractTiffAsciiTag(exifChunk.data, 0x0131)
+        raw = diagnoseNone({
+          hasExif: true,
+          hasXmp: /xmp/i.test(Object.keys(texts).join(' ')),
+          textKeys: Object.keys(texts).concat(software ? [`EXIF 软件: ${software}`] : []),
+        })
       }
-      const software = extractTiffAsciiTag(exifChunk.data, 0x0131)
-      return diagnoseNone({
-        hasExif: true,
-        hasXmp: /xmp/i.test(Object.keys(texts).join(' ')),
-        textKeys: Object.keys(texts).concat(software ? [`EXIF 软件: ${software}`] : []),
-      })
+      return { raw, thumb: extractExifThumbnail(exifChunk.data) ?? undefined }
     }
-    return diagnoseNone({
-      hasExif: false,
-      hasXmp: Object.keys(texts).some((k) => /xmp/i.test(k)),
-      textKeys: Object.keys(texts),
-    })
+    return {
+      raw: diagnoseNone({
+        hasExif: false,
+        hasXmp: Object.keys(texts).some((k) => /xmp/i.test(k)),
+        textKeys: Object.keys(texts),
+      }),
+    }
   }
 
   if (kind === 'jpeg' || kind === 'webp') {
@@ -276,22 +292,30 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
       (b) => !(isWebp ? scanWebp(b) : scanJpeg(b)).needsFullScan,
     )
     const scan = isWebp ? scanWebp(bytes) : scanJpeg(bytes)
+    let raw: RawMetadata
     if (scan.exifTiff) {
-      const raw = extractUserCommentFromTiff(scan.exifTiff)
-      const text = raw ? decodeUserComment(raw) : null
-      if (text) {
-        const m = judgeUserCommentText(text)
-        if (m) return m
+      const userRaw = extractUserCommentFromTiff(scan.exifTiff)
+      const text = userRaw ? decodeUserComment(userRaw) : null
+      const m = text ? judgeUserCommentText(text) : null
+      if (m) {
+        raw = m
+      } else {
+        const software = extractTiffAsciiTag(scan.exifTiff, 0x0131)
+        raw = diagnoseNone({
+          hasExif: true,
+          hasXmp: scan.hasXmp,
+          textKeys: software ? [`EXIF 软件: ${software}`] : [],
+        })
       }
-      const software = extractTiffAsciiTag(scan.exifTiff, 0x0131)
-      return diagnoseNone({
-        hasExif: true,
-        hasXmp: scan.hasXmp,
-        textKeys: software ? [`EXIF 软件: ${software}`] : [],
-      })
+    } else {
+      raw = diagnoseNone({ hasExif: false, hasXmp: scan.hasXmp, textKeys: [] })
     }
-    return diagnoseNone({ hasExif: false, hasXmp: scan.hasXmp, textKeys: [] })
+    return { raw, thumb: extractExifThumbnail(scan.exifTiff ?? new Uint8Array(0)) ?? undefined }
   }
 
-  return { source: 'none', hints: ['不支持的图片格式，请使用 PNG / JPEG / WebP'] }
+  return { raw: { source: 'none', hints: ['不支持的图片格式，请使用 PNG / JPEG / WebP'] } }
+}
+
+export async function readImageMetadata(file: File): Promise<RawMetadata> {
+  return (await readImageMetadataWithThumb(file)).raw
 }

@@ -4,7 +4,7 @@
  * 池与回退编排可独立单测。构造失败、健康探测超时（如部分 file:// 环境限制 Blob Worker）、
  * Worker 中途失效或任务超时无响应时，自动整体回退主线程解析，行为与纯主线程版本一致。
  */
-import { extractParams, internParseResult, readImageMetadata } from './metadata'
+import { extractParams, internParseResult, readImageMetadataWithThumb } from './metadata'
 import type { ParseResult } from '../types'
 import type { ParseWorkerReply, ParseWorkerRequest } from './parseWorker'
 
@@ -143,7 +143,7 @@ export class ParsePool {
 
   parse(file: File): Promise<ParseResult> {
     this.rr = (this.rr + 1) % this.entries.length
-    return this.entries[this.rr].post(file)
+    return this.entries[this.rr]!.post(file)
   }
 
   dispose() {
@@ -152,11 +152,11 @@ export class ParsePool {
   }
 }
 
-/** 主线程兜底：与 Worker 内完全相同的解析流程；与池路径同一出口做 interning，
- * 回退主线程后长文本内容寻址去重不失效（B3） */
+/** 主线程兜底：与 Worker 内完全相同的解析流程（F2 起同样带回缩略图）；与池路径
+ * 同一出口做 interning，回退主线程后长文本内容寻址去重不失效（B3） */
 async function parseOnMainThread(file: File): Promise<ParseResult> {
-  const raw = await readImageMetadata(file)
-  return internParseResult({ raw, params: extractParams(raw) })
+  const { raw, thumb } = await readImageMetadataWithThumb(file)
+  return internParseResult({ raw, params: extractParams(raw), thumb })
 }
 
 /**

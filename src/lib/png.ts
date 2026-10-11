@@ -32,7 +32,12 @@ export function parsePngChunks(bytes: Uint8Array): PngChunks {
   let pos = 8
   while (pos + 8 <= bytes.length) {
     const len = view.getUint32(pos)
-    const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7])
+    const type = String.fromCharCode(
+      bytes[pos + 4]!,
+      bytes[pos + 5]!,
+      bytes[pos + 6]!,
+      bytes[pos + 7]!,
+    )
     if (pos + 12 + len > bytes.length) break
     chunks.push({ type, data: bytes.subarray(pos + 8, pos + 8 + len) })
     pos += 12 + len

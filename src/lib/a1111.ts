@@ -16,7 +16,7 @@ function parseLoraTag(content: string): LoraInfo | null {
   const parts = content.split(':')
   const strengths: number[] = []
   while (parts.length > 1 && strengths.length < 2) {
-    const last = parts[parts.length - 1].trim()
+    const last = parts[parts.length - 1]!.trim()
     if (last === '' || !Number.isFinite(Number(last))) break
     strengths.unshift(Number(last))
     parts.pop()
@@ -31,7 +31,7 @@ function parseLoraTag(content: string): LoraInfo | null {
 
 function collectLoraTags(text: string, seen: Set<string>, out: LoraInfo[]) {
   for (const m of text.matchAll(LORA_TAG)) {
-    const lora = parseLoraTag(m[2])
+    const lora = parseLoraTag(m[2]!)
     if (lora && !seen.has(lora.name)) {
       seen.add(lora.name)
       out.push(lora)
@@ -85,10 +85,10 @@ export function parseA1111Parameters(text: string): ParsedParams {
   const tailForPairs = hashesMatch ? tailText.replace(hashesMatch[0], 'Lora hashes:') : tailText
   for (const part of tailForPairs.split(/,\s*(?=[A-Za-z][A-Za-z0-9 _]*:)/)) {
     const m = part.match(/^([^:]+):\s*([\s\S]*)$/)
-    if (m) pairs[m[1].trim()] = m[2].trim()
+    if (m) pairs[m[1]!.trim()] = m[2]!.trim()
   }
   if (hashesMatch) {
-    for (const seg of hashesMatch[1].split(',')) {
+    for (const seg of hashesMatch[1]!.split(',')) {
       const i = seg.indexOf(':')
       if (i <= 0) continue
       const name = seg.slice(0, i).trim()

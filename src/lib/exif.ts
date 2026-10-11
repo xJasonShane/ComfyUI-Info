@@ -68,7 +68,7 @@ function walkIfd(tiff: Uint8Array, view: DataView, offset: number, little: boole
 
 export function extractUserCommentFromTiff(tiff: Uint8Array): Uint8Array | null {
   if (tiff.length < 8) return null
-  const order = String.fromCharCode(tiff[0], tiff[1])
+  const order = String.fromCharCode(tiff[0]!, tiff[1]!)
   const little = order === 'II'
   if (!little && order !== 'MM') return null
   const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength)
@@ -81,6 +81,40 @@ export function extractUserCommentFromTiff(tiff: Uint8Array): Uint8Array | null 
     if (second.userComment) return second.userComment
   }
   return null
+}
+
+/**
+ * F2：EXIF IFD1（缩略图 IFD）里内嵌的 JPEG 缩略图。路径：IFD0 条目区末尾的 next-IFD 指针
+ * → IFD1 的 JPEGInterchangeFormat（0x0201，偏移）+ JPEGInterchangeFormatLength（0x0202，长度）。
+ * 无 IFD1 / 指针越界 / 长度非法时返回 null。同一 TIFF 只扫一条链，无环风险。
+ */
+export function extractExifThumbnail(tiff: Uint8Array): Uint8Array | null {
+  if (tiff.length < 8) return null
+  const order = String.fromCharCode(tiff[0]!, tiff[1]!)
+  const little = order === 'II'
+  if (!little && order !== 'MM') return null
+  const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength)
+  if (view.getUint16(2, little) !== 42) return null
+  const ifd0 = view.getUint32(4, little)
+  if (ifd0 <= 0 || ifd0 + 2 > tiff.byteLength) return null
+  const ifd0Count = view.getUint16(ifd0, little)
+  const nextPtr = ifd0 + 2 + ifd0Count * 12
+  if (nextPtr + 4 > tiff.byteLength) return null
+  const ifd1 = view.getUint32(nextPtr, little)
+  if (!ifd1 || ifd1 + 2 > tiff.byteLength) return null
+  let offset = 0
+  let length = 0
+  const count = view.getUint16(ifd1, little)
+  for (let i = 0; i < count; i++) {
+    const entry = ifd1 + 2 + i * 12
+    if (entry + 12 > tiff.byteLength) break
+    const tag = view.getUint16(entry, little)
+    // LONG 型单值内联在条目偏移字段（readEntryValue 同语义），无需间接寻址
+    if (tag === 0x0201) offset = view.getUint32(entry + 8, little)
+    else if (tag === 0x0202) length = view.getUint32(entry + 8, little)
+  }
+  if (offset <= 0 || length <= 0 || offset + length > tiff.byteLength) return null
+  return tiff.subarray(offset, offset + length)
 }
 
 const XMP_JPEG_PREFIX = 'http://ns.adobe.com/xap/1.0/\u0000'
@@ -103,14 +137,14 @@ export function scanJpeg(bytes: Uint8Array): MetadataScan {
   let pos = 2
   while (pos + 4 <= bytes.length) {
     if (bytes[pos] !== 0xff) return out
-    const marker = bytes[pos + 1]
+    const marker = bytes[pos + 1]!
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       pos += 2
       continue
     }
     if (marker === 0xda) return out // 扫描数据开始，之后不会再有元数据
     if (marker === 0xd9) return out // EOI：段区结束
-    const segLen = (bytes[pos + 2] << 8) | bytes[pos + 3]
+    const segLen = (bytes[pos + 2]! << 8) | bytes[pos + 3]!
     if (segLen < 2) return out
     if (marker === 0xe1) {
       const seg = bytes.subarray(pos + 4, pos + 2 + segLen)
@@ -154,7 +188,7 @@ export function scanWebp(bytes: Uint8Array): MetadataScan {
   const out: MetadataScan = { exifTiff: null, hasXmp: false, needsFullScan: false }
   if (bytes.length < 12) return out
   const fourcc = (off: number) =>
-    String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
+    String.fromCharCode(bytes[off]!, bytes[off + 1]!, bytes[off + 2]!, bytes[off + 3]!)
   if (fourcc(0) !== 'RIFF' || fourcc(8) !== 'WEBP') return out
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let pos = 12
@@ -172,7 +206,7 @@ export function scanWebp(bytes: Uint8Array): MetadataScan {
     }
     if (id === 'VP8X') {
       // VP8X 载荷首字节的标志位：ICC 0x20 / Alpha 0x10 / EXIF 0x08 / XMP 0x04
-      const flags = bytes[pos + 8]
+      const flags = bytes[pos + 8]!
       declaresExif = (flags & 0x08) !== 0
       declaresXmp = (flags & 0x04) !== 0
     } else if (id === 'EXIF' && !out.exifTiff) {
@@ -202,7 +236,7 @@ export function scanWebp(bytes: Uint8Array): MetadataScan {
 /** 读取 TIFF IFD0 中的 ASCII 字符串标签（如 Software 0x0131），用于诊断提示 */
 export function extractTiffAsciiTag(tiff: Uint8Array, wantTag: number): string | null {
   if (tiff.length < 8) return null
-  const order = String.fromCharCode(tiff[0], tiff[1])
+  const order = String.fromCharCode(tiff[0]!, tiff[1]!)
   const little = order === 'II'
   if (!little && order !== 'MM') return null
   const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength)
@@ -255,7 +289,7 @@ export function decodeUserComment(raw: Uint8Array): string | null {
   if (raw.length === 0) return null
   if (raw.length >= 8) {
     let head = ''
-    for (let i = 0; i < 8; i++) head += String.fromCharCode(raw[i])
+    for (let i = 0; i < 8; i++) head += String.fromCharCode(raw[i]!)
     if (head === 'ASCII\u0000\u0000\u0000') {
       return new TextDecoder('utf-8').decode(raw.subarray(8))
     }

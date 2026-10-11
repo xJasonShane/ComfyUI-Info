@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { NButton } from 'naive-ui'
 import Icon from './Icon.vue'
+import { openFilePickerRequest, openFolderPickerRequest } from '../composables/ui'
 import { t } from '../locales'
 
 defineProps<{ filtered: boolean; hiddenCount: number }>()
@@ -20,6 +22,16 @@ defineEmits<{ showAll: [] }>()
     <template v-else>
       <h2>{{ t('empty.dropTitle') }}</h2>
       <p v-html="t('empty.intro')" />
+      <div class="empty-actions">
+        <NButton type="primary" size="small" @click="openFilePickerRequest++">
+          <template #icon><Icon name="image-plus" :size="14" /></template>
+          {{ t('topbar.addImages') }}
+        </NButton>
+        <NButton size="small" secondary @click="openFolderPickerRequest++">
+          <template #icon><Icon name="folder-plus" :size="14" /></template>
+          {{ t('topbar.addFolder') }}
+        </NButton>
+      </div>
       <div class="chips">
         <span>{{ t('empty.chipLocal') }}</span>
         <span>{{ t('empty.chipFormats') }}</span>

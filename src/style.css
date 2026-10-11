@@ -1672,3 +1672,93 @@ body {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
 }
+
+/* ---------- 模型库抽屉（F4）：行内附哈希与最近出图日 ---------- */
+.model-row {
+  row-gap: 2px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.model-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.model-hash {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ---------- 激活筛选 chips（F5）：状态行下方，条件逐个移除 ---------- */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 260px;
+  padding: 2px 4px 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+}
+
+.chip-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chip-x {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.chip-x:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.chip-clear {
+  padding: 2px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chip-clear:hover {
+  color: var(--danger);
+}
+
+/* ---------- 空状态主操作按钮（F10）：首用不必再去顶栏找入口 ---------- */
+.empty-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+}

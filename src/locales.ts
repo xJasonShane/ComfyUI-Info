@@ -7,6 +7,7 @@
  * - 已知边界：解析器产出的诊断线索（metadata.ts hints，属存档数据）与解析错误信息保持原文
  */
 import { ref } from 'vue'
+import { safeGetItem, safeSetItem } from './lib/prefs'
 
 export type Locale = 'zh' | 'en'
 
@@ -82,6 +83,12 @@ const zh = {
   'msg.tagRemoved': '已从 {n} 张图片移除标签「{name}」',
   'msg.tagRenamed': '标签已重命名，涉及 {n} 张图片',
   'msg.tagNoChange': '选中图片的标签已是目标状态',
+  'chip.barAria': '当前筛选条件',
+  'chip.removeAria': '移除筛选条件 {name}',
+  'chip.clearAll': '清除全部',
+  'chip.favOnly': '只看收藏',
+  'chip.dupeOnly': '只看重复',
+  'chip.modelTitle': '模型筛选：{name}',
   'msg.rescanAllStarted': '正在重扫全部目录，新增 {n} 张…',
   'msg.rescanAllNone': '全部目录均无新增图片',
 
@@ -106,6 +113,8 @@ const zh = {
   'topbar.dirsTitle': '已记住的目录（点击切换重扫目标）',
   'topbar.clearBookmarks': '清除全部书签',
   'topbar.rescanAll': '全部重扫',
+  'topbar.models': '模型库',
+  'topbar.modelsTooltip': '按模型聚合浏览出图',
 
   'msg.bookmarksCleared': '已清除全部目录书签',
   'msg.forgetDir': '已不再记住该目录',
@@ -305,6 +314,11 @@ const zh = {
   'stats.tagNewName': '新标签名',
   'stats.tagDelete': '全库删除标签',
   'stats.tagDeleteConfirm': '确定删除标签「{name}」？（所有图片上的该标签一并移除）',
+  'models.title': '模型库',
+  'models.sub': '{n} 个模型 · 点击行筛选该模型的全部出图',
+  'models.filterHint': '只看「{name}」的出图',
+  'models.empty': '还没有解析出模型信息的图片',
+  'models.lastUsed': '最近出图',
 
   'stats.emptySection': '暂无数据',
   'stats.empty': '还没有已解析出参数的图片——先添加一些图片，再来看统计。',
@@ -427,6 +441,12 @@ const en: Record<DictKey, string> = {
   'msg.tagRemoved': 'Removed tag "{name}" from {n} images',
   'msg.tagRenamed': 'Tag renamed on {n} images',
   'msg.tagNoChange': 'Selected images already match this tag state',
+  'chip.barAria': 'Active filters',
+  'chip.removeAria': 'Remove filter {name}',
+  'chip.clearAll': 'Clear all',
+  'chip.favOnly': 'Favorites only',
+  'chip.dupeOnly': 'Duplicates only',
+  'chip.modelTitle': 'Model filter: {name}',
   'msg.rescanAllStarted': 'Rescanned all directories — {n} new images',
   'msg.rescanAllNone': 'No new images in any directory',
 
@@ -451,6 +471,8 @@ const en: Record<DictKey, string> = {
   'topbar.dirsTitle': 'Remembered directories (click to switch the rescan target)',
   'topbar.clearBookmarks': 'Clear all bookmarks',
   'topbar.rescanAll': 'Rescan all',
+  'topbar.models': 'Models',
+  'topbar.modelsTooltip': 'Browse images grouped by model',
 
   'msg.bookmarksCleared': 'All directory bookmarks cleared',
   'msg.forgetDir': 'Directory forgotten',
@@ -655,6 +677,11 @@ const en: Record<DictKey, string> = {
   'stats.tagNewName': 'New tag name',
   'stats.tagDelete': 'Delete tag everywhere',
   'stats.tagDeleteConfirm': 'Delete tag "{name}" from all images?',
+  'models.title': 'Model library',
+  'models.sub': '{n} models · click a row to filter its images',
+  'models.filterHint': 'Show images by {name}',
+  'models.empty': 'No parsed model info yet',
+  'models.lastUsed': 'Last used',
 
   'stats.emptySection': 'No data yet',
   'stats.empty': 'No parsed images yet — add some images first, then check the stats.',
@@ -706,14 +733,6 @@ const en: Record<DictKey, string> = {
 
 const dictionaries: Record<Locale, Record<DictKey, string>> = { zh, en }
 
-function safeGetItem(key: string): string | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-
 function detectLocale(): Locale {
   // 用 window 而非 navigator 判断浏览器环境：Node 21+ 也有全局 navigator（语言取自宿主系统），
   // 会让 Node 下运行的测试误判语言；浏览器中 window 必然存在
@@ -735,11 +754,7 @@ export const locale = ref<Locale>(initialLocale())
 
 export function setLocale(l: Locale) {
   locale.value = l
-  try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(LOCALE_KEY, l)
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem(LOCALE_KEY, l)
 }
 
 export function toggleLocale() {

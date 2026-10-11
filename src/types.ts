@@ -55,10 +55,11 @@ export interface ParsedParams {
   controlNets: string[]
 }
 
-/** 一次完整解析的结果：原始元数据 + 提取出的结构化参数 */
+/** 一次完整解析的结果：原始元数据 + 提取出的结构化参数；F2 附带 EXIF 内嵌缩略图（如存在） */
 export interface ParseResult {
   raw: RawMetadata
   params?: ParsedParams
+  thumb?: Uint8Array
 }
 
 export interface ImageItem {
@@ -77,6 +78,10 @@ export interface ImageItem {
   params?: ParsedParams
   raw: RawMetadata
   error?: string
+  /** F2：存档项缩略图（base64 JPEG，来自 blobs store）；转成 objectURL 后即弃用 */
+  thumbB64?: string
+  /** F2：缩略图预览 objectURL（存档卡片无原文件时的预览来源） */
+  thumb?: string
   /** true = 存档项：历史记录恢复、尚无原文件（无预览），重新拖入同指纹文件即自动回挂 */
   detached?: boolean
   /** true = 纯参数文件（工作流 JSON / 参数文本，F1）：无图片本体，只有解析出的参数 */

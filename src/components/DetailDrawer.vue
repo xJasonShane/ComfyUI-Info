@@ -13,6 +13,7 @@ import {
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
+import ImageZoomOverlay from './ImageZoomOverlay.vue'
 import { baseName, copyText, downloadBinary, downloadText, humanBytes } from '../lib/utils'
 import { buildParamsSummary } from '../lib/export'
 import {
@@ -83,105 +84,21 @@ const faved = computed(() =>
 /* ---------- FEAT-8：详情大图点击放大（点遮罩关闭，切图 / 关抽屉自动收起） ---------- */
 const zoomed = ref(false)
 
-/* ---------- 放大态交互：滚轮以光标为锚缩放 / 拖拽平移 / 双击复位 ---------- */
-const ZOOM_MAX = 12
-const overlayRef = ref<HTMLElement | null>(null)
-const zoomScale = ref(1)
-const pan = ref({ x: 0, y: 0 })
-const panning = ref(false)
-/** 本轮按下的指针是否移动过：区分「拖拽平移」与「点击关闭」，避免平移松手误关 */
-let dragMoved = false
-let lastX = 0
-let lastY = 0
-
-function resetZoom() {
-  zoomScale.value = 1
-  pan.value = { x: 0, y: 0 }
-}
-
-// 放大态打开时接管焦点（A7）：Tab 不再穿越到遮罩下方内容，Esc 语义分层——
-// 放大态先退出放大，遮罩关闭后才轮到抽屉的关闭快捷键
-watch(zoomed, (v) => {
-  if (v) requestAnimationFrame(() => overlayRef.value?.focus())
-})
-
-function onZoomEsc(e: KeyboardEvent) {
-  e.stopPropagation()
-  zoomed.value = false
-}
-
+// 放大态交互（滚轮锚点缩放 / 拖拽平移 / 键盘缩放 / Esc 分层）整体在
+// components/ImageZoomOverlay.vue（D3）：zoomed 只管开关，组件卸载即复位
 watch(
   () => props.item?.id,
   () => {
     zoomed.value = false
     actualDims.value = null
-    resetZoom()
   },
 )
 watch(show, (v) => {
   if (!v) {
     zoomed.value = false
     playing.value = false
-    resetZoom()
   }
 })
-
-const zoomStyle = computed(
-  () => `translate(${pan.value.x}px, ${pan.value.y}px) scale(${zoomScale.value})`,
-)
-
-function onZoomWheel(e: WheelEvent) {
-  const overlay = overlayRef.value
-  if (!overlay) return
-  const rect = overlay.getBoundingClientRect()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  const oldS = zoomScale.value
-  // 指数步进：滚轮力度在不同浏览器 / 触控板间差异大，比例缩放对两类设备手感一致
-  const newS = Math.min(ZOOM_MAX, Math.max(1, oldS * Math.exp(-e.deltaY * 0.0015)))
-  if (newS === oldS) return
-  // 缩放锚定光标：保持光标下的图像点不动（布局空间坐标 q 按 oldS 反解）
-  const qx = (e.clientX - cx - pan.value.x) / oldS
-  const qy = (e.clientY - cy - pan.value.y) / oldS
-  pan.value = { x: pan.value.x + (oldS - newS) * qx, y: pan.value.y + (oldS - newS) * qy }
-  zoomScale.value = newS
-  if (newS === 1) resetZoom() // 回到适配视图时归零平移，避免残留偏移
-}
-
-function onZoomPointerDown(e: PointerEvent) {
-  if (e.button !== 0) return
-  panning.value = true
-  dragMoved = false
-  lastX = e.clientX
-  lastY = e.clientY
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-}
-
-function onZoomPointerMove(e: PointerEvent) {
-  if (!panning.value) return
-  const dx = e.clientX - lastX
-  const dy = e.clientY - lastY
-  if (Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true
-  lastX = e.clientX
-  lastY = e.clientY
-  if (zoomScale.value > 1) pan.value = { x: pan.value.x + dx, y: pan.value.y + dy }
-}
-
-function onZoomPointerUp(e: PointerEvent) {
-  if (!panning.value) return
-  panning.value = false
-  try {
-    ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
-  } catch {
-    // 指针捕获已随元素移除等情况释放，忽略
-  }
-  // 适配视图下的无拖动点击保持原「点击关闭」语义；放大态的点击 / 平移松手不关闭
-  if (zoomScale.value === 1 && !dragMoved) zoomed.value = false
-}
-
-function onZoomDblClick() {
-  if (zoomScale.value > 1) resetZoom()
-}
 
 /* ---------- 幻灯片自动播放：沿当前筛选顺序定时切到下一张，末张 / 关抽屉自动停止 ---------- */
 const SLIDE_INTERVAL_MS = 4000
@@ -616,41 +533,7 @@ async function copyImage() {
             <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
           </div>
         </div>
-        <div
-          v-if="zoomed"
-          ref="overlayRef"
-          class="img-zoom"
-          :class="{ grab: zoomScale > 1, grabbing: panning }"
-          role="button"
-          tabindex="-1"
-          :aria-label="zoomScale > 1 ? t('detail.zoomHint') : t('detail.zoomClose')"
-          @wheel.prevent="onZoomWheel"
-          @pointerdown="onZoomPointerDown"
-          @pointermove="onZoomPointerMove"
-          @pointerup="onZoomPointerUp"
-          @pointercancel="onZoomPointerUp"
-          @dblclick="onZoomDblClick"
-          @keydown.esc.stop="onZoomEsc"
-        >
-          <img
-            :src="item.url"
-            :alt="item.name"
-            :style="{ transform: zoomStyle }"
-            draggable="false"
-          />
-          <span v-if="zoomScale > 1" class="zoom-level">{{ Math.round(zoomScale * 100) }}%</span>
-          <button
-            v-if="zoomScale > 1"
-            class="zoom-close"
-            type="button"
-            :aria-label="t('detail.zoomClose')"
-            :title="t('detail.zoomClose')"
-            @pointerdown.stop
-            @click.stop="zoomed = false"
-          >
-            <Icon name="x" :size="15" />
-          </button>
-        </div>
+        <ImageZoomOverlay v-if="zoomed" :src="item.url" :alt="item.name" @close="zoomed = false" />
 
         <div class="detail-panel">
           <div class="fileline">

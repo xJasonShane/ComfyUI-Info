@@ -60,3 +60,13 @@ export function shortModel(name: string): string {
   const base = baseName(name.split(/[\\/]/).pop() || name)
   return base.length > 22 ? `${base.slice(0, 21)}…` : base
 }
+
+/** 二进制 → base64（F2 缩略图入库用）：分块拼接避免大数组触发参数上限 */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}

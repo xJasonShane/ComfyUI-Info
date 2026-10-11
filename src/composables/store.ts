@@ -7,6 +7,17 @@ import {
   isSupportedImage,
 } from '../lib/metadata'
 import { parseImage, usingWorkers } from '../lib/parser'
+import { bytesToBase64 } from '../lib/utils'
+import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/prefs'
+import { clusterByWorkflow, clusterBySameSource } from '../lib/cluster'
+import {
+  buildSearchText,
+  cachedParseQuery,
+  localDayKey,
+  matchQuery,
+  prewarmSearchText,
+  type QueryEnv,
+} from '../lib/query'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import { t } from '../locales'
 import {
@@ -27,6 +38,9 @@ import {
   toRecord,
   type PersistRecord,
 } from '../lib/persist'
+
+export { parseQuery, tokenizeQuery, removeQueryToken } from '../lib/query'
+export type { QueryConditions, ParsedQuery, NumField, HasField, NumCondition } from '../lib/query'
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
 export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc' | 'workflow'
@@ -66,7 +80,7 @@ interface StoreState {
   safeMode: boolean
 }
 
-const storedSort = localStorage.getItem('cii:sort') as SortMode | null
+const storedSort = safeGetItem('cii:sort') as SortMode | null
 
 /* ---------- 筛选 / 搜索状态持久化（U2）：刷新后还原上次的使用状态 ---------- */
 const FILTERS_KEY = 'cii:filters'
@@ -80,7 +94,7 @@ function loadStoredFilters(): {
   sourceFilter: SourceFilter
 } {
   try {
-    const raw = localStorage.getItem(FILTERS_KEY)
+    const raw = safeGetItem(FILTERS_KEY)
     if (!raw) return { search: '', modelFilter: null, sourceFilter: 'comfyui' }
     const o = JSON.parse(raw) as { search?: unknown; model?: unknown; source?: unknown }
     return {
@@ -99,7 +113,7 @@ const storedFilters = loadStoredFilters()
 
 // FEAT-8：主题显式偏好优先；未设置过时跟随系统 prefers-color-scheme 并实时跟随切换
 // （系统变化驱动的翻转不落盘——显式偏好只在 toggleDark 里写入，写入后不再跟随系统）
-const storedTheme = localStorage.getItem('cii:theme')
+const storedTheme = safeGetItem('cii:theme')
 const schemeQuery =
   typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-color-scheme: light)')
@@ -111,7 +125,7 @@ const THUMB_DEFAULT = 206
 
 function loadThumbSize(): number {
   try {
-    const v = Number(localStorage.getItem(THUMB_KEY))
+    const v = Number(safeGetItem(THUMB_KEY))
     return Number.isFinite(v) && v >= 150 && v <= 420 ? v : THUMB_DEFAULT
   } catch {
     return THUMB_DEFAULT
@@ -129,7 +143,7 @@ const AUTO_RESCAN_INTERVAL_DEFAULT = 10
 
 function loadRescanInterval(): number {
   try {
-    const v = Number(localStorage.getItem(AUTO_RESCAN_INTERVAL_KEY))
+    const v = Number(safeGetItem(AUTO_RESCAN_INTERVAL_KEY))
     return RESCAN_INTERVALS.includes(v) ? v : AUTO_RESCAN_INTERVAL_DEFAULT
   } catch {
     return AUTO_RESCAN_INTERVAL_DEFAULT
@@ -147,18 +161,18 @@ const state = reactive<StoreState>({
   batchDone: 0,
   rescanName: null,
   dirBookmarks: [],
-  autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
+  autoRescan: safeGetItem(AUTO_RESCAN_KEY) === '1',
   autoRescanInterval: loadRescanInterval(),
   dupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
-  safeMode: localStorage.getItem(SAFE_MODE_KEY) === '1',
+  safeMode: safeGetItem(SAFE_MODE_KEY) === '1',
 })
 
 if (!storedTheme && schemeQuery) {
   schemeQuery.addEventListener('change', (e) => {
     // 用户手动切换后（toggleDark 落盘）显式偏好优先，不再跟随系统
-    if (localStorage.getItem('cii:theme') !== null) return
+    if (safeGetItem('cii:theme') !== null) return
     state.dark = !e.matches
   })
 }
@@ -166,33 +180,21 @@ if (!storedTheme && schemeQuery) {
 watch(
   () => state.sortMode,
   (m) => {
-    try {
-      localStorage.setItem('cii:sort', m)
-    } catch {
-      // 配额 / 环境限制时忽略：仅影响下次刷新的还原（与其余偏好写入同一防御）
-    }
+    safeSetItem('cii:sort', m)
   },
 )
 
 watch(
   () => state.thumbSize,
   (v) => {
-    try {
-      localStorage.setItem(THUMB_KEY, String(v))
-    } catch {
-      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-    }
+    safeSetItem(THUMB_KEY, String(v))
   },
 )
 
 watch(
   () => [state.search, state.modelFilter, state.sourceFilter] as const,
   ([search, model, source]) => {
-    try {
-      localStorage.setItem(FILTERS_KEY, JSON.stringify({ search, model, source }))
-    } catch {
-      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-    }
+    safeSetItem(FILTERS_KEY, JSON.stringify({ search, model, source }))
   },
 )
 
@@ -235,6 +237,8 @@ interface PendingResult {
   item: ImageItem
   raw: RawMetadata
   params?: ParsedParams
+  /** F2：EXIF 内嵌缩略图（原始字节），随写库批次存入 blobs store */
+  thumb?: Uint8Array
   /** 成功时预构建的小写搜索串；失败项不构建（沿用 name 兜底匹配） */
   searchText?: string
   error?: string
@@ -269,6 +273,7 @@ function applyPending() {
     r.item.searchText = r.searchText
     r.item.error = r.error
     r.item.status = r.error ? 'error' : 'done'
+    if (r.thumb) dirtyThumbs.set(recordKeyOf(r.item), r.thumb)
     markDirty(r.item)
   }
 }
@@ -287,9 +292,9 @@ async function parseItem(item: ImageItem, epoch: number) {
   inflight.add(item.id)
   try {
     // 入队的都是实文件项（存档项不解析）
-    const { raw, params } = await parseImage(item.file!)
+    const { raw, params, thumb } = await parseImage(item.file!)
     // 搜索串在结果落定时构建一次（应用时直接挂上）：筛选热路径只做 includes，不再每键重建
-    pendingResults.push({ item, raw, params, searchText: buildSearchText(item, params) })
+    pendingResults.push({ item, raw, params, thumb, searchText: buildSearchText(item, params) })
   } catch (e) {
     pendingResults.push({
       item,
@@ -438,8 +443,10 @@ export function removeItems(items: ImageItem[]) {
     seenKeys.delete(key)
     if (it.detached) detachedByKey.delete(key)
     dirtyItems.delete(key)
+    dirtyThumbs.delete(key)
     deletedKeys.add(key)
     URL.revokeObjectURL(it.url)
+    if (it.thumb) URL.revokeObjectURL(it.thumb)
     if (inflight.has(it.id)) {
       // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
       // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
@@ -466,7 +473,10 @@ export function removeItems(items: ImageItem[]) {
 }
 
 export function clearAll() {
-  for (const i of state.items) URL.revokeObjectURL(i.url)
+  for (const i of state.items) {
+    URL.revokeObjectURL(i.url)
+    if (i.thumb) URL.revokeObjectURL(i.thumb)
+  }
   state.items = []
   seenKeys.clear()
   liveIds.clear()
@@ -489,6 +499,7 @@ export function clearAll() {
   clearInternPool() // 在途解析完成时会把结果串重新入池，无碍
   persistEpoch++ // 作废在途写库批次，历史记录一并清除（所见即所得）
   dirtyItems.clear()
+  dirtyThumbs.clear()
   deletedKeys.clear()
   if (persistAvailable) void clearPersisted().catch(() => {})
 }
@@ -635,11 +646,7 @@ async function autoRescanTick() {
 watch(
   () => state.autoRescan,
   (on) => {
-    try {
-      localStorage.setItem(AUTO_RESCAN_KEY, on ? '1' : '0')
-    } catch {
-      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-    }
+    safeSetItem(AUTO_RESCAN_KEY, on ? '1' : '0')
     syncAutoRescanTimer()
   },
 )
@@ -647,11 +654,7 @@ watch(
 watch(
   () => state.autoRescanInterval,
   (v) => {
-    try {
-      localStorage.setItem(AUTO_RESCAN_INTERVAL_KEY, String(v))
-    } catch {
-      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-    }
+    safeSetItem(AUTO_RESCAN_INTERVAL_KEY, String(v))
     syncAutoRescanTimer() // 按新间隔重启周期定时器
   },
 )
@@ -660,6 +663,8 @@ watch(
 let persistAvailable = false
 let persistEpoch = 0
 const dirtyItems = new Map<string, ImageItem>()
+/** F2：待写库的缩略图字节（指纹 → JPEG 原始字节），与 dirtyItems 同批同生命周期 */
+const dirtyThumbs = new Map<string, Uint8Array>()
 const deletedKeys = new Set<string>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -709,20 +714,36 @@ async function flushPersist() {
   const isStale = () => epoch !== persistEpoch
   const items = [...dirtyItems.values()]
   dirtyItems.clear()
+  const thumbs = new Map(dirtyThumbs)
+  dirtyThumbs.clear()
   const keys = [...deletedKeys]
   deletedKeys.clear()
   try {
     // 清空列表会作废本轮写库，避免把已删除的历史写回去
     if (isStale()) return
-    const records = items.map(toRecord).filter((r) => r !== null)
+    const records = items
+      .map((it) => {
+        const r = toRecord(it)
+        if (!r) return null
+        // F2：本批解析得到的缩略图以 base64 入 blobs store（内容寻址，同图去重）
+        const tb = thumbs.get(recordKeyOf(it))
+        if (tb) r.thumbB64 = bytesToBase64(tb)
+        return r
+      })
+      .filter((r) => r !== null)
     if (records.length) await putPersisted(records, isStale)
     if (keys.length && !isStale()) await deletePersisted(keys, isStale)
   } catch (err) {
     // 瞬态写库失败（标签页隐藏期 IO 错误等）：未作废且仍存活的项塞回暂存区，
-    // 随下一次 markDirty 触发的 flush 一并重试；失败不主动重排，持久失败（配额）不空转
+    // 随下一次 markDirty 触发的 flush 一并重试；失败不主动重排，持久失败（配额）不空转。
+    // 缩略图字节随批次保留（重试时重新附带）；已入库的批次缩略图本就与记录同事务写入
     if (!isStale()) {
       for (const it of items) {
-        if (liveIds.has(it.id)) dirtyItems.set(recordKeyOf(it), it)
+        if (!liveIds.has(it.id)) continue
+        const k = recordKeyOf(it)
+        dirtyItems.set(k, it)
+        const tb = thumbs.get(k)
+        if (tb) dirtyThumbs.set(k, tb)
       }
       // 删除标记不覆盖写库期间被重新 markDirty 的指纹（后者已从 deletedKeys 摘除）
       for (const k of keys) if (!dirtyItems.has(k)) deletedKeys.add(k)
@@ -777,8 +798,8 @@ async function restoreArchivedInChunks(records: PersistRecord[]) {
     let warmed = false
     for (let j = i; j < Math.min(i + RESTORE_CHUNK, state.items.length); j++) {
       const it = state.items[j]!
-      if (it.searchText === undefined && !searchTextCache.has(it)) {
-        searchTextCache.set(it, buildSearchText(it, it.params))
+      if (it.searchText === undefined) {
+        prewarmSearchText(it)
         warmed = true
       }
     }
@@ -932,6 +953,38 @@ export const usageStats = computed(() => {
   return { models: toList(models), loras: toList(loras), samplers: toList(samplers) }
 })
 
+export interface ModelStat {
+  name: string
+  count: number
+  /** 最近一次用该模型出图的时间（mtime 最大值） */
+  lastUsed: number
+  /** A1111 Model hash（同名模型区分具体版本）；ComfyUI 工作流不提供 */
+  hash?: string
+}
+
+/**
+ * F4：按主模型聚合的出图统计（模型库抽屉数据源）。主模型取 params.models[0]
+ * （checkpoint / unet；LoRA 等资产行另有统计），按张数降序、同数按名排序。
+ */
+export const modelStats = computed<ModelStat[]>(() => {
+  const agg = new Map<string, { count: number; lastUsed: number; hash?: string }>()
+  for (const it of state.items) {
+    const name = it.params?.models?.[0]
+    if (!name) continue
+    const cur = agg.get(name)
+    if (cur) {
+      cur.count++
+      if (it.mtime > cur.lastUsed) cur.lastUsed = it.mtime
+      if (!cur.hash && it.params?.modelHash) cur.hash = it.params.modelHash
+    } else {
+      agg.set(name, { count: 1, lastUsed: it.mtime, hash: it.params?.modelHash })
+    }
+  }
+  return Array.from(agg, ([name, v]) => ({ name, ...v })).sort(
+    (a, b) => b.count - a.count || nameCollator.compare(a.name, b.name),
+  )
+})
+
 export interface DayCount {
   /** 本地时区的 YYYY-MM-DD */
   day: string
@@ -1010,418 +1063,8 @@ export const resolutionStats = computed<UsageStat[]>(() => {
     .slice(0, DIR_STAT_LIMIT)
 })
 
-/**
- * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数 + VAE / 放大模型 /
- * ControlNet，按任意生成要素定位图片。
- * 在解析结果落定时（parseItem）构建一次并小写化，应用时挂上，筛选热路径不再重复拼接；
- * 存档项走 searchTextField 按需构建（P2 惰性化，恢复期不逐条拼接长串）。
- */
-function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
-  const parts = [
-    it.path ?? it.name,
-    ...(p?.positive ?? []),
-    ...(p?.negative ?? []),
-    ...(p?.models ?? []),
-  ]
-  if (p?.modelHash) parts.push(p.modelHash)
-  for (const l of p?.loras ?? []) {
-    parts.push(l.name)
-    if (l.hash) parts.push(l.hash)
-  }
-  for (const s of p?.samplers ?? []) {
-    if (s.sampler) parts.push(s.sampler)
-    if (s.scheduler) parts.push(s.scheduler)
-    if (s.classType) parts.push(s.classType)
-    if (s.seed) parts.push(s.seed)
-  }
-  parts.push(...(p?.vaes ?? []), ...(p?.upscalers ?? []), ...(p?.controlNets ?? []))
-  return parts.join('\n').toLowerCase()
-}
-
-/**
- * 搜索串按需缓存：解析路径在结果落定时构建（item.searchText，随节拍分摊）；
- * 存档项恢复时没有搜索串，首次命中筛选热路径时按需构建并缓存——
- * 避免万级存档恢复时整段拼接长文本阻塞首屏。
- */
-const searchTextCache = new WeakMap<ImageItem, string>()
-
-function searchTextField(it: ImageItem): string {
-  const eager = it.searchText
-  if (eager !== undefined) return eager
-  let built = searchTextCache.get(it)
-  if (built === undefined) {
-    built = buildSearchText(it, it.params)
-    searchTextCache.set(it, built)
-  }
-  return built
-}
-
-export type NumField = 'steps' | 'cfg' | 'width' | 'height' | 'batch' | 'clip'
-
-/** `has:` 存在性条件：图片具备对应生成要素（可配 `-` 排除「有某要素」的图） */
-export type HasField = 'lora' | 'vae' | 'hires' | 'upscale' | 'controlnet' | 'tag'
-
-const HAS_FIELDS: Record<string, HasField> = {
-  lora: 'lora',
-  vae: 'vae',
-  hires: 'hires',
-  upscale: 'upscale',
-  controlnet: 'controlnet',
-  tag: 'tag',
-}
-
-/** 数值范围条件（FEAT-3）：op 缺省为精确相等 */
-export interface NumCondition {
-  field: NumField
-  op?: '>' | '>=' | '<' | '<='
-  value: number
-}
-
-export interface QueryConditions {
-  terms: string[]
-  model: string[]
-  lora: string[]
-  seed: string[]
-  path: string[]
-  /** `date:YYYY-MM-DD`（支持 YYYY / YYYY-MM 前缀与 > >= < <= 范围，本地时区按天匹配 mtime） */
-  date: string[]
-  /** `pos:xxx` 仅匹配正向提示词 */
-  pos: string[]
-  /** `neg:xxx` 仅匹配负向提示词 */
-  neg: string[]
-  /** `sampler:xxx` / `scheduler:xxx` 采样参数定向 */
-  sampler: string[]
-  scheduler: string[]
-  /** `vae:xxx` / `upscale:xxx` / `controlnet:xxx` 模型资产定向 */
-  vae: string[]
-  upscale: string[]
-  controlnet: string[]
-  /** `tag:xxx` 自定义标签定向（标签按去重指纹记忆） */
-  tag: string[]
-  /** `has:lora|vae|hires|upscale|controlnet` 存在性条件 */
-  has: HasField[]
-  num: NumCondition[]
-}
-
-export interface ParsedQuery {
-  /** 正向条件：全部满足才命中 */
-  all: QueryConditions
-  /** O1：`-` 前缀排除条件，任一命中即整条不匹配 */
-  none: QueryConditions
-}
-
-const QUERY_FIELD_RE =
-  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|controlnet|tag|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
-
-/** 数值字段别名：w / h 是 width / height 的简写 */
-const NUM_FIELDS: Record<string, NumField> = {
-  steps: 'steps',
-  cfg: 'cfg',
-  width: 'width',
-  w: 'width',
-  height: 'height',
-  h: 'height',
-  batch: 'batch',
-  clip: 'clip',
-}
-
-/** 数值字段值解析：支持 > / >= / < / <= 前缀；空值或非数值时忽略该条件 */
-function parseNumCondition(field: NumField, raw: string): NumCondition | null {
-  const m = raw.trim().match(/^(>=|<=|>|<)?\s*(\S+)$/)
-  if (!m) return null
-  const value = Number(m[2])
-  if (!Number.isFinite(value)) return null
-  return { field, op: m[1] as NumCondition['op'], value }
-}
-
-/** O1：64 位种子不能安全转 Number，范围比较用「位数 + 字典序」比较非负整数字符串；
- * 先去前导零再比位数——入口校验放行 "007" 这类写法，须按数值位数比较才成立 */
-function compareSeed(a: string, b: string): number {
-  const x = a.replace(/^0+(?=\d)/, '')
-  const y = b.replace(/^0+(?=\d)/, '')
-  if (x.length !== y.length) return x.length - y.length
-  return x < y ? -1 : x > y ? 1 : 0
-}
-
-function hitSeed(cond: string, it: ImageItem): boolean {
-  const m = cond.match(/^(>=|<=|>|<)?(.+)$/)!
-  const seeds = (it.params?.samplers ?? []).map((s) => s.seed).filter((s): s is string => !!s)
-  if (!seeds.length) return false
-  if (!m[1]) return seeds.some((s) => s.includes(m[2]!))
-  const target = m[2]!
-  switch (m[1]) {
-    case '>':
-      return seeds.some((s) => compareSeed(s, target) > 0)
-    case '<':
-      return seeds.some((s) => compareSeed(s, target) < 0)
-    case '>=':
-      return seeds.some((s) => compareSeed(s, target) >= 0)
-    default:
-      return seeds.some((s) => compareSeed(s, target) <= 0)
-  }
-}
-
-/** 本地时区的 YYYY-MM-DD（dailyCounts 与 date: 搜索共用同一构造） */
-function localDayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`
-}
-
-/** date: 条件：按 mtime 的本地时区日期匹配；支持 YYYY / YYYY-MM / YYYY-MM-DD 前缀与 > >= < <= 范围 */
-function hitDate(cond: string, it: ImageItem): boolean {
-  const m = cond.match(/^(>=|<=|>|<)?(.+)$/)!
-  const target = m[2]!
-  if (!/^\d{4}(-\d{2})?(-\d{2})?$/.test(target)) return false
-  const day = localDayKey(new Date(it.mtime))
-  if (!m[1]) return day.startsWith(target)
-  // 范围按 ISO 零填充串的字典序比较；年 / 月前缀先展开成对应区间的起止日，
-  // 使 `date:>2026-01` 语义为「1 月之后」（而非 1 月内日期按字符串大于前缀）
-  const start =
-    target.length === 4 ? `${target}-01-01` : target.length === 7 ? `${target}-01` : target
-  const end =
-    target.length === 4 ? `${target}-12-31` : target.length === 7 ? `${target}-31` : target
-  switch (m[1]) {
-    case '>':
-      return day > end
-    case '<':
-      return day < start
-    case '>=':
-      return day >= start
-    default:
-      return day <= end
-  }
-}
-
-/** 查询字段种类（C1；has / num 单列）：matchConditions 对每条目每拍遍历，
- * 常量提升到模块级避免热路径上每次调用重新分配数组 */
-const QUERY_KINDS = [
-  'terms',
-  'model',
-  'lora',
-  'seed',
-  'path',
-  'date',
-  'pos',
-  'neg',
-  'sampler',
-  'scheduler',
-  'vae',
-  'upscale',
-  'controlnet',
-  'tag',
-] as const
-type QueryKind = (typeof QUERY_KINDS)[number]
-
-function hitCondition(kind: QueryKind, value: string, it: ImageItem): boolean {
-  switch (kind) {
-    case 'terms':
-      return searchTextField(it).includes(value)
-    case 'model':
-      return (it.params?.models ?? []).some((m) => m.toLowerCase().includes(value))
-    case 'lora':
-      return (it.params?.loras ?? []).some(
-        (l) => l.name.toLowerCase().includes(value) || (l.hash ?? '').toLowerCase().includes(value),
-      )
-    case 'seed':
-      return hitSeed(value, it)
-    case 'path':
-      return (it.path ?? it.name).toLowerCase().includes(value)
-    case 'date':
-      return hitDate(value, it)
-    case 'pos':
-      return (it.params?.positive ?? []).some((s) => s.toLowerCase().includes(value))
-    case 'neg':
-      return (it.params?.negative ?? []).some((s) => s.toLowerCase().includes(value))
-    case 'sampler':
-      return (it.params?.samplers ?? []).some((s) =>
-        (s.sampler ?? '').toLowerCase().includes(value),
-      )
-    case 'scheduler':
-      return (it.params?.samplers ?? []).some((s) =>
-        (s.scheduler ?? '').toLowerCase().includes(value),
-      )
-    case 'vae':
-      return (it.params?.vaes ?? []).some((v) => v.toLowerCase().includes(value))
-    case 'upscale':
-      return (it.params?.upscalers ?? []).some((v) => v.toLowerCase().includes(value))
-    case 'controlnet':
-      return (it.params?.controlNets ?? []).some((v) => v.toLowerCase().includes(value))
-    case 'tag':
-      return hitTagKey(recordKeyOf(it), value)
-  }
-}
-
-/** has: 存在性条件：hires 以「多阶段采样」为标志（高清修复第二阶段），其余按对应资产列表非空 */
-function hitHas(field: HasField, it: ImageItem): boolean {
-  const p = it.params
-  if (!p) return false
-  switch (field) {
-    case 'lora':
-      return p.loras.length > 0
-    case 'vae':
-      return p.vaes.length > 0
-    case 'hires':
-      return p.samplers.length > 1
-    case 'upscale':
-      return p.upscalers.length > 0
-    case 'controlnet':
-      return p.controlNets.length > 0
-    case 'tag':
-      return hitTagKey(recordKeyOf(it), null)
-  }
-}
-
-/** 数值字段在条目上的取值集合（采样参数取全部阶段，任一命中即可） */
-function numValues(field: NumField, p: ParsedParams): number[] {
-  if (field === 'steps' || field === 'cfg') {
-    const out: number[] = []
-    for (const s of p.samplers) {
-      const v = field === 'steps' ? s.steps : s.cfg
-      if (v !== undefined) out.push(v)
-    }
-    return out
-  }
-  const v =
-    field === 'width'
-      ? p.width
-      : field === 'height'
-        ? p.height
-        : field === 'batch'
-          ? p.batch
-          : p.clipSkip
-  return v !== undefined ? [v] : []
-}
-
-function hitNum(cond: NumCondition, it: ImageItem): boolean {
-  const p = it.params
-  if (!p) return false
-  const values = numValues(cond.field, p)
-  if (!values.length) return false
-  return values.some((v) =>
-    cond.op === undefined
-      ? v === cond.value
-      : cond.op === '>'
-        ? v > cond.value
-        : cond.op === '>='
-          ? v >= cond.value
-          : cond.op === '<'
-            ? v < cond.value
-            : v <= cond.value,
-  )
-}
-
-function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of QUERY_KINDS) {
-    for (const v of conds[kind]) {
-      if (hitCondition(kind, v, it) !== want) return false
-    }
-  }
-  for (const f of conds.has) {
-    if (hitHas(f, it) !== want) return false
-  }
-  for (const cond of conds.num) {
-    if (hitNum(cond, it) !== want) return false
-  }
-  return true
-}
-
-/**
- * 解析搜索框语法（O1 增强）：
- * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
- * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
- * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx` / `controlnet:xxx`
- * - 自定义标签定向 `tag:xxx`（has:tag 看有标签的图，可配 `-` 排除）
- * - 存在性 `has:lora|vae|hires|upscale|controlnet`，可配 `-` 排除
- * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀，
- *   `date:>2026-01-01` / `date:<=2026-06` 范围筛选（前缀展开为区间端点再比较）
- * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
- *   无操作符为精确相等；非数值值忽略该条件
- * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
- * - `"model:a b"` / `model:"a b"`：带引号的字段值可含空格（两种引号位置均可）
- * - `-关键词` / `-model:xxx` 排除条件，任一命中即整条不匹配
- * 正向条件按 AND 组合，大小写不敏感。
- */
-export function parseQuery(raw: string): ParsedQuery {
-  const empty = (): QueryConditions => ({
-    terms: [],
-    model: [],
-    lora: [],
-    seed: [],
-    path: [],
-    date: [],
-    pos: [],
-    neg: [],
-    sampler: [],
-    scheduler: [],
-    vae: [],
-    upscale: [],
-    controlnet: [],
-    tag: [],
-    has: [],
-    num: [],
-  })
-  const out: ParsedQuery = { all: empty(), none: empty() }
-  // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏；
-  // 引号也可跟在冒号后（`model:"a b"`），同样作为整体 token
-  const tokens = raw.trim().match(/-?(?:[A-Za-z]+:)?"[^"]*"|\S+/g) ?? []
-  for (let token of tokens) {
-    let negated = false
-    if (token.startsWith('-') && token.length > 1) {
-      negated = true
-      token = token.slice(1)
-    }
-    if (token.startsWith('"') && token.endsWith('"') && token.length > 1) {
-      token = token.slice(1, -1)
-    }
-    if (!token) continue
-    const m = token.match(QUERY_FIELD_RE)
-    const bucket = negated ? out.none : out.all
-    if (m) {
-      const field = m[1]!.toLowerCase()
-      const numField = NUM_FIELDS[field]
-      if (numField) {
-        const cond = parseNumCondition(numField, m[2]!)
-        if (cond) bucket.num.push(cond)
-      } else if (m[2]) {
-        // `model:"a b"` 形态：值外侧的成对引号剥离后再入桶
-        let value = m[2]
-        if (value.length > 1 && value.startsWith('"') && value.endsWith('"')) {
-          value = value.slice(1, -1)
-        }
-        // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉。
-        // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
-        // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
-        if (value && (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(value))) {
-          // has: 存在性条件只收已知要素名，未知值忽略（与空值字段同语义）
-          if (field === 'has') {
-            const hf = HAS_FIELDS[value.toLowerCase()]
-            if (hf) bucket.has.push(hf)
-          } else {
-            bucket[field as Exclude<QueryKind, 'terms'>].push(value.toLowerCase())
-          }
-        }
-      }
-    } else {
-      bucket.terms.push(token.toLowerCase())
-    }
-  }
-  return out
-}
-
-// 解析结果按搜索串缓存（C1）：filteredItems 每拍失效（扫描期间约 200ms 一次）都会
-// 重跑 tokenize + 正则，搜索串未变时直接复用；调用方只读桶内容，共享安全
-const queryCache = new Map<string, ParsedQuery>()
-
-function cachedParseQuery(q: string): ParsedQuery {
-  let parsed = queryCache.get(q)
-  if (!parsed) {
-    parsed = parseQuery(q)
-    if (queryCache.size >= 32) queryCache.clear() // 简单防膨胀：历史搜索串快速淘汰
-    queryCache.set(q, parsed)
-  }
-  return parsed
-}
+/** 查询环境（D1）：标签匹配与指纹键由 store 注入，lib/query 保持纯函数 */
+const queryEnv: QueryEnv = { recordKey: recordKeyOf, hasTag: hitTagKey }
 
 export const filteredItems = computed(() => {
   const q = state.search.trim().toLowerCase()
@@ -1442,16 +1085,11 @@ export const filteredItems = computed(() => {
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (state.dupeOnly && !sameSourceIds.value.has(it.id)) return false
       if (state.favOnly && !favKeys.has(recordKeyOf(it))) return false
-      if (query && !matchQuery(it, query)) return false
+      if (query && !matchQuery(it, query, queryEnv)) return false
       return true
     })
     .sort(sorters[state.sortMode])
 })
-
-/** 搜索匹配：正向条件全 AND，排除条件任一命中即否决 */
-function matchQuery(it: ImageItem, query: ParsedQuery): boolean {
-  return matchConditions(query.all, it, true) && matchConditions(query.none, it, false)
-}
 
 /**
  * 区间选择：取有序列表中锚点与目标之间（含两端）的全部 id。
@@ -1487,100 +1125,10 @@ export const sortOptions = computed<{ label: string; value: SortMode }[]>(() => 
   { label: t('sort.workflow'), value: 'workflow' },
 ])
 
-/**
- * F3：工作流内容指纹。同串同引用来自 interning（本会话解析），存档恢复的是内容副本，
- * 统一走 FNV-1a 哈希 + 长度兜底，同工作流的图（无论实文件还是存档）都能归入同组。
- * 按条目缓存指纹：长 JSON 的全量哈希在聚类排序的每次重算里是
- * O(全部条目 × 串长) 的主线程开销，缓存后每条在 raw 不变期间至多算一次
- * （raw 一经应用不再变化，以引用比对失效覆盖「结果应用前后」的唯一变更点）。
- */
-const workflowKeyCache = new WeakMap<ImageItem, { rawRef: string | undefined; key: string }>()
+/** F3：同工作流聚类（指纹 / 分组逻辑在 lib/cluster.ts，此处仅响应式接线） */
+export const workflowClusters = computed(() => clusterByWorkflow(state.items, nameCollator))
 
-function workflowKey(it: ImageItem): string {
-  const raw = it.raw.prompt ?? it.raw.parameters ?? it.raw.workflow
-  const cached = workflowKeyCache.get(it)
-  if (cached && cached.rawRef === raw) return cached.key
-  let key = `id:${it.id}` // 无元数据 / 失败项各自成组
-  if (raw) {
-    let h = 0x811c9dc5
-    for (let i = 0; i < raw.length; i++) {
-      h ^= raw.charCodeAt(i)
-      h = Math.imul(h, 0x01000193)
-    }
-    key = `${(h >>> 0).toString(36)}:${raw.length}`
-  }
-  workflowKeyCache.set(it, { rawRef: raw, key })
-  return key
-}
-
-/**
- * F3：同工作流聚类信息（itemId → { group: 组序, seq/total: 组内序号 }）。
- * 组按组内最新时间新→旧排组序，组内同规则编号；卡片在聚类模式下展示「第 x/y 张」。
- */
-/** 组内最新 mtime：循环求 max——同一工作流的组可达数万张，Math.max(...spread)
- * 超引擎参数上限会抛 RangeError 打断渲染（I3） */
-function latestMtime(members: ImageItem[]): number {
-  let max = 0
-  for (const m of members) if (m.mtime > max) max = m.mtime
-  return max
-}
-
-export const workflowClusters = computed(() => {
-  const groups = new Map<string, ImageItem[]>()
-  for (const it of state.items) {
-    const k = workflowKey(it)
-    const g = groups.get(k)
-    if (g) g.push(it)
-    else groups.set(k, [it])
-  }
-  const ordered = [...groups.values()]
-    .map((members) => ({
-      members,
-      latest: latestMtime(members),
-    }))
-    .sort((a, b) => b.latest - a.latest || b.members.length - a.members.length)
-  const out = new Map<string, { group: number; seq: number; total: number }>()
-  ordered.forEach(({ members }, gi) => {
-    const sorted = [...members].sort(
-      (a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name),
-    )
-    sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
-  })
-  return out
-})
-
-/** F4：同源出图指纹 = 工作流内容 + 首阶段种子；同键即同一生成来源（重跑 / 同参再生成） */
-function sameSourceKey(it: ImageItem): string | null {
-  const p = it.params
-  if (!p) return null
-  const seed = p.samplers.find((s) => s.seed)?.seed
-  if (!seed) return null
-  return `${workflowKey(it)}|${seed}`
-}
-
-/** F4：同源出图分组（itemId → 组号 / 组内序号 / 组大小），排序规则与工作流聚类一致 */
-export const sameSourceGroups = computed(() => {
-  const groups = new Map<string, ImageItem[]>()
-  for (const it of state.items) {
-    if (it.status !== 'done') continue
-    const k = sameSourceKey(it)
-    if (!k) continue
-    const g = groups.get(k)
-    if (g) g.push(it)
-    else groups.set(k, [it])
-  }
-  const out = new Map<string, { group: number; seq: number; total: number }>()
-  ;[...groups.values()]
-    .map((members) => ({ members, latest: latestMtime(members) }))
-    .sort((a, b) => b.latest - a.latest)
-    .forEach(({ members }, gi) => {
-      const sorted = [...members].sort(
-        (a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name),
-      )
-      sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
-    })
-  return out
-})
+export const sameSourceGroups = computed(() => clusterBySameSource(state.items, nameCollator))
 
 /** F4：处于同源组（组内 ≥2 张）中的条目 id 集合，供「只看重复」筛选 */
 const sameSourceIds = computed(() => {
@@ -1600,7 +1148,7 @@ const FAVS_KEY = 'cii:favs'
 
 function loadFavorites(): Set<string> {
   try {
-    const raw = localStorage.getItem(FAVS_KEY)
+    const raw = safeGetItem(FAVS_KEY)
     if (!raw) return new Set()
     const arr: unknown = JSON.parse(raw)
     return Array.isArray(arr)
@@ -1614,11 +1162,7 @@ function loadFavorites(): Set<string> {
 const favKeys = reactive(loadFavorites())
 
 function persistFavorites() {
-  try {
-    localStorage.setItem(FAVS_KEY, JSON.stringify([...favKeys]))
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem(FAVS_KEY, JSON.stringify([...favKeys]))
 }
 
 /** 收藏标记表（itemId → 是否已收藏）：computed 一次算全量，卡片与详情抽屉共用 */
@@ -1665,7 +1209,7 @@ const TAGS_KEY = 'cii:tags'
 
 function loadTags(): Record<string, string[]> {
   try {
-    const raw = localStorage.getItem(TAGS_KEY)
+    const raw = safeGetItem(TAGS_KEY)
     if (!raw) return {}
     const o: unknown = JSON.parse(raw)
     if (!o || typeof o !== 'object' || Array.isArray(o)) return {}
@@ -1685,11 +1229,7 @@ function loadTags(): Record<string, string[]> {
 const itemTags = reactive(loadTags())
 
 function persistTags() {
-  try {
-    localStorage.setItem(TAGS_KEY, JSON.stringify(itemTags))
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem(TAGS_KEY, JSON.stringify(itemTags))
 }
 
 /** 标签表（itemId → 标签名列表）：computed 一次算全量，卡片与详情抽屉共用 */
@@ -1806,21 +1346,13 @@ export function toggleDark() {
   state.dark = !state.dark
   // 显式偏好只在用户切换时落盘；系统跟随（见 schemeQuery 监听）不写入，
   // 未设置过偏好的用户始终保留「跟随系统」语义
-  try {
-    localStorage.setItem('cii:theme', state.dark ? 'dark' : 'light')
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem('cii:theme', state.dark ? 'dark' : 'light')
 }
 
 /** 安全模式开关：缩略图模糊 ↔ 直接显示，显式偏好落盘 */
 export function toggleSafeMode() {
   state.safeMode = !state.safeMode
-  try {
-    localStorage.setItem(SAFE_MODE_KEY, state.safeMode ? '1' : '0')
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem(SAFE_MODE_KEY, state.safeMode ? '1' : '0')
 }
 
 /* ---------- 筛选预设：保存 / 应用命名的筛选组合（搜索 + 模型 + 来源），localStorage 记忆 ---------- */
@@ -1835,7 +1367,7 @@ const PRESETS_KEY = 'cii:filter-presets'
 
 function loadPresets(): FilterPreset[] {
   try {
-    const arr: unknown = JSON.parse(localStorage.getItem(PRESETS_KEY) ?? '[]')
+    const arr: unknown = JSON.parse(safeGetItem(PRESETS_KEY) ?? '[]')
     if (!Array.isArray(arr)) return []
     return arr.flatMap((p) => {
       const o = p as Partial<FilterPreset>
@@ -1861,11 +1393,7 @@ function loadPresets(): FilterPreset[] {
 export const filterPresets = ref<FilterPreset[]>(loadPresets())
 
 function persistPresets() {
-  try {
-    localStorage.setItem(PRESETS_KEY, JSON.stringify(filterPresets.value))
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeSetItem(PRESETS_KEY, JSON.stringify(filterPresets.value))
 }
 
 /** 把当前筛选组合（搜索 / 模型 / 来源）保存为预设；同名覆盖，空名拒绝 */
@@ -1911,7 +1439,7 @@ const HISTORY_SETTLE_MS = 1500
 
 function loadSearchHistory(): string[] {
   try {
-    const arr: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+    const arr: unknown = JSON.parse(safeGetItem(HISTORY_KEY) ?? '[]')
     return Array.isArray(arr)
       ? arr.filter((q): q is string => typeof q === 'string').slice(0, HISTORY_LIMIT)
       : []
@@ -1924,11 +1452,7 @@ export const recentSearches = ref<string[]>(loadSearchHistory())
 
 export function clearSearchHistory() {
   recentSearches.value = []
-  try {
-    localStorage.removeItem(HISTORY_KEY)
-  } catch {
-    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-  }
+  safeRemoveItem(HISTORY_KEY)
 }
 
 let historyTimer: ReturnType<typeof setTimeout> | null = null
@@ -1948,11 +1472,7 @@ watch(
       if (i > 0) recentSearches.value.splice(i, 1)
       recentSearches.value.unshift(key)
       if (recentSearches.value.length > HISTORY_LIMIT) recentSearches.value.length = HISTORY_LIMIT
-      try {
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(recentSearches.value))
-      } catch {
-        // 配额 / 环境限制时忽略：仅影响下次刷新的还原
-      }
+      safeSetItem(HISTORY_KEY, JSON.stringify(recentSearches.value))
     }, HISTORY_SETTLE_MS)
   },
 )
@@ -1961,6 +1481,20 @@ watch(
  * P2：预览 URL 惰性创建——由卡片 / 抽屉在渲染时调用。
  * 入列时不再为每张图创建 Blob URL，万级扫描只有实际渲染过的条目才占 URL 与解码内存。
  */
+/**
+ * F2：存档卡片缩略图惰性回挂——thumbB64（base64 JPEG）仅在卡片进入视口时转 objectURL，
+ * 万级存档恢复不整批物化；转成 URL 后释放对 base64 串的持有（体积转移给 URL 注册表）
+ */
+export async function ensureItemThumb(item: ImageItem): Promise<void> {
+  if (!item.thumbB64 || item.thumb) return
+  const bin = atob(item.thumbB64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  if (!liveIds.has(item.id)) return // 取值期间被移除 / 清空
+  item.thumb = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }))
+  item.thumbB64 = undefined
+}
+
 export function ensureItemUrl(item: ImageItem): void {
   if (item.url || item.metaOnly || item.detached || !item.file) return
   item.url = URL.createObjectURL(item.file)

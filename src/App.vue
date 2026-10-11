@@ -62,10 +62,14 @@ import {
   store,
   tagCounts,
   toggleFavorite,
+  removeQueryToken,
+  tokenizeQuery,
+  type SourceFilter,
 } from './composables/store'
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
 import { copyText, humanBytes } from './lib/utils'
-import { statsVisible, randomPickRequest } from './composables/ui'
+import { modelsVisible, randomPickRequest, statsVisible } from './composables/ui'
+import { useVirtualGrid } from './composables/useVirtualGrid'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
 
@@ -93,109 +97,26 @@ watchEffect(() => {
   document.body.style.background = store.dark ? '#131110' : '#f5f1e9'
 })
 
-/* ---------- 画廊虚拟滚动（P3）：按行列窗口渲染，万级列表滚动恒定 DOM 量 ---------- */
-// 与 style.css .grid 的 minmax(var(--card-min), 1fr) / gap 13px 保持一致，保证列数计算与实际布局吻合；
-// --card-min 由 gallery 元素绑定 store.thumbSize（缩略图大小偏好），列数随之响应式重算
-const GRID_GAP = 13
-const OVERSCAN_ROWS = 3
-const GRID_MIN = computed(() => store.thumbSize)
-
-const galleryRef = ref<HTMLElement | null>(null)
-const galleryWidth = ref(0)
-/** 画廊顶边滚出视口的像素数（未滚到为负，钳到 0 参与 row 计算） */
-const viewTop = ref(0)
-// 视口高度建成响应式（A5）：endRow 的 computed 依赖它，窗口仅垂直方向变化时
-// 也立刻扩展渲染窗口，而不是等到用户滚动才自愈
-const winH = ref(window.innerHeight)
-// 入场动画只在首屏播一次（A6）：虚拟滚动窗口切片随滚动不断挂载新卡片，
-// 每次挂载都播 0.4s 动画会让快速滚动全程闪烁；首次滚动后即关闭
-const animateCards = ref(true)
-
-const cols = computed(() =>
-  Math.max(1, Math.floor((galleryWidth.value + GRID_GAP) / (GRID_MIN.value + GRID_GAP))),
+/* ---------- 画廊虚拟滚动（P3 / D3）：实现整体在 composables/useVirtualGrid.ts ---------- */
+const {
+  galleryRef,
+  visibleItems,
+  topPad,
+  bottomPad,
+  showBackTop,
+  backToTop,
+  updateViewTop,
+  animateCards,
+} = useVirtualGrid(
+  filteredItems,
+  computed(() => store.thumbSize),
 )
-const rowH = computed(() => {
-  if (!galleryWidth.value) return 0
-  const cardW = (galleryWidth.value - GRID_GAP * (cols.value - 1)) / cols.value
-  return cardW + GRID_GAP
-})
-const totalRows = computed(() => Math.ceil(filteredItems.value.length / cols.value))
 
-const startRow = computed(() =>
-  Math.max(0, Math.floor(Math.max(0, viewTop.value) / rowH.value) - OVERSCAN_ROWS),
-)
-const endRow = computed(() =>
-  Math.min(
-    totalRows.value,
-    Math.ceil((Math.max(0, viewTop.value) + winH.value) / rowH.value) + OVERSCAN_ROWS,
-  ),
-)
-// 首帧未量得尺寸时先渲染一小页，量到后立即进入窗口化
-const visibleItems = computed(() => {
-  if (!rowH.value) return filteredItems.value.slice(0, 24)
-  return filteredItems.value.slice(startRow.value * cols.value, endRow.value * cols.value)
-})
-const topPad = computed(() => startRow.value * rowH.value)
-const bottomPad = computed(() => Math.max(0, (totalRows.value - endRow.value) * rowH.value))
-
-// 长列表滚深后提供一键回顶（万级图滚回顶部很痛苦）；viewTop 即画廊顶边滚出的像素
-const showBackTop = computed(() => viewTop.value > 600)
-function backToTop() {
-  window.scrollTo({ top: 0, behavior: 'smooth' })
-}
-
-let scrollRaf = 0
-function updateViewTop() {
-  const el = galleryRef.value
-  if (!el) return
-  viewTop.value = -el.getBoundingClientRect().top
-}
-function onWinScroll() {
-  if (scrollRaf) return
-  scrollRaf = requestAnimationFrame(() => {
-    scrollRaf = 0
-    winH.value = window.innerHeight
-    if (animateCards.value) animateCards.value = false
-    updateViewTop()
-  })
-}
-let resizeObserver: ResizeObserver | null = null
-onMounted(() => {
-  updateViewTop()
-  window.addEventListener('scroll', onWinScroll, { passive: true })
-  window.addEventListener('resize', onWinScroll)
-  if (typeof ResizeObserver !== 'undefined' && galleryRef.value) {
-    resizeObserver = new ResizeObserver(() => {
-      galleryWidth.value = galleryRef.value?.clientWidth ?? 0
-      updateViewTop()
-    })
-    resizeObserver.observe(galleryRef.value)
-    galleryWidth.value = galleryRef.value.clientWidth
-  }
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('scroll', onWinScroll)
-  window.removeEventListener('resize', onWinScroll)
-  resizeObserver?.disconnect()
-  if (scrollRaf) cancelAnimationFrame(scrollRaf)
-})
 // 画廊上方的统计行 / 工具栏高度变化会移动画廊顶边，主动校正窗口
+// （条目数量 / 卡片宽度的校正已在 useVirtualGrid 内部）
 watch(
-  () => [store.items.length, filteredItems.value.length, store.sourceFilter, store.sortMode],
+  () => [store.sourceFilter, store.sortMode],
   () => updateViewTop(),
-)
-// 搜索 / 筛选 / 排序 / 看法切换：结果集语义变化即回顶（A8）——
-// 滚在万级列表深处改筛选，视口停在新结果中部极易误以为「没搜到」
-watch(
-  () => [
-    store.search,
-    store.modelFilter,
-    store.sourceFilter,
-    store.sortMode,
-    store.favOnly,
-    store.dupeOnly,
-  ],
-  () => window.scrollTo({ top: 0 }),
 )
 
 // 被“来源 / 搜索 / 模型”筛选挡住的已解析图片数量（用于空状态引导）
@@ -206,6 +127,80 @@ const hiddenCount = computed(() => {
 
 // 已加载文件的总大小：状态行直观展示本批数据体量（万级扫描时对照内存 / 磁盘心里有数）
 const totalBytes = computed(() => store.items.reduce((n, i) => n + i.size, 0))
+
+/* ---------- 激活筛选 chips（F5）：每个条件可单独移除，不必整串重写 ---------- */
+interface FilterChip {
+  key: string
+  label: string
+  title: string
+  remove: () => void
+}
+
+const SOURCE_CHIP_LABEL: Record<
+  Exclude<SourceFilter, 'comfyui'>,
+  'src.all' | 'src.a1111' | 'src.none' | 'src.error'
+> = {
+  all: 'src.all',
+  a1111: 'src.a1111',
+  none: 'src.none',
+  error: 'src.error',
+}
+
+const filterChips = computed<FilterChip[]>(() => {
+  const chips: FilterChip[] = []
+  if (store.modelFilter) {
+    const name = store.modelFilter
+    chips.push({
+      key: 'model',
+      label: name,
+      title: t('chip.modelTitle', { name }),
+      remove: () => (store.modelFilter = null),
+    })
+  }
+  if (store.sourceFilter !== 'comfyui') {
+    const sf = store.sourceFilter
+    chips.push({
+      key: 'source',
+      label: t(SOURCE_CHIP_LABEL[sf]),
+      remove: () => (store.sourceFilter = 'comfyui'),
+      title: t('chip.removeAria', { name: t(SOURCE_CHIP_LABEL[sf]) }),
+    })
+  }
+  if (store.favOnly) {
+    chips.push({
+      key: 'fav',
+      label: t('chip.favOnly'),
+      title: t('chip.removeAria', { name: t('chip.favOnly') }),
+      remove: () => (store.favOnly = false),
+    })
+  }
+  if (store.dupeOnly) {
+    chips.push({
+      key: 'dupe',
+      label: t('chip.dupeOnly'),
+      title: t('chip.removeAria', { name: t('chip.dupeOnly') }),
+      remove: () => (store.dupeOnly = false),
+    })
+  }
+  // 搜索串的每个 token 一个 chip（含字段限定 / 排除条件），按原文位置移除
+  tokenizeQuery(store.search).forEach((tk, i) => {
+    chips.push({
+      key: `t${i}-${tk.start}`,
+      label: tk.text,
+      title: t('chip.removeAria', { name: tk.text }),
+      remove: () => (store.search = removeQueryToken(store.search, i)),
+    })
+  })
+  return chips
+})
+
+function clearAllFilters() {
+  store.search = ''
+  store.modelFilter = null
+  store.sourceFilter = 'comfyui'
+  store.favOnly = false
+  store.dupeOnly = false
+}
 
 // 任一筛选偏离默认且确实藏了图时，状态行显示命中数（搜索 / 筛选是否生效一目了然）
 const filtersActive = computed(
@@ -530,7 +525,8 @@ function onGlobalKeys(e: KeyboardEvent) {
     selectedIds.value.size &&
     !showDetail.value &&
     !showCompare.value &&
-    !statsVisible.value
+    !statsVisible.value &&
+    !modelsVisible.value
   ) {
     e.preventDefault()
     clearSelection()
@@ -587,7 +583,7 @@ function onDragLeave() {
 async function collectDroppedFiles(dt: DataTransfer): Promise<IncomingFile[]> {
   const entries: FileSystemEntry[] = []
   for (let i = 0; i < dt.items.length; i++) {
-    const entry = dt.items[i].webkitGetAsEntry()
+    const entry = dt.items[i]!.webkitGetAsEntry()
     if (entry) entries.push(entry)
   }
   if (!entries.length) return Array.from(dt.files).map((file) => ({ file }))
@@ -689,6 +685,29 @@ async function onDrop(e: DragEvent) {
             {{ t('common.retry') }}
           </NButton>
           <span v-if="parsing" style="color: var(--accent)">{{ t('stat.parsing') }}</span>
+        </div>
+
+        <div
+          v-if="filterChips.length"
+          class="filter-chips"
+          role="list"
+          :aria-label="t('chip.barAria')"
+        >
+          <span v-for="c in filterChips" :key="c.key" class="chip" role="listitem">
+            <span class="chip-label" :title="c.label">{{ c.label }}</span>
+            <button
+              type="button"
+              class="chip-x"
+              :title="c.title"
+              :aria-label="c.title"
+              @click="c.remove()"
+            >
+              <Icon name="x" :size="10" :stroke="2.4" />
+            </button>
+          </span>
+          <button type="button" class="chip-clear" @click="clearAllFilters">
+            {{ t('chip.clearAll') }}
+          </button>
         </div>
 
         <main ref="galleryRef" class="gallery" :style="{ '--card-min': `${store.thumbSize}px` }">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NButton,
   NDropdown,
@@ -13,6 +13,8 @@ import {
   useMessage,
 } from 'naive-ui'
 import Icon from './Icon.vue'
+import ModelDrawer from './ModelDrawer.vue'
+import SearchBox from './SearchBox.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
   addFiles,
@@ -20,7 +22,6 @@ import {
   buildArchiveBackup,
   clearAll,
   clearAllDirBookmarks,
-  clearSearchHistory,
   deleteFilterPreset,
   dupeCount,
   favCount,
@@ -30,7 +31,6 @@ import {
   importArchive,
   modelOptions,
   parsing,
-  recentSearches,
   rescanAllDirectories,
   rescanDirectory,
   RESCAN_INTERVALS,
@@ -49,9 +49,18 @@ import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
 import { downloadText } from '../lib/utils'
 import { locale, t, toggleLocale } from '../locales'
-import { randomPickRequest, statsVisible } from '../composables/ui'
+import {
+  modelsVisible,
+  openFilePickerRequest,
+  openFolderPickerRequest,
+  randomPickRequest,
+  statsVisible,
+} from '../composables/ui'
 
 const fileInput = ref<HTMLInputElement | null>(null)
+// F10：空状态主按钮直接触发这里的选择器（计数信号与 randomPickRequest 同模式）
+watch(openFilePickerRequest, () => fileInput.value?.click())
+watch(openFolderPickerRequest, () => void onPickFolder())
 const dirInput = ref<HTMLInputElement | null>(null)
 const message = useMessage()
 // Chromium 系走 File System Access 选择器（可记住目录、一键重扫），其余回退 webkitdirectory
@@ -59,6 +68,8 @@ const fsPickSupported = supportsDirectoryPicker()
 const scanning = ref(false)
 // 统计抽屉显隐提升到 ui.ts：App 的全局 Esc（清空选择）需要感知抽屉是否打开
 const showStats = statsVisible
+// 模型库抽屉（F4）同理
+const showModels = modelsVisible
 
 /** webkitRelativePath 仅在目录选择时有值，普通多选为空串——退回 undefined 让去重退化为文件名 */
 function onPick(e: Event) {
@@ -212,25 +223,6 @@ async function onImportArchiveFile(e: Event) {
   }
 }
 
-/* ---------- 搜索语法速查（FEAT-9：随语言切换重渲染） ---------- */
-const helpLines = computed(() => [
-  t('help.model'),
-  t('help.lora'),
-  t('help.seed'),
-  t('help.seedRange'),
-  t('help.numRange'),
-  t('help.date'),
-  t('help.path'),
-  t('help.posneg'),
-  t('help.sampler'),
-  t('help.vae'),
-  t('help.tag'),
-  t('help.has'),
-  t('help.exclude'),
-  t('help.quoted'),
-  t('help.and'),
-])
-
 /* ---------- 筛选预设：保存 / 应用 / 删除命名筛选组合 ---------- */
 const presetName = ref('')
 
@@ -370,76 +362,7 @@ function savePreset() {
       {{ t('topbar.clearAll') }}
     </NTooltip>
 
-    <NPopover trigger="hover" placement="bottom-end" :style="{ maxWidth: '300px' }">
-      <template #trigger>
-        <NInput
-          v-model:value="store.search"
-          size="small"
-          round
-          clearable
-          :placeholder="t('topbar.searchPlaceholder')"
-          style="width: 230px"
-        >
-          <template #prefix><Icon name="search" :size="14" /></template>
-        </NInput>
-      </template>
-      <div class="search-help">
-        <b>{{ t('help.title') }}</b>
-        <p v-for="line in helpLines" :key="line" v-html="line" />
-      </div>
-    </NPopover>
-
-    <!-- 语法速查的触屏 / 键盘入口（A10）：hover 弹层只有指针设备可达，这里补一个点按按钮 -->
-    <NPopover trigger="click" placement="bottom-end" :style="{ maxWidth: '300px' }">
-      <template #trigger>
-        <NButton
-          size="small"
-          quaternary
-          circle
-          :aria-label="t('help.title')"
-          :title="t('help.title')"
-        >
-          <template #icon><Icon name="help-circle" :size="15" /></template>
-        </NButton>
-      </template>
-      <div class="search-help">
-        <b>{{ t('help.title') }}</b>
-        <p v-for="line in helpLines" :key="line" v-html="line" />
-      </div>
-    </NPopover>
-
-    <NPopover v-if="recentSearches.length" trigger="click" placement="bottom-start">
-      <template #trigger>
-        <NButton
-          size="small"
-          quaternary
-          circle
-          :aria-label="t('topbar.searchHistory')"
-          :title="t('topbar.searchHistory')"
-        >
-          <template #icon><Icon name="history" :size="15" /></template>
-        </NButton>
-      </template>
-      <div class="search-history">
-        <div class="sh-head">
-          <b>{{ t('topbar.searchHistory') }}</b>
-          <button type="button" class="sh-clear" @click="clearSearchHistory">
-            {{ t('topbar.searchHistoryClear') }}
-          </button>
-        </div>
-        <button
-          v-for="(q, i) in recentSearches"
-          :key="`${q}-${i}`"
-          type="button"
-          class="sh-item"
-          :title="q"
-          @click="store.search = q"
-        >
-          <Icon name="search" :size="12" :stroke="2.2" />
-          <span>{{ q }}</span>
-        </button>
-      </div>
-    </NPopover>
+    <SearchBox />
 
     <NSelect
       v-model:value="store.modelFilter"
@@ -585,6 +508,22 @@ function savePreset() {
           size="small"
           quaternary
           circle
+          :aria-label="t('topbar.models')"
+          :title="t('topbar.modelsTooltip')"
+          @click="showModels = true"
+        >
+          <template #icon><Icon name="package" /></template>
+        </NButton>
+      </template>
+      {{ t('topbar.modelsTooltip') }}
+    </NTooltip>
+
+    <NTooltip v-if="store.items.length > 0">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
           :aria-label="t('topbar.stats')"
           :title="t('topbar.stats')"
           @click="showStats = true"
@@ -634,6 +573,8 @@ function savePreset() {
     </div>
 
     <StatsDrawer v-model:show="showStats" />
+
+    <ModelDrawer v-model:show="showModels" />
 
     <input
       ref="fileInput"

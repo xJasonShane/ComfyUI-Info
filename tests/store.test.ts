@@ -2087,3 +2087,70 @@ it('全部重扫（F3）：顺序扫每个书签并汇总新增，无权限目�
     vi.mocked(fsMod.ensureReadPermission).mockReset()
   }
 })
+
+describe('模型库与缩略图（F4 / F2）', () => {
+  it('modelStats 按主模型聚合张数、最近出图时间与 A1111 哈希', async () => {
+    vi.mocked(parser.parseImage).mockImplementation(async (f: File) => ({
+      raw: { source: 'a1111', parameters: 'x' },
+      params: {
+        positive: [],
+        negative: [],
+        models: [f.name.startsWith('a') ? 'modelA' : 'modelB'],
+        loras: [],
+        samplers: [],
+        vaes: [],
+        upscalers: [],
+        controlNets: [],
+        nodeCount: 0,
+        ...(f.name.startsWith('a') ? { modelHash: 'hashA' } : {}),
+      },
+      thumb: f.name === 'a.png' ? new Uint8Array([1, 2, 3]) : undefined,
+    }))
+    api.addFiles([
+      { file: new File(['x'], 'a.png', { lastModified: 100 }) },
+      { file: new File(['x'], 'a2.png', { lastModified: 300 }) },
+      { file: new File(['x'], 'b.png', { lastModified: 200 }) },
+    ])
+    await flush()
+    expect(api.modelStats.value).toEqual([
+      { name: 'modelA', count: 2, lastUsed: 300, hash: 'hashA' },
+      { name: 'modelB', count: 1, lastUsed: 200, hash: undefined },
+    ])
+  })
+
+  it('存档缩略图：restoreArchived 携带 thumbB64，ensureItemThumb 转 objectURL 后释放', async () => {
+    const b64 = btoa('jpeg-bytes')
+    api.restoreArchived([
+      {
+        key: 'thumb|1|1',
+        name: 't.png',
+        size: 1,
+        mtime: 1,
+        status: 'done',
+        source: 'comfyui',
+        raw: { source: 'comfyui' },
+        savedAt: 1,
+        thumbB64: b64,
+      },
+    ])
+    const item = api.store.items[0]!
+    expect(item.thumbB64).toBe(b64)
+    expect(item.thumb).toBeUndefined()
+    await api.ensureItemThumb(item)
+    expect(item.thumb).toBe('blob:mock')
+    expect(item.thumbB64).toBeUndefined() // 转成 URL 后不再持有 base64 串
+  })
+
+  it('tokenizeQuery / removeQueryToken：按原文位置移除条件（F5 chips 数据层）', () => {
+    const raw = 'cat model:abc -"has space" seed:5'
+    expect(api.tokenizeQuery(raw).map((t) => t.text)).toEqual([
+      'cat',
+      'model:abc',
+      '-"has space"',
+      'seed:5',
+    ])
+    expect(api.removeQueryToken(raw, 1)).toBe('cat -"has space" seed:5')
+    expect(api.removeQueryToken(raw, 99)).toBe(raw) // 越界原样返回
+    expect(api.removeQueryToken('', 0)).toBe('')
+  })
+})
