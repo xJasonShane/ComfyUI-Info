@@ -104,7 +104,8 @@ const zh = {
   'help.date': '<code>date:2026-01-31</code> 按日期（本地时区，支持年 / 月前缀）',
   'help.path': '<code>path:目录</code> 按相对路径',
   'help.exclude': '<code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）',
-  'help.quoted': '<code>"model:a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用',
+  'help.quoted':
+    '<code>"model:a b"</code> 或 <code>model:"a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用',
   'help.and': '多个正向条件空格分隔，全部满足才命中',
   'topbar.modelPlaceholder': '按模型筛选',
   'topbar.dupeOnlyAria': '只看重复',
@@ -349,7 +350,8 @@ const en: Record<DictKey, string> = {
   'help.date': '<code>date:2026-01-31</code> by date (local timezone, year / month prefixes work)',
   'help.path': '<code>path:dir</code> by relative path',
   'help.exclude': '<code>-term</code> exclude (e.g. <code>-blurry</code>, <code>-model:xx</code>)',
-  'help.quoted': '<code>"model:a b"</code> quotes allow spaces, combinable with <code>-</code>',
+  'help.quoted':
+    '<code>"model:a b"</code> / <code>model:"a b"</code> quotes allow spaces, combinable with <code>-</code>',
   'help.and': 'Multiple positive terms are space-separated AND conditions',
   'topbar.modelPlaceholder': 'Filter by model',
   'topbar.dupeOnlyAria': 'Duplicates only',

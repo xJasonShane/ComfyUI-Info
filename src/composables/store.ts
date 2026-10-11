@@ -1001,7 +1001,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
  * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
- * - `"model:a b"` 带引号的字段值可含空格
+ * - `"model:a b"` / `model:"a b"`：带引号的字段值可含空格（两种引号位置均可）
  * - `-关键词` / `-model:xxx` 排除条件，任一命中即整条不匹配
  * 正向条件按 AND 组合，大小写不敏感。
  */
@@ -1016,8 +1016,9 @@ export function parseQuery(raw: string): ParsedQuery {
     num: [],
   })
   const out: ParsedQuery = { all: empty(), none: empty() }
-  // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏
-  const tokens = raw.trim().match(/-?"[^"]*"|\S+/g) ?? []
+  // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏；
+  // 引号也可跟在冒号后（`model:"a b"`），同样作为整体 token
+  const tokens = raw.trim().match(/-?(?:[A-Za-z]+:)?"[^"]*"|\S+/g) ?? []
   for (let token of tokens) {
     let negated = false
     if (token.startsWith('-') && token.length > 1) {
@@ -1037,11 +1038,16 @@ export function parseQuery(raw: string): ParsedQuery {
         const cond = parseNumCondition(numField, m[2]!)
         if (cond) bucket.num.push(cond)
       } else if (m[2]) {
+        // `model:"a b"` 形态：值外侧的成对引号剥离后再入桶
+        let value = m[2]
+        if (value.length > 1 && value.startsWith('"') && value.endsWith('"')) {
+          value = value.slice(1, -1)
+        }
         // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉。
         // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
         // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
-        if (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(m[2])) {
-          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(m[2].toLowerCase())
+        if (value && (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(value))) {
+          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(value.toLowerCase())
         }
       }
     } else {

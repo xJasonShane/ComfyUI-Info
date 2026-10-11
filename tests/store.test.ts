@@ -782,6 +782,12 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     all: empty,
     none: { terms: [], model: ['a b'], lora: [], seed: [], path: [], date: [], num: [] },
   })
+  // 冒号后带引号的字段值：`model:"a b"` 整体成一个 token，值剥离引号后入桶
+  expect(api.parseQuery('model:"a b"')).toEqual({
+    all: { terms: [], model: ['a b'], lora: [], seed: [], path: [], date: [], num: [] },
+    none: empty,
+  })
+  expect(api.parseQuery('-model:"a b c"').none.model).toEqual(['a b c'])
   // date 字段：非法格式照常入桶，由 hitDate 匹配时判否
   expect(api.parseQuery('date:2026-01-31 -date:2025-12')).toEqual({
     all: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2026-01-31'], num: [] },
@@ -842,6 +848,9 @@ it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', as
   expect(names('-model:majic')).toEqual(['b.png'])
   // 引号包裹：含空格的普通词
   expect(names('"two words"')).toEqual(['a.png'])
+  // 冒号后带引号：字段值含空格（两种引号位置等价）
+  expect(names('model:"majicMIX"')).toEqual(['a.png'])
+  expect(names('-model:"majicMIX"')).toEqual(['b.png'])
   // 引号 + 否定组合：含空格的字段值 / 普通词都能排除
   expect(names('-"two words"')).toEqual(['b.png'])
   // 种子范围（数字字符串比较，不丢精度）
