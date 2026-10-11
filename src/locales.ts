@@ -39,6 +39,7 @@ const zh = {
   /* 状态行（App） */
   'stat.loaded': '已加载',
   'stat.parsing': '扫描中…',
+  'stat.filtered': '筛选命中 {n} 张',
   'stat.errorTitle': '点击查看解析失败的图片',
   'stat.retryAllTitle': '重试全部解析失败的图片',
   'msg.retried': '已重新排队 {n} 张失败图片',
@@ -304,6 +305,7 @@ const en: Record<DictKey, string> = {
 
   'stat.loaded': 'Loaded',
   'stat.parsing': 'Scanning…',
+  'stat.filtered': '{n} match filters',
   'stat.errorTitle': 'Click to view images that failed to parse',
   'stat.retryAllTitle': 'Retry all failed images',
   'msg.retried': 'Re-queued {n} failed images',

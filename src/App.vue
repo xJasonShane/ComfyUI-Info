@@ -169,6 +169,19 @@ const hiddenCount = computed(() => {
   const shown = new Set(filteredItems.value)
   return store.items.filter((i) => i.status === 'done' && !shown.has(i)).length
 })
+
+// 任一筛选偏离默认且确实藏了图时，状态行显示命中数（搜索 / 筛选是否生效一目了然）
+const filtersActive = computed(
+  () =>
+    store.search.trim() !== '' ||
+    store.modelFilter !== null ||
+    store.sourceFilter !== 'comfyui' ||
+    store.dupeOnly ||
+    store.favOnly,
+)
+const showFilteredCount = computed(
+  () => filtersActive.value && filteredItems.value.length !== store.items.length,
+)
 function showAll() {
   store.sourceFilter = 'all'
   store.search = ''
@@ -456,6 +469,9 @@ async function onDrop(e: DragEvent) {
             ><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b>
             {{ t('src.none') }}</span
           >
+          <span v-if="showFilteredCount" class="stat-filtered">
+            {{ t('stat.filtered', { n: filteredItems.length }) }}
+          </span>
           <span
             v-if="stats.error"
             class="stat-error"

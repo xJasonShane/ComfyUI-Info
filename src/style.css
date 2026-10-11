@@ -187,6 +187,11 @@ body {
   color: var(--danger);
 }
 
+/* 筛选命中数（有筛选且确实隐藏了图时显示） */
+.statline .stat-filtered {
+  color: var(--accent);
+}
+
 /* ============ 画廊 ============ */
 .gallery {
   flex: 1;
