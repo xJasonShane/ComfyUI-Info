@@ -451,6 +451,25 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
     expect(p.samplers[0].steps).toBe(20)
   })
 
+  it('UI 格式：KSamplerSelect 不产生伪采样阶段', () => {
+    const wf = JSON.stringify({
+      nodes: [
+        { id: 10, type: 'KSamplerSelect', mode: 0, inputs: [], widgets_values: ['euler'] },
+        {
+          id: 13,
+          type: 'KSampler',
+          mode: 0,
+          inputs: [{ name: 'positive', link: 4 }],
+          widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1],
+        },
+      ],
+      links: [[4, 10, 0, 13, 0, 'CONDITIONING']],
+    })
+    const p = extractUiWorkflowParams(wf)!
+    expect(p.samplers).toHaveLength(1)
+    expect(p.samplers[0].classType).toBe('KSampler')
+  })
+
   it('bypass（mode=4）的采样器与加载节点不参与提取', () => {
     const wf = {
       nodes: [
@@ -817,6 +836,7 @@ describe('extractComfyParams', () => {
       '11': { class_type: 'SchedulerSelect', inputs: { scheduler: 'karras' } },
     })
     const p = extractComfyParams(prompt)!
+    expect(p.samplers).toHaveLength(1) // KSamplerSelect / SchedulerSelect 本身不入伪阶段
     expect(p.samplers[0]!.sampler).toBe('euler_ancestral')
     expect(p.samplers[0]!.scheduler).toBe('karras')
   })
@@ -844,6 +864,7 @@ describe('extractComfyParams', () => {
       '11': { class_type: 'KarrasScheduler', inputs: { steps: 20, denoise: 1 } },
     })
     const p = extractComfyParams(prompt)!
+    expect(p.samplers).toHaveLength(1) // 仅 SamplerCustom 入列，KSamplerSelect 不产生伪阶段
     expect(p.samplers[0]!.sampler).toBe('dpmpp_2m')
   })
 

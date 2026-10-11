@@ -227,9 +227,14 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     const inputs = (node.inputs || {}) as NodeInputs
     const cls = node.class_type || ''
 
+    // 选择器节点（KSamplerSelect / SchedulerSelect 等）只产出选择值，其值经连线并入
+    // 真正的采样器阶段（resolveNodeChoice），本身不是采样阶段——否则详情 / 统计 /
+    // 导出会出现全空字段的伪阶段，采样器频次也会被重复计数
+    const isSelector = /Select$/i.test(cls)
     const looksSampler =
-      /KSampler|Sampler/i.test(cls) ||
-      (typeof inputs.steps === 'number' && typeof inputs.cfg === 'number')
+      !isSelector &&
+      (/KSampler|Sampler/i.test(cls) ||
+        (typeof inputs.steps === 'number' && typeof inputs.cfg === 'number'))
     if (looksSampler) {
       const s: SamplerInfo = {
         nodeId: id,
@@ -261,7 +266,17 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
               : undefined),
         denoise: asNum(inputs.denoise),
       }
-      out.samplers.push(s)
+      // 全字段为空的匹配项（自定义节点名恰好含 Sampler）同样不入伪阶段
+      if (
+        s.steps !== undefined ||
+        s.cfg !== undefined ||
+        s.sampler !== undefined ||
+        s.scheduler !== undefined ||
+        s.seed !== undefined ||
+        s.denoise !== undefined
+      ) {
+        out.samplers.push(s)
+      }
 
       const pos = isLink(inputs.positive)
         ? resolveNodeText(inputs.positive[0])
@@ -427,10 +442,20 @@ export function extractUiWorkflowParams(text: string): ParsedParams | null {
       textByNode.set(node.id, wv[0])
     }
 
-    if (!bypassed && /KSampler|Sampler/i.test(cls)) {
+    // 选择器节点（KSamplerSelect 等）不入伪阶段，与 API 格式路径同一规则
+    if (!bypassed && !/Select$/i.test(cls) && /KSampler|Sampler/i.test(cls)) {
       const fields = samplerFromWidgets(wv)
-      if (fields)
-        drafts.push({ node, info: { nodeId: String(node.id), classType: cls, ...fields } })
+      if (fields) {
+        const hasField =
+          fields.steps !== undefined ||
+          fields.cfg !== undefined ||
+          fields.sampler !== undefined ||
+          fields.scheduler !== undefined ||
+          fields.seed !== undefined ||
+          fields.denoise !== undefined
+        if (hasField)
+          drafts.push({ node, info: { nodeId: String(node.id), classType: cls, ...fields } })
+      }
     }
 
     if (bypassed) continue
