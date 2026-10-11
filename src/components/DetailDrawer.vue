@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NAutoComplete, NButton, NDrawer, NDropdown, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
+import {
+  NAutoComplete,
+  NButton,
+  NDrawer,
+  NDropdown,
+  NTabPane,
+  NTabs,
+  NSwitch,
+  useMessage,
+} from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
@@ -367,7 +376,8 @@ const samplerRows = computed<InfoRow[]>(() => {
     })
   if (s.steps != null)
     rows.push({ label: t('detail.steps'), value: String(s.steps), filter: `steps:${s.steps}` })
-  if (s.cfg != null) rows.push({ label: t('detail.cfg'), value: String(s.cfg), filter: `cfg:${s.cfg}` })
+  if (s.cfg != null)
+    rows.push({ label: t('detail.cfg'), value: String(s.cfg), filter: `cfg:${s.cfg}` })
   if (s.seed) rows.push({ label: t('detail.seed'), value: s.seed, filter: `seed:${s.seed}` })
   if (s.denoise != null) rows.push({ label: t('detail.denoise'), value: String(s.denoise) })
   return rows

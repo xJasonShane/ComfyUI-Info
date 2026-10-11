@@ -731,7 +731,9 @@ export function buildArchiveBackup(): { text: string; count: number } {
  * 存档卡片即带星标与标签）；持久化不可用时仅恢复到本会话内存。
  * 备份结构非法时抛错由调用方提示。
  */
-export async function importArchive(text: string): Promise<{ n: number; favs: number; tags: number }> {
+export async function importArchive(
+  text: string,
+): Promise<{ n: number; favs: number; tags: number }> {
   const { records, favorites, tags } = parseArchive(text)
   const fresh = records.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
   if (persistAvailable) {

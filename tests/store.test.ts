@@ -736,7 +736,11 @@ it('存档备份：序列化与解析往返，非法结构抛错（FEAT-6）', a
   // 无法识别的条目剔除，不中断导入；收藏里的非字符串项忽略
   expect(
     parseArchive(
-      JSON.stringify({ records: [rec, { junk: true }], favorites: ['k|1|2', 3], tags: { k: 'junk' } }),
+      JSON.stringify({
+        records: [rec, { junk: true }],
+        favorites: ['k|1|2', 3],
+        tags: { k: 'junk' },
+      }),
     ),
   ).toEqual({ records: [rec], favorites: ['k|1|2'], tags: {} })
 })

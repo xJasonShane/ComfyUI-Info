@@ -128,7 +128,8 @@ const zh = {
   'help.path': '<code>path:目录</code> 按相对路径',
   'help.posneg': '<code>pos:xxx</code> / <code>neg:xxx</code> 仅匹配正向 / 负向提示词',
   'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> 按采样器 / 调度器',
-  'help.vae': '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> 按 VAE / 放大 / ControlNet 模型',
+  'help.vae':
+    '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> 按 VAE / 放大 / ControlNet 模型',
   'help.has':
     '<code>has:lora</code> 只看带某要素的图（lora / vae / hires / upscale / controlnet / tag，可配 -）',
   'help.tag': '<code>tag:xxx</code> 按自定义标签筛选（标签在详情页添加）',
@@ -451,7 +452,8 @@ const en: Record<DictKey, string> = {
   'help.posneg':
     '<code>pos:xxx</code> / <code>neg:xxx</code> match positive / negative prompts only',
   'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> by sampler / scheduler',
-  'help.vae': '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> by VAE / upscale / ControlNet model',
+  'help.vae':
+    '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> by VAE / upscale / ControlNet model',
   'help.has':
     '<code>has:lora</code> images having an element (lora / vae / hires / upscale / controlnet / tag, negatable)',
   'help.tag': '<code>tag:xxx</code> filter by custom tags (add tags in the detail drawer)',
@@ -469,8 +471,10 @@ const en: Record<DictKey, string> = {
   'topbar.thumbSize': 'Thumbnail size',
   'topbar.themeToLight': 'Switch to light theme',
   'topbar.safeMode': 'Safe mode',
-  'topbar.safeModeOn': 'Safe mode is on: thumbnails are blurred, hover a card to reveal it; click to turn off',
-  'topbar.safeModeOff': 'Safe mode is off: thumbnails shown as-is; click to blur them (privacy on shared screens)',
+  'topbar.safeModeOn':
+    'Safe mode is on: thumbnails are blurred, hover a card to reveal it; click to turn off',
+  'topbar.safeModeOff':
+    'Safe mode is off: thumbnails shown as-is; click to blur them (privacy on shared screens)',
   'topbar.themeToDark': 'Switch to dark theme',
   'topbar.clearAll': 'Clear list',
   'topbar.clearAllConfirm':
