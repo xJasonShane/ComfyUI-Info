@@ -44,6 +44,7 @@ import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
+import Icon from './components/Icon.vue'
 import {
   addFiles,
   filteredItems,
@@ -124,6 +125,12 @@ const visibleItems = computed(() => {
 })
 const topPad = computed(() => startRow.value * rowH.value)
 const bottomPad = computed(() => Math.max(0, (totalRows.value - endRow.value) * rowH.value))
+
+// 长列表滚深后提供一键回顶（万级图滚回顶部很痛苦）；viewTop 即画廊顶边滚出的像素
+const showBackTop = computed(() => viewTop.value > 600)
+function backToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 let scrollRaf = 0
 function updateViewTop() {
@@ -570,6 +577,17 @@ async function onDrop(e: DragEvent) {
         <div v-if="dragging" class="drop-overlay">
           <div class="inner">{{ t('drop.hint') }}</div>
         </div>
+
+        <button
+          v-if="showBackTop"
+          class="back-top"
+          type="button"
+          :title="t('app.backTop')"
+          :aria-label="t('app.backTop')"
+          @click="backToTop"
+        >
+          <Icon name="arrow-up" :size="17" />
+        </button>
       </div>
     </NMessageProvider>
   </NConfigProvider>
