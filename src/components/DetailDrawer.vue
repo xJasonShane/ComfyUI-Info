@@ -11,6 +11,7 @@ import {
   filteredItems,
   retryItem,
   ensureItemUrl,
+  store,
   toggleFavorite,
 } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
@@ -258,46 +259,113 @@ const corruptHint = computed(() => {
   return it.raw.source === 'comfyui' ? t('detail.corruptJson') : t('detail.corruptText')
 })
 
-const generalRows = computed<[string, string][]>(() => {
+/** 参数行：value 供展示，filter / modelFilter 存在时行尾有一键筛选按钮 */
+interface InfoRow {
+  label: string
+  value: string
+  /** 定向搜索串（如 `vae:"…"` / `steps:30`），点击写入搜索框 */
+  filter?: string
+  /** 单模型走 modelFilter 下拉（与统计抽屉一致），多模型才退到定向搜索 */
+  modelFilter?: string
+}
+
+const generalRows = computed<InfoRow[]>(() => {
   const params = p.value
-  const rows: [string, string][] = []
+  const rows: InfoRow[] = []
   if (!params) return rows
   if (params.models.length) {
-    rows.push([
-      t('detail.model'),
-      params.modelHash
+    rows.push({
+      label: t('detail.model'),
+      value: params.modelHash
         ? `${params.models.join(' + ')} · ${params.modelHash}`
         : params.models.join(' + '),
-    ])
+      ...(params.models.length === 1
+        ? { modelFilter: params.models[0] }
+        : { filter: params.models.map((m) => `model:"${m}"`).join(' ') }),
+    })
   }
-  if (params.vaes.length) rows.push([t('detail.vae'), params.vaes.join(' + ')])
-  if (params.clipSkip !== undefined) rows.push([t('detail.clipSkip'), String(params.clipSkip)])
+  if (params.vaes.length)
+    rows.push({
+      label: t('detail.vae'),
+      value: params.vaes.join(' + '),
+      filter: params.vaes.map((v) => `vae:"${v}"`).join(' '),
+    })
+  if (params.clipSkip !== undefined)
+    rows.push({
+      label: t('detail.clipSkip'),
+      value: String(params.clipSkip),
+      filter: `clip:${params.clipSkip}`,
+    })
   if (params.width && params.height) {
     let s = `${params.width} × ${params.height}`
     if (params.batch && params.batch > 1) s += t('detail.perBatch', { n: params.batch })
-    rows.push([t('detail.size'), s])
+    rows.push({
+      label: t('detail.size'),
+      value: s,
+      filter: `w:${params.width} h:${params.height}`,
+    })
   }
-  if (params.upscalers.length) rows.push([t('detail.upscaler'), params.upscalers.join(' + ')])
-  if (params.controlNets.length) rows.push([t('detail.controlnet'), params.controlNets.join(' + ')])
+  if (params.upscalers.length)
+    rows.push({
+      label: t('detail.upscaler'),
+      value: params.upscalers.join(' + '),
+      filter: params.upscalers.map((v) => `upscale:"${v}"`).join(' '),
+    })
+  if (params.controlNets.length)
+    rows.push({
+      label: t('detail.controlnet'),
+      value: params.controlNets.join(' + '),
+      filter: params.controlNets.map((v) => `controlnet:"${v}"`).join(' '),
+    })
   if (params.nodeCount)
-    rows.push([t('detail.nodeCount'), t('detail.nodes', { n: params.nodeCount })])
+    rows.push({ label: t('detail.nodeCount'), value: t('detail.nodes', { n: params.nodeCount }) })
   return rows
 })
 
 const sampler = computed<SamplerInfo | undefined>(() => p.value?.samplers?.[0])
 
-const samplerRows = computed<[string, string][]>(() => {
+const samplerRows = computed<InfoRow[]>(() => {
   const s = sampler.value
-  const rows: [string, string][] = []
+  const rows: InfoRow[] = []
   if (!s) return rows
-  if (s.sampler) rows.push([t('detail.sampler'), s.sampler])
-  if (s.scheduler) rows.push([t('detail.scheduler'), s.scheduler])
-  if (s.steps != null) rows.push([t('detail.steps'), String(s.steps)])
-  if (s.cfg != null) rows.push([t('detail.cfg'), String(s.cfg)])
-  if (s.seed) rows.push([t('detail.seed'), s.seed])
-  if (s.denoise != null) rows.push([t('detail.denoise'), String(s.denoise)])
+  if (s.sampler)
+    rows.push({
+      label: t('detail.sampler'),
+      value: s.sampler,
+      filter: `sampler:"${s.sampler}"`,
+    })
+  if (s.scheduler)
+    rows.push({
+      label: t('detail.scheduler'),
+      value: s.scheduler,
+      filter: `scheduler:"${s.scheduler}"`,
+    })
+  if (s.steps != null)
+    rows.push({ label: t('detail.steps'), value: String(s.steps), filter: `steps:${s.steps}` })
+  if (s.cfg != null) rows.push({ label: t('detail.cfg'), value: String(s.cfg), filter: `cfg:${s.cfg}` })
+  if (s.seed) rows.push({ label: t('detail.seed'), value: s.seed, filter: `seed:${s.seed}` })
+  if (s.denoise != null) rows.push({ label: t('detail.denoise'), value: String(s.denoise) })
   return rows
 })
+
+/**
+ * 一键筛选：写入定向搜索串并关闭抽屉，回到画廊即见同参图集
+ * （与统计抽屉点击条目同一交互语义：替换当前搜索条件）。
+ */
+function applySearch(query: string) {
+  store.search = query
+  show.value = false
+}
+
+function applyRowFilter(row: InfoRow) {
+  if (row.modelFilter) store.modelFilter = row.modelFilter
+  else if (row.filter) applySearch(row.filter)
+}
+
+/** LoRA 行的一键筛选：定向 `lora:"…"`（含空格名称整体成词） */
+function filterLora(name: string) {
+  applySearch(`lora:"${name}"`)
+}
 
 function stageText(s: SamplerInfo): string {
   const parts = [
@@ -569,15 +637,25 @@ async function copyImage() {
                 </NButton>
               </div>
               <dl class="kv">
-                <template v-for="([k, v], i) in generalRows" :key="i">
-                  <dt>{{ k }}</dt>
+                <template v-for="(row, i) in generalRows" :key="i">
+                  <dt>{{ row.label }}</dt>
                   <dd>
-                    <span class="kv-val">{{ v }}</span>
+                    <span class="kv-val">{{ row.value }}</span>
+                    <button
+                      v-if="row.filter || row.modelFilter"
+                      class="kv-copy"
+                      type="button"
+                      :title="t('detail.filterBy')"
+                      :aria-label="t('detail.filterBy')"
+                      @click="applyRowFilter(row)"
+                    >
+                      <Icon name="filter" :size="11" :stroke="2.2" />
+                    </button>
                     <button
                       class="kv-copy"
                       type="button"
-                      :title="t('detail.copyField', { name: k })"
-                      @click="copy(v, k)"
+                      :title="t('detail.copyField', { name: row.label })"
+                      @click="copy(row.value, row.label)"
                     >
                       <Icon name="copy" :size="11" :stroke="2.2" />
                     </button>
@@ -596,15 +674,25 @@ async function copyImage() {
                 >
               </div>
               <dl v-if="p.samplers.length === 1" class="kv">
-                <template v-for="([k, v], i) in samplerRows" :key="i">
-                  <dt>{{ k }}</dt>
+                <template v-for="(row, i) in samplerRows" :key="i">
+                  <dt>{{ row.label }}</dt>
                   <dd>
-                    <span class="kv-val">{{ v }}</span>
+                    <span class="kv-val">{{ row.value }}</span>
+                    <button
+                      v-if="row.filter"
+                      class="kv-copy"
+                      type="button"
+                      :title="t('detail.filterBy')"
+                      :aria-label="t('detail.filterBy')"
+                      @click="applyRowFilter(row)"
+                    >
+                      <Icon name="filter" :size="11" :stroke="2.2" />
+                    </button>
                     <button
                       class="kv-copy"
                       type="button"
-                      :title="t('detail.copyField', { name: k })"
-                      @click="copy(v, k)"
+                      :title="t('detail.copyField', { name: row.label })"
+                      @click="copy(row.value, row.label)"
                     >
                       <Icon name="copy" :size="11" :stroke="2.2" />
                     </button>
@@ -632,6 +720,15 @@ async function copyImage() {
                     })
                   }}
                 </span>
+                <button
+                  class="kv-copy"
+                  type="button"
+                  :title="t('detail.filterBy')"
+                  :aria-label="t('detail.filterBy')"
+                  @click="filterLora(l.name)"
+                >
+                  <Icon name="filter" :size="11" :stroke="2.2" />
+                </button>
                 <button
                   class="kv-copy"
                   type="button"

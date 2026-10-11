@@ -917,6 +917,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     scheduler: [],
     vae: [],
     upscale: [],
+    controlnet: [],
     has: [],
   }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
@@ -934,6 +935,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
     none: empty,
@@ -956,6 +958,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
   })
@@ -975,6 +978,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
     none: empty,
@@ -996,6 +1000,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
     none: {
@@ -1012,6 +1017,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
   })
@@ -1031,6 +1037,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
     none: {
@@ -1047,6 +1054,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
   })
@@ -1079,6 +1087,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: [],
     },
     none: empty,
@@ -1103,6 +1112,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: [],
       vae: ['ft-mse'],
       upscale: ['4x'],
+      controlnet: [],
       has: ['lora'],
     },
     none: {
@@ -1119,6 +1129,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       scheduler: ['karras'],
       vae: [],
       upscale: [],
+      controlnet: [],
       has: ['hires'],
     },
   })
@@ -1229,6 +1240,7 @@ it('sampler / scheduler / vae / upscale 定向与 has: 存在性条件', async (
     ],
     vaes: ['vae-ft-mse'],
     upscalers: ['4x-UltraSharp'],
+    controlNets: ['control_v11p_sd15_openpose'],
   })
   await flush()
   api.store.sourceFilter = 'all'
@@ -1241,13 +1253,15 @@ it('sampler / scheduler / vae / upscale 定向与 has: 存在性条件', async (
   expect(names('scheduler:karras')).toEqual(['a.png'])
   expect(names('vae:ft-mse')).toEqual(['b.png'])
   expect(names('upscale:ultrasharp')).toEqual(['b.png'])
+  expect(names('controlnet:openpose')).toEqual(['b.png'])
+  expect(names('-controlnet:openpose')).toEqual(['a.png'])
   // 存在性条件：按生成要素有无筛选，可配 - 排除；未知要素名忽略为无条件
   expect(names('has:lora')).toEqual(['a.png'])
   expect(names('-has:lora')).toEqual(['b.png'])
   expect(names('has:hires')).toEqual(['b.png'])
   expect(names('has:vae')).toEqual(['b.png'])
   expect(names('has:upscale')).toEqual(['b.png'])
-  expect(names('has:controlnet')).toEqual([])
+  expect(names('has:controlnet')).toEqual(['b.png'])
   expect(names('has:bogus')).toEqual(['a.png', 'b.png'])
   api.store.search = ''
 })

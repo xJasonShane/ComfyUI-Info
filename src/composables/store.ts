@@ -970,9 +970,10 @@ export interface QueryConditions {
   /** `sampler:xxx` / `scheduler:xxx` 采样参数定向 */
   sampler: string[]
   scheduler: string[]
-  /** `vae:xxx` / `upscale:xxx` 模型资产定向 */
+  /** `vae:xxx` / `upscale:xxx` / `controlnet:xxx` 模型资产定向 */
   vae: string[]
   upscale: string[]
+  controlnet: string[]
   /** `has:lora|vae|hires|upscale|controlnet` 存在性条件 */
   has: HasField[]
   num: NumCondition[]
@@ -986,7 +987,7 @@ export interface ParsedQuery {
 }
 
 const QUERY_FIELD_RE =
-  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|controlnet|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
 
 /** 数值字段别名：w / h 是 width / height 的简写 */
 const NUM_FIELDS: Record<string, NumField> = {
@@ -1078,7 +1079,8 @@ function hitCondition(
     | 'sampler'
     | 'scheduler'
     | 'vae'
-    | 'upscale',
+    | 'upscale'
+    | 'controlnet',
   value: string,
   it: ImageItem,
 ): boolean {
@@ -1113,6 +1115,8 @@ function hitCondition(
       return (it.params?.vaes ?? []).some((v) => v.toLowerCase().includes(value))
     case 'upscale':
       return (it.params?.upscalers ?? []).some((v) => v.toLowerCase().includes(value))
+    case 'controlnet':
+      return (it.params?.controlNets ?? []).some((v) => v.toLowerCase().includes(value))
   }
 }
 
@@ -1187,6 +1191,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
     'scheduler',
     'vae',
     'upscale',
+    'controlnet',
   ] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
@@ -1205,7 +1210,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * 解析搜索框语法（O1 增强）：
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
  * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
- * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx`
+ * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx` / `controlnet:xxx`
  * - 存在性 `has:lora|vae|hires|upscale|controlnet`，可配 `-` 排除
  * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀，
  *   `date:>2026-01-01` / `date:<=2026-06` 范围筛选（前缀展开为区间端点再比较）
@@ -1230,6 +1235,7 @@ export function parseQuery(raw: string): ParsedQuery {
     scheduler: [],
     vae: [],
     upscale: [],
+    controlnet: [],
     has: [],
     num: [],
   })
@@ -1283,6 +1289,7 @@ export function parseQuery(raw: string): ParsedQuery {
                 | 'scheduler'
                 | 'vae'
                 | 'upscale'
+                | 'controlnet'
             ].push(value.toLowerCase())
           }
         }
