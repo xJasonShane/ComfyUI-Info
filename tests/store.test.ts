@@ -1724,3 +1724,53 @@ describe('resolutionStats', () => {
     api.store.search = ''
   })
 })
+
+describe('搜索历史', () => {
+  it('搜索词落定后记入，大小写不敏感去重并提升到最前，空值不计入，可清空', async () => {
+    vi.useFakeTimers()
+    try {
+      api.clearSearchHistory()
+      api.store.search = 'cat'
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(api.recentSearches.value).toEqual(['cat'])
+
+      api.store.search = 'dog'
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(api.recentSearches.value).toEqual(['dog', 'cat'])
+
+      // 大小写不敏感去重：命中的已有项提升到最前，不新增
+      api.store.search = 'CAT'
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(api.recentSearches.value).toEqual(['CAT', 'dog'])
+
+      // 空白词不计入
+      api.store.search = '   '
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(api.recentSearches.value).toEqual(['CAT', 'dog'])
+
+      api.clearSearchHistory()
+      expect(api.recentSearches.value).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('超过上限丢弃最旧条目，偏好写入 localStorage', async () => {
+    vi.useFakeTimers()
+    try {
+      api.clearSearchHistory()
+      for (let i = 0; i < 12; i++) {
+        api.store.search = `q-${i}`
+        await vi.advanceTimersByTimeAsync(1600)
+      }
+      expect(api.recentSearches.value.length).toBe(10)
+      expect(api.recentSearches.value[0]).toBe('q-11')
+      expect(api.recentSearches.value[9]).toBe('q-2')
+      expect(JSON.parse(localStorage.getItem('cii:search-history')!)).toEqual(
+        api.recentSearches.value,
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

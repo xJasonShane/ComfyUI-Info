@@ -1630,6 +1630,60 @@ export function deleteFilterPreset(name: string): void {
   }
 }
 
+/* ---------- 搜索历史：最近使用的搜索词一键重用（去重、最多 10 条，localStorage 记忆） ---------- */
+const HISTORY_KEY = 'cii:search-history'
+const HISTORY_LIMIT = 10
+/** 搜索词落定防抖：停止变动后视为一次完整查询 */
+const HISTORY_SETTLE_MS = 1500
+
+function loadSearchHistory(): string[] {
+  try {
+    const arr: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+    return Array.isArray(arr)
+      ? arr.filter((q): q is string => typeof q === 'string').slice(0, HISTORY_LIMIT)
+      : []
+  } catch {
+    return []
+  }
+}
+
+export const recentSearches = ref<string[]>(loadSearchHistory())
+
+export function clearSearchHistory() {
+  recentSearches.value = []
+  try {
+    localStorage.removeItem(HISTORY_KEY)
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+let historyTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => state.search,
+  (q) => {
+    const key = q.trim()
+    // 清空搜索不取消待写项：刚用过的词即使随即清空也算用过
+    if (historyTimer !== null) clearTimeout(historyTimer)
+    if (!key) return
+    historyTimer = setTimeout(() => {
+      historyTimer = null
+      // 大小写不敏感去重；命中已有项提升到最前（recently-used 语义）
+      const i = recentSearches.value.findIndex((s) => s.toLowerCase() === key.toLowerCase())
+      if (i === 0) return
+      if (i > 0) recentSearches.value.splice(i, 1)
+      recentSearches.value.unshift(key)
+      if (recentSearches.value.length > HISTORY_LIMIT) recentSearches.value.length = HISTORY_LIMIT
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(recentSearches.value))
+      } catch {
+        // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+      }
+    }, HISTORY_SETTLE_MS)
+  },
+)
+
 /**
  * P2：预览 URL 惰性创建——由卡片 / 抽屉在渲染时调用。
  * 入列时不再为每张图创建 Blob URL，万级扫描只有实际渲染过的条目才占 URL 与解码内存。

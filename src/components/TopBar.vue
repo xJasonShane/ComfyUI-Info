@@ -20,6 +20,7 @@ import {
   buildArchiveBackup,
   clearAll,
   clearAllDirBookmarks,
+  clearSearchHistory,
   deleteFilterPreset,
   dupeCount,
   favCount,
@@ -29,6 +30,7 @@ import {
   importArchive,
   modelOptions,
   parsing,
+  recentSearches,
   rescanDirectory,
   saveFilterPreset,
   scanProgress,
@@ -354,6 +356,39 @@ function savePreset() {
       <div class="search-help">
         <b>{{ t('help.title') }}</b>
         <p v-for="line in helpLines" :key="line" v-html="line" />
+      </div>
+    </NPopover>
+
+    <NPopover v-if="recentSearches.length" trigger="click" placement="bottom-start">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('topbar.searchHistory')"
+          :title="t('topbar.searchHistory')"
+        >
+          <template #icon><Icon name="history" :size="15" /></template>
+        </NButton>
+      </template>
+      <div class="search-history">
+        <div class="sh-head">
+          <b>{{ t('topbar.searchHistory') }}</b>
+          <button type="button" class="sh-clear" @click="clearSearchHistory">
+            {{ t('topbar.searchHistoryClear') }}
+          </button>
+        </div>
+        <button
+          v-for="(q, i) in recentSearches"
+          :key="`${q}-${i}`"
+          type="button"
+          class="sh-item"
+          :title="q"
+          @click="store.search = q"
+        >
+          <Icon name="search" :size="12" :stroke="2.2" />
+          <span>{{ q }}</span>
+        </button>
       </div>
     </NPopover>
 
