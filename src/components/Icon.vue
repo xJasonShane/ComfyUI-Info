@@ -35,6 +35,10 @@ const icons: Record<string, string> = {
     '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
   'star-filled':
     '<path fill="currentColor" stroke="none" d="M12 2.8l2.85 5.78 6.38.93-4.62 4.5 1.09 6.36L12 17.37l-5.7 3-1.09-6.36-4.62-4.5 6.38-.93L12 2.8z"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  play: '<path d="m7 4 13 8-13 8V4z"/>',
+  pause:
+    '<rect x="15" y="4" width="3.5" height="16" rx="1"/><rect x="5.5" y="4" width="3.5" height="16" rx="1"/>',
 }
 </script>
 

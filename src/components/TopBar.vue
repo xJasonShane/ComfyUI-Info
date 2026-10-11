@@ -16,17 +16,21 @@ import Icon from './Icon.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
   addFiles,
+  applyFilterPreset,
   buildArchiveBackup,
   clearAll,
   clearAllDirBookmarks,
+  deleteFilterPreset,
   dupeCount,
   favCount,
   filteredItems,
+  filterPresets,
   forgetRescanHandle,
   importArchive,
   modelOptions,
   parsing,
   rescanDirectory,
+  saveFilterPreset,
   scanProgress,
   setRescanHandle,
   sortOptions,
@@ -35,6 +39,7 @@ import {
   switchRescanTarget,
   toggleDark,
 } from '../composables/store'
+import type { FilterPreset } from '../composables/store'
 import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
 import { downloadText } from '../lib/utils'
@@ -201,6 +206,30 @@ const helpLines = computed(() => [
   t('help.quoted'),
   t('help.and'),
 ])
+
+/* ---------- 筛选预设：保存 / 应用 / 删除命名筛选组合 ---------- */
+const presetName = ref('')
+
+function presetDesc(p: FilterPreset): string {
+  const src = sourceOptions.value.find((o) => o.value === p.sourceFilter)?.label ?? ''
+  return [src, p.modelFilter ?? '', p.search].filter(Boolean).join(' · ')
+}
+
+function applyPreset(name: string) {
+  applyFilterPreset(name)
+}
+
+function removePreset(name: string) {
+  deleteFilterPreset(name)
+}
+
+function savePreset() {
+  const name = presetName.value.trim()
+  if (!name) return
+  saveFilterPreset(name)
+  presetName.value = ''
+  message.success(t('msg.presetSaved', { name }))
+}
 </script>
 
 <template>
@@ -345,6 +374,57 @@ const helpLines = computed(() => [
       :consistent-menu-width="false"
       style="width: 140px"
     />
+
+    <NPopover v-if="store.items.length > 0" trigger="click" placement="bottom">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('topbar.presets')"
+          :title="t('topbar.presets')"
+        >
+          <template #icon><Icon name="bookmark" :size="15" /></template>
+        </NButton>
+      </template>
+      <div class="preset-pop">
+        <div class="preset-head">{{ t('topbar.presets') }}</div>
+        <div v-if="filterPresets.length" class="preset-list">
+          <div v-for="p in filterPresets" :key="p.name" class="preset-row">
+            <button
+              type="button"
+              class="preset-apply"
+              :title="t('topbar.presetApplyTitle', { name: p.name })"
+              @click="applyPreset(p.name)"
+            >
+              <span class="preset-name">{{ p.name }}</span>
+              <span class="preset-desc">{{ presetDesc(p) }}</span>
+            </button>
+            <button
+              type="button"
+              class="preset-del"
+              :title="t('topbar.presetDelete')"
+              :aria-label="t('topbar.presetDelete')"
+              @click="removePreset(p.name)"
+            >
+              <Icon name="x" :size="11" :stroke="2.2" />
+            </button>
+          </div>
+        </div>
+        <p v-else class="preset-empty">{{ t('topbar.presetEmpty') }}</p>
+        <div class="preset-save">
+          <NInput
+            v-model:value="presetName"
+            size="small"
+            :placeholder="t('topbar.presetNamePlaceholder')"
+            @keydown.enter.prevent="savePreset"
+          />
+          <NButton size="small" secondary :disabled="!presetName.trim()" @click="savePreset">
+            {{ t('topbar.presetSave') }}
+          </NButton>
+        </div>
+      </div>
+    </NPopover>
 
     <NSelect
       v-model:value="store.sortMode"

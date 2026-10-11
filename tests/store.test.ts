@@ -560,6 +560,38 @@ it('rangeIds 区间选择：锚点到目标的有序区间，锚点失效退化�
   expect(api.rangeIds(list, 'a', 'zz')).toEqual([])
 })
 
+it('筛选预设：保存当前筛选组合，应用 / 同名覆盖 / 删除，localStorage 记忆', () => {
+  api.store.search = 'pos:cat seed:>100'
+  api.store.modelFilter = 'majicMIX'
+  api.store.sourceFilter = 'all'
+  expect(api.saveFilterPreset('猫咪')).toBe(true)
+  expect(api.saveFilterPreset('   ')).toBe(false) // 空名拒绝
+  // 切走后应用预设：搜索 / 模型 / 来源一并还原
+  api.store.search = ''
+  api.store.modelFilter = null
+  api.store.sourceFilter = 'comfyui'
+  expect(api.applyFilterPreset('猫咪')).toBe(true)
+  expect(api.store.search).toBe('pos:cat seed:>100')
+  expect(api.store.modelFilter).toBe('majicMIX')
+  expect(api.store.sourceFilter).toBe('all')
+  // 同名覆盖不产生重复项；非法存储形状在载入时被过滤
+  api.store.search = 'dog'
+  api.saveFilterPreset('猫咪')
+  const dupes = api.filterPresets.value.filter((p) => p.name === '猫咪')
+  expect(dupes).toHaveLength(1)
+  expect(dupes[0]!.search).toBe('dog')
+  // 应用不存在的预设返回 false 且不动当前筛选
+  api.store.search = 'keep'
+  expect(api.applyFilterPreset('不存在')).toBe(false)
+  expect(api.store.search).toBe('keep')
+  // 删除 + 持久化落盘
+  api.deleteFilterPreset('猫咪')
+  expect(api.applyFilterPreset('猫咪')).toBe(false)
+  expect(api.filterPresets.value).toHaveLength(0)
+  expect(JSON.parse(localStorage.getItem('cii:filter-presets')!)).toEqual([])
+  api.store.search = ''
+})
+
 it('重新拖入与存档项同指纹的文件时自动回挂，不重新解析', () => {
   api.restoreArchived([
     {

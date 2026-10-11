@@ -1,4 +1,4 @@
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile, ParsedParams, RawMetadata } from '../types'
 import {
   clearInternPool,
@@ -1524,6 +1524,86 @@ export function toggleDark() {
     localStorage.setItem('cii:theme', state.dark ? 'dark' : 'light')
   } catch {
     // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+/* ---------- 筛选预设：保存 / 应用命名的筛选组合（搜索 + 模型 + 来源），localStorage 记忆 ---------- */
+export interface FilterPreset {
+  name: string
+  search: string
+  modelFilter: string | null
+  sourceFilter: SourceFilter
+}
+
+const PRESETS_KEY = 'cii:filter-presets'
+
+function loadPresets(): FilterPreset[] {
+  try {
+    const arr: unknown = JSON.parse(localStorage.getItem(PRESETS_KEY) ?? '[]')
+    if (!Array.isArray(arr)) return []
+    return arr.flatMap((p) => {
+      const o = p as Partial<FilterPreset>
+      return typeof o?.name === 'string' &&
+        typeof o.search === 'string' &&
+        (o.modelFilter === null || typeof o.modelFilter === 'string') &&
+        SOURCE_FILTERS.includes(o.sourceFilter as SourceFilter)
+        ? [
+            {
+              name: o.name,
+              search: o.search,
+              modelFilter: o.modelFilter ?? null,
+              sourceFilter: o.sourceFilter as SourceFilter,
+            },
+          ]
+        : []
+    })
+  } catch {
+    return []
+  }
+}
+
+export const filterPresets = ref<FilterPreset[]>(loadPresets())
+
+function persistPresets() {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(filterPresets.value))
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+/** 把当前筛选组合（搜索 / 模型 / 来源）保存为预设；同名覆盖，空名拒绝 */
+export function saveFilterPreset(name: string): boolean {
+  const trimmed = name.trim()
+  if (!trimmed) return false
+  const preset: FilterPreset = {
+    name: trimmed,
+    search: state.search,
+    modelFilter: state.modelFilter,
+    sourceFilter: state.sourceFilter,
+  }
+  const i = filterPresets.value.findIndex((p) => p.name === trimmed)
+  if (i >= 0) filterPresets.value.splice(i, 1, preset)
+  else filterPresets.value.push(preset)
+  persistPresets()
+  return true
+}
+
+/** 应用预设：还原搜索 / 模型 / 来源筛选（dupeOnly / favOnly 不动）；无此名返回 false */
+export function applyFilterPreset(name: string): boolean {
+  const p = filterPresets.value.find((x) => x.name === name)
+  if (!p) return false
+  state.search = p.search
+  state.modelFilter = p.modelFilter
+  state.sourceFilter = p.sourceFilter
+  return true
+}
+
+export function deleteFilterPreset(name: string): void {
+  const i = filterPresets.value.findIndex((x) => x.name === name)
+  if (i >= 0) {
+    filterPresets.value.splice(i, 1)
+    persistPresets()
   }
 }
 

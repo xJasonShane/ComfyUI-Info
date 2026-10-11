@@ -137,6 +137,13 @@ const zh = {
   'topbar.themeToDark': '切换深色主题',
   'topbar.clearAll': '清空列表',
   'topbar.clearAllConfirm': '确定清空当前已加载的全部图片？已持久化的历史记录会一并清除。',
+  'topbar.presets': '筛选预设',
+  'topbar.presetEmpty': '还没有保存的预设——设置好搜索与筛选后，在下方命名保存',
+  'topbar.presetNamePlaceholder': '预设名称…',
+  'topbar.presetSave': '保存当前',
+  'topbar.presetDelete': '删除预设',
+  'topbar.presetApplyTitle': '应用筛选预设「{name}」',
+  'msg.presetSaved': '已保存筛选预设「{name}」',
   'topbar.localeAria': '切换语言 / Switch language',
 
   /* ImageCard */
@@ -428,6 +435,13 @@ const en: Record<DictKey, string> = {
   'topbar.clearAll': 'Clear list',
   'topbar.clearAllConfirm':
     'Clear all loaded images? Persisted history records will be removed as well.',
+  'topbar.presets': 'Filter presets',
+  'topbar.presetEmpty': 'No presets yet — set up search & filters, then name and save below',
+  'topbar.presetNamePlaceholder': 'Preset name…',
+  'topbar.presetSave': 'Save current',
+  'topbar.presetDelete': 'Delete preset',
+  'topbar.presetApplyTitle': 'Apply filter preset "{name}"',
+  'msg.presetSaved': 'Filter preset "{name}" saved',
   'topbar.localeAria': '切换语言 / Switch language',
 
   'card.openAria': '{name}, view details',
