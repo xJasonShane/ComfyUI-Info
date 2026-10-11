@@ -54,6 +54,8 @@ interface StoreState {
   dirBookmarks: string[]
   /** 目录监视自动重扫：开启后周期增量重扫记住的目录（边出图边看，偏好记忆） */
   autoRescan: boolean
+  /** 自动重扫间隔（秒，5 / 10 / 30 / 60）：出图节奏不同，扫描频率需求不同（偏好记忆） */
+  autoRescanInterval: number
   /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
   dupeOnly: boolean
   /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
@@ -119,6 +121,21 @@ function loadThumbSize(): number {
 /* ---------- 安全模式偏好：缩略图模糊防走光，仅在用户切换时落盘 ---------- */
 const SAFE_MODE_KEY = 'cii:safe'
 
+/* ---------- 自动重扫间隔偏好（秒）：state 初始化即读取，须先于 state 定义 ---------- */
+/** 可选间隔（秒）：TopBar 下拉与非法存储值校验共用 */
+export const RESCAN_INTERVALS = [5, 10, 30, 60]
+const AUTO_RESCAN_INTERVAL_KEY = 'cii:auto-rescan-interval'
+const AUTO_RESCAN_INTERVAL_DEFAULT = 10
+
+function loadRescanInterval(): number {
+  try {
+    const v = Number(localStorage.getItem(AUTO_RESCAN_INTERVAL_KEY))
+    return RESCAN_INTERVALS.includes(v) ? v : AUTO_RESCAN_INTERVAL_DEFAULT
+  } catch {
+    return AUTO_RESCAN_INTERVAL_DEFAULT
+  }
+}
+
 const state = reactive<StoreState>({
   items: [],
   search: storedFilters.search,
@@ -131,6 +148,7 @@ const state = reactive<StoreState>({
   rescanName: null,
   dirBookmarks: [],
   autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
+  autoRescanInterval: loadRescanInterval(),
   dupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
@@ -527,7 +545,6 @@ export async function rescanDirectory(): Promise<number | null> {
 }
 
 /* ---------- 目录监视自动重扫（FEAT-1：边出图边看） ---------- */
-const AUTO_RESCAN_INTERVAL_MS = 10_000
 let autoRescanTimer: ReturnType<typeof setInterval> | null = null
 let autoTickBusy = false
 
@@ -535,7 +552,7 @@ let autoTickBusy = false
 function syncAutoRescanTimer() {
   const shouldRun = state.autoRescan && rescanHandle !== null
   if (shouldRun && autoRescanTimer === null) {
-    autoRescanTimer = setInterval(() => void autoRescanTick(), AUTO_RESCAN_INTERVAL_MS)
+    autoRescanTimer = setInterval(() => void autoRescanTick(), state.autoRescanInterval * 1000)
   } else if (!shouldRun && autoRescanTimer !== null) {
     clearInterval(autoRescanTimer)
     autoRescanTimer = null
@@ -567,6 +584,18 @@ watch(
       // 配额 / 环境限制时忽略：仅影响下次刷新的还原
     }
     syncAutoRescanTimer()
+  },
+)
+
+watch(
+  () => state.autoRescanInterval,
+  (v) => {
+    try {
+      localStorage.setItem(AUTO_RESCAN_INTERVAL_KEY, String(v))
+    } catch {
+      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+    }
+    syncAutoRescanTimer() // 按新间隔重启周期定时器
   },
 )
 

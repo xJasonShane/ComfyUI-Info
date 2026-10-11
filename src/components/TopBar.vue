@@ -32,6 +32,7 @@ import {
   parsing,
   recentSearches,
   rescanDirectory,
+  RESCAN_INTERVALS,
   saveFilterPreset,
   scanProgress,
   setRescanHandle,
@@ -136,6 +137,11 @@ const exporting = ref(false)
 
 /** 缩略图大小滑杆的悬浮提示：直接显示像素值 */
 const fmtThumb = (v: number) => `${v}px`
+
+/** 自动重扫间隔下拉（响应式，随语言切换刷新标签） */
+const intervalOptions = computed(() =>
+  RESCAN_INTERVALS.map((v) => ({ label: t('topbar.rescanSecs', { n: v }), value: v })),
+)
 
 async function exportAs(key: string | number) {
   // 只导出已出结果的项；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
@@ -280,6 +286,15 @@ function savePreset() {
       </template>
       {{ t('topbar.autoRescanTooltip', { name: store.rescanName }) }}
     </NTooltip>
+    <NSelect
+      v-if="store.rescanName && store.autoRescan"
+      v-model:value="store.autoRescanInterval"
+      size="small"
+      :options="intervalOptions"
+      :consistent-menu-width="false"
+      :aria-label="t('topbar.rescanInterval')"
+      style="width: 86px"
+    />
     <NDropdown
       v-if="store.dirBookmarks.length"
       trigger="click"

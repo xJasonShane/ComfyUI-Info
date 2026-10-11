@@ -1774,3 +1774,26 @@ describe('搜索历史', () => {
     }
   })
 })
+
+it('自动重扫间隔可调：改间隔即按新周期触发并落盘', async () => {
+  const fsMod = await import('../src/lib/fs')
+  vi.useFakeTimers()
+  try {
+    let scans = 0
+    vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async () => {
+      scans++
+      return 0
+    })
+    await api.setRescanHandle({ name: 'out' } as unknown as FileSystemDirectoryHandle)
+    api.store.autoRescan = true
+    api.store.autoRescanInterval = 5
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(scans).toBe(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    // 若周期仍是默认 10s，10s 处只会扫描 1 次；按 5s 已是第 2 次
+    expect(scans).toBe(2)
+    expect(localStorage.getItem('cii:auto-rescan-interval')).toBe('5')
+  } finally {
+    vi.useRealTimers()
+  }
+})
