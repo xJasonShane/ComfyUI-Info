@@ -55,6 +55,7 @@ export function buildExportJson(items: ImageItem[]): string {
       rec.positive = p.positive
       rec.negative = p.negative
       rec.models = p.models
+      if (p.modelHash) rec.modelHash = p.modelHash
       rec.loras = p.loras
       rec.samplers = p.samplers
       if (p.vaes.length) rec.vaes = p.vaes
@@ -135,6 +136,7 @@ export function buildExportCsv(items: ImageItem[]): string {
     t('csv.source'),
     t('csv.mtime'),
     t('csv.models'),
+    t('csv.modelHash'),
     t('csv.loras'),
     t('csv.clipSkip'),
     t('csv.vae'),
@@ -166,6 +168,7 @@ export function buildExportCsv(items: ImageItem[]): string {
       it.status === 'error' ? 'error' : it.source,
       new Date(it.mtime).toISOString(),
       p?.models.join(' + ') || undefined,
+      p?.modelHash,
       p?.loras.map(formatLora).join('; ') || undefined,
       p?.clipSkip,
       p?.vaes.join(' + ') || undefined,

@@ -158,7 +158,7 @@ it('清空列表后指纹去重随之失效，可重新添加同名文件', () =
 
 it('搜索覆盖模型 / LoRA（含哈希）/ 采样参数字段', async () => {
   const parameters =
-    '<lora:add_detail:0.8>, masterpiece\nSteps: 20, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1, Model: majicMIX, Lora hashes: "add_detail: aaaabbbb"'
+    '<lora:add_detail:0.8>, masterpiece\nSteps: 20, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1, Model: majicMIX, Model hash: d1e5f7a9, Lora hashes: "add_detail: aaaabbbb"'
   vi.mocked(parser.parseImage).mockResolvedValue({
     raw: { source: 'a1111', parameters },
     params: parseA1111Parameters(parameters),
@@ -172,6 +172,7 @@ it('搜索覆盖模型 / LoRA（含哈希）/ 采样参数字段', async () => {
     return api.filteredItems.value.length
   }
   expect(matchCount('majicmix')).toBe(1) // 模型名（大小写不敏感）
+  expect(matchCount('d1e5f7a9')).toBe(1) // 模型哈希
   expect(matchCount('add_detail')).toBe(1) // LoRA 名称
   expect(matchCount('aaaabbbb')).toBe(1) // LoRA 哈希
   expect(matchCount('karras')).toBe(1) // 采样器

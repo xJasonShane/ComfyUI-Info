@@ -18,7 +18,9 @@ const drawerWidth = useDrawerWidth(940)
 const p = computed(() => props.item?.params)
 
 /** 收藏标记：与卡片共用 favoriteFlags 全量表 */
-const faved = computed(() => (props.item ? (favoriteFlags.value.get(props.item.id) ?? false) : false))
+const faved = computed(() =>
+  props.item ? (favoriteFlags.value.get(props.item.id) ?? false) : false,
+)
 
 /* ---------- FEAT-8：详情大图点击放大（点遮罩关闭，切图 / 关抽屉自动收起） ---------- */
 const zoomed = ref(false)
@@ -105,7 +107,14 @@ const generalRows = computed<[string, string][]>(() => {
   const params = p.value
   const rows: [string, string][] = []
   if (!params) return rows
-  if (params.models.length) rows.push([t('detail.model'), params.models.join(' + ')])
+  if (params.models.length) {
+    rows.push([
+      t('detail.model'),
+      params.modelHash
+        ? `${params.models.join(' + ')} · ${params.modelHash}`
+        : params.models.join(' + '),
+    ])
+  }
   if (params.vaes.length) rows.push([t('detail.vae'), params.vaes.join(' + ')])
   if (params.clipSkip !== undefined) rows.push([t('detail.clipSkip'), String(params.clipSkip)])
   if (params.width && params.height) {

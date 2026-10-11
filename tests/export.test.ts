@@ -76,7 +76,7 @@ describe('buildExportCsv', () => {
     expect(lines).toHaveLength(2)
     expect(
       lines[0].startsWith(
-        '文件名,路径,大小(字节),来源,修改时间,模型,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器',
+        '文件名,路径,大小(字节),来源,修改时间,模型,模型哈希,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器',
       ),
     ).toBe(true)
     expect(lines[1].startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
@@ -124,13 +124,13 @@ describe('buildExportCsv', () => {
     ])
     const rows = csv.slice(1).split('\r\n')
     const empty = rows[1].split(',')
-    expect(empty).toHaveLength(24)
+    expect(empty).toHaveLength(25)
     expect(empty.slice(0, 4)).toEqual(['a.png', '', '1234', 'none'])
     expect(empty[4]).toMatch(/^\d{4}-\d{2}-\d{2}T/) // 修改时间（ISO）
     expect(empty.slice(5).every((c) => c === '')).toBe(true)
     const failed = rows[2].split(',')
     expect(failed[3]).toBe('error')
-    expect(failed[23]).toBe('boom')
+    expect(failed[24]).toBe('boom')
   })
 
   it('扩展参数列：Clip Skip / VAE / 放大模型 / ControlNet（FEAT-2）', () => {
@@ -138,6 +138,7 @@ describe('buildExportCsv', () => {
       makeItem({
         params: {
           ...params,
+          modelHash: 'abc123def',
           vaes: ['vae-ft-mse'],
           clipSkip: 2,
           upscalers: ['4x-US'],
@@ -146,6 +147,7 @@ describe('buildExportCsv', () => {
       }),
     ])
     const line = csv.slice(1).split('\r\n')[1]!
+    expect(line).toContain(',dreamshaper_8.safetensors,abc123def,add_detail(m:0.8 c:0.8 #aaaabbbb)')
     expect(line).toContain(',2,vae-ft-mse,4x-US,canny,DPM++ 2M Karras')
   })
 })

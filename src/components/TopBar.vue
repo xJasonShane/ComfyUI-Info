@@ -356,11 +356,7 @@ const helpLines = computed(() => [
 
     <NTooltip v-if="favCount > 0">
       <template #trigger>
-        <NSwitch
-          v-model:value="store.favOnly"
-          size="small"
-          :aria-label="t('topbar.favOnlyAria')"
-        />
+        <NSwitch v-model:value="store.favOnly" size="small" :aria-label="t('topbar.favOnlyAria')" />
       </template>
       {{ t('topbar.favOnlyTooltip', { n: favCount }) }}
     </NTooltip>

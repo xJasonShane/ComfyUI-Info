@@ -972,6 +972,15 @@ describe('parseA1111Parameters', () => {
     expect(p.samplers).toHaveLength(1)
   })
 
+  it('捕获 Model hash（识别同名模型的版本），缺省不虚构', () => {
+    const p = parseA1111Parameters(
+      'a cat\nSteps: 20, Sampler: Euler a, Model: majicMIX, Model hash: abc123def',
+    )
+    expect(p.models).toEqual(['majicMIX'])
+    expect(p.modelHash).toBe('abc123def')
+    expect(parseA1111Parameters('a cat\nSteps: 20').modelHash).toBeUndefined()
+  })
+
   it('img2img（无 Hires 键）的 Denoising strength 保留在单阶段', () => {
     const p = parseA1111Parameters(
       'a cat\nNegative prompt: x\nSteps: 15, Sampler: Euler a, CFG scale: 6, Seed: 1, Denoising strength: 0.45, Size: 512x512',

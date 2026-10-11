@@ -43,6 +43,12 @@ function loraText(l: LoraInfo): string {
   return `${l.name}（m:${l.strengthModel ?? '-'} c:${l.strengthClip ?? '-'}${l.hash ? ` · ${l.hash}` : ''}）`
 }
 
+/** 模型行文本：带 A1111 Model hash 时附在模型名后（与详情页一致） */
+function modelText(p: ParsedParams | undefined): string | null {
+  if (!p?.models.length) return null
+  return p.modelHash ? `${p.models.join(' + ')} · ${p.modelHash}` : p.models.join(' + ')
+}
+
 function sizeText(p: ParsedParams | undefined): string | null {
   if (!p?.width || !p?.height) return null
   const batch = p.batch && p.batch > 1 ? t('detail.perBatch', { n: p.batch }) : ''
@@ -84,11 +90,7 @@ const sections = computed<DiffSection[]>(() => {
       title: t('cmp.basics'),
       rows: [
         mk(t('cmp.file'), a.path ?? a.name, b.path ?? b.name),
-        mk(
-          t('detail.model'),
-          pa?.models.length ? pa.models.join(' + ') : null,
-          pb?.models.length ? pb.models.join(' + ') : null,
-        ),
+        mk(t('detail.model'), modelText(pa), modelText(pb)),
         mk(
           t('detail.vae'),
           pa?.vaes.length ? pa.vaes.join(' + ') : null,

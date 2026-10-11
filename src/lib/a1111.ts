@@ -159,6 +159,8 @@ export function parseA1111Parameters(text: string): ParsedParams {
     }
   }
   if (pairs['Model']) out.models.push(pairs['Model'])
+  // Model hash 识别同名模型的具体版本（Civitai 比对常用）
+  if (pairs['Model hash']) out.modelHash = pairs['Model hash']
 
   // FEAT-2 扩展键：Clip skip（A1111 默认 1 不记录，只存 ≥2 的显式设置）、VAE、批量
   const clipSkip = Number(pairs['Clip skip'])

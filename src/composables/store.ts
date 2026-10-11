@@ -808,6 +808,7 @@ function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
     ...(p?.negative ?? []),
     ...(p?.models ?? []),
   ]
+  if (p?.modelHash) parts.push(p.modelHash)
   for (const l of p?.loras ?? []) {
     parts.push(l.name)
     if (l.hash) parts.push(l.hash)

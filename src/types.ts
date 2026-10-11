@@ -35,6 +35,8 @@ export interface ParsedParams {
   positive: string[]
   negative: string[]
   models: string[]
+  /** A1111 "Model hash" 键：识别同名模型的具体版本；ComfyUI 工作流不提供 */
+  modelHash?: string
   loras: LoraInfo[]
   samplers: SamplerInfo[]
   width?: number
