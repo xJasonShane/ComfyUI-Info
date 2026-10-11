@@ -406,35 +406,49 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
   })
 
   it('KSamplerAdvanced 布局（add_noise 开头）与 16 位以上大整数 seed 保精度', () => {
-    const wf = {
-      nodes: [
-        {
-          id: 9,
-          type: 'KSamplerAdvanced',
-          inputs: [],
-          widgets_values: [
-            'enable',
-            10978932088412290000,
-            'fixed',
-            25,
-            7,
-            'dpmpp_2m',
-            'karras',
-            0.65,
-          ],
-        },
-      ],
-    }
-    const p = extractUiWorkflowParams(JSON.stringify(wf))!
+    // 必须用原始字符串构造：JS 数字字面量在测试编译期就已丢精度
+    const wf =
+      '{"nodes":[{"id":9,"type":"KSamplerAdvanced","inputs":[],"widgets_values":' +
+      '["enable",10978932088412290001,"fixed",25,7,"dpmpp_2m","karras",0.65]}]}'
+    const p = extractUiWorkflowParams(wf)!
     expect(p.samplers[0]).toMatchObject({
       classType: 'KSamplerAdvanced',
-      seed: '10978932088412290000', // 预替换成字符串，不被 JSON.parse 降精度
+      seed: '10978932088412290001', // seed 不在数组首位也要保精度，不被 JSON.parse 降精度
       steps: 25,
       cfg: 7,
       sampler: 'dpmpp_2m',
       scheduler: 'karras',
       denoise: 0.65,
     })
+    // 测试自身防假阳性：无预替换时该值经 Number 化确实不同
+    expect(String(JSON.parse('10978932088412290001'))).not.toBe('10978932088412290001')
+  })
+
+  it('字符串值内的长数字串与小数不被大整数替换破坏', () => {
+    const wf =
+      '{"nodes":[' +
+      '{"id":1,"type":"CLIPTextEncode","inputs":[],"widgets_values":["prompt with 10978932088412290001 number"]},' +
+      '{"id":2,"type":"KSampler","inputs":[{"name":"positive","link":4}],"widgets_values":[10978932088412290002,"fixed",20,8,"euler","normal",1]}],' +
+      '"links":[[4,1,0,2,0,"CONDITIONING"]]}'
+    const p = extractUiWorkflowParams(wf)!
+    // 字符串里的数字串原样保留（未被改写成非法 JSON 或被换值）
+    expect(p.positive).toEqual(['prompt with 10978932088412290001 number'])
+    expect(p.samplers[0]).toMatchObject({
+      seed: '10978932088412290002',
+      steps: 20,
+      cfg: 8,
+      sampler: 'euler',
+    })
+  })
+
+  it('API 格式：自定义键下的大整数同样保精度且不影响解析', () => {
+    // 大整数不在 seed / noise_seed 键下（PrimitiveInt 的 value）也被统一替换成字符串，不破坏 JSON
+    const prompt =
+      '{"3":{"class_type":"KSampler","inputs":{"seed":5,"steps":20,"cfg":7}},' +
+      '"8":{"class_type":"PrimitiveInt","inputs":{"value":10978932088412290001}}}'
+    const p = extractComfyParams(prompt)!
+    expect(p.samplers).toHaveLength(1)
+    expect(p.samplers[0].steps).toBe(20)
   })
 
   it('bypass（mode=4）的采样器与加载节点不参与提取', () => {
