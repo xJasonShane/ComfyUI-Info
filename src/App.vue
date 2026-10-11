@@ -182,6 +182,16 @@ function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
 }
+
+/** 沿当前筛选顺序切换详情图片（抽屉按钮与键盘 ← / → 共用）；越界不动 */
+function navDetail(dir: 1 | -1) {
+  if (!current.value) return
+  const list = filteredItems.value
+  const idx = list.findIndex((i) => i.id === current.value!.id)
+  const next = idx + dir
+  if (idx < 0 || next < 0 || next >= list.length) return
+  current.value = list[next]
+}
 // 单张移除；若移除的正是抽屉里打开的这张，一并收起
 function onRemove(item: ImageItem) {
   removeItem(item)
@@ -280,22 +290,9 @@ function openCompare() {
 /* ---------- 键盘导航（抽屉打开时 ←/→ 沿当前筛选顺序浏览） ---------- */
 function onKeydown(e: KeyboardEvent) {
   if (!showDetail.value || !current.value) return
-  const t = e.target as HTMLElement | null
-  if (
-    t &&
-    (t.tagName === 'INPUT' ||
-      t.tagName === 'TEXTAREA' ||
-      t.tagName === 'SELECT' ||
-      t.isContentEditable)
-  ) {
-    return // 焦点在输入框内时方向键属于光标，不切换图片
-  }
+  if (inEditable(e.target)) return // 焦点在输入框内时方向键属于光标，不切换图片
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-  const list = filteredItems.value
-  const idx = list.findIndex((i) => i.id === current.value!.id)
-  const next = idx + (e.key === 'ArrowRight' ? 1 : -1)
-  if (idx < 0 || next < 0 || next >= list.length) return
-  current.value = list[next]
+  navDetail(e.key === 'ArrowRight' ? 1 : -1)
   e.preventDefault()
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
@@ -546,7 +543,7 @@ async function onDrop(e: DragEvent) {
           }}</NButton>
         </div>
 
-        <DetailDrawer v-model:show="showDetail" :item="current" />
+        <DetailDrawer v-model:show="showDetail" :item="current" @nav="navDetail" />
 
         <CompareDrawer
           v-model:show="showCompare"

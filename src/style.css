@@ -818,6 +818,39 @@ body {
   color: var(--text-dim);
 }
 
+/* 大图两侧上一张 / 下一张按钮（沿当前筛选顺序，与键盘 ← / → 一致） */
+.img-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  color: var(--text-dim);
+  cursor: pointer;
+  z-index: 1;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.img-nav:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.img-nav.prev {
+  left: 12px;
+}
+
+.img-nav.next {
+  right: 12px;
+}
+
 .detail-panel {
   flex: 1;
   min-width: 348px;

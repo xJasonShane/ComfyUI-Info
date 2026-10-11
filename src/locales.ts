@@ -145,6 +145,8 @@ const zh = {
 
   /* DetailDrawer */
   'detail.close': '关闭详情',
+  'detail.prev': '上一张',
+  'detail.next': '下一张',
   'detail.copyField': '复制{name}',
   'detail.zoomIn': '点击放大',
   'detail.zoomClose': '关闭放大',
@@ -407,6 +409,8 @@ const en: Record<DictKey, string> = {
   'card.sameWorkflowTitle': 'Position within the same workflow',
 
   'detail.close': 'Close details',
+  'detail.prev': 'Previous image',
+  'detail.next': 'Next image',
   'detail.copyField': 'Copy {name}',
   'detail.zoomIn': 'Click to zoom',
   'detail.zoomClose': 'Close zoom',

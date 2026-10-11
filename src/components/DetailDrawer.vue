@@ -6,17 +6,33 @@ import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadBinary, downloadText, humanBytes } from '../lib/utils'
 import { buildParamsSummary } from '../lib/export'
-import { favoriteFlags, retryItem, ensureItemUrl, toggleFavorite } from '../composables/store'
+import {
+  favoriteFlags,
+  filteredItems,
+  retryItem,
+  ensureItemUrl,
+  toggleFavorite,
+} from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
 import { dateLocale, t } from '../locales'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
+const emit = defineEmits<{ nav: [dir: 1 | -1] }>()
 const message = useMessage()
 
 const drawerWidth = useDrawerWidth(940)
 
 const p = computed(() => props.item?.params)
+
+/* ---------- 大图两侧上一张 / 下一张（与键盘 ← / → 同序：沿当前筛选结果浏览） ---------- */
+const navIndex = computed(() =>
+  props.item ? filteredItems.value.findIndex((i) => i.id === props.item!.id) : -1,
+)
+const hasPrev = computed(() => navIndex.value > 0)
+const hasNext = computed(
+  () => navIndex.value >= 0 && navIndex.value < filteredItems.value.length - 1,
+)
 
 /** 收藏标记：与卡片共用 favoriteFlags 全量表 */
 const faved = computed(() =>
@@ -293,6 +309,26 @@ async function copyImage() {
         <div v-if="actualDims" class="img-dims" :title="dimsTitle">
           {{ actualDims.w }} × {{ actualDims.h }} px<span v-if="dimsNote"> · {{ dimsNote }}</span>
         </div>
+        <button
+          v-if="hasPrev"
+          class="img-nav prev"
+          type="button"
+          :title="t('detail.prev')"
+          :aria-label="t('detail.prev')"
+          @click="emit('nav', -1)"
+        >
+          <Icon name="chevron-left" :size="18" />
+        </button>
+        <button
+          v-if="hasNext"
+          class="img-nav next"
+          type="button"
+          :title="t('detail.next')"
+          :aria-label="t('detail.next')"
+          @click="emit('nav', 1)"
+        >
+          <Icon name="chevron-right" :size="18" />
+        </button>
         <div v-if="item.url && item.file" class="img-actions">
           <NButton
             size="tiny"
