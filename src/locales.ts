@@ -170,6 +170,8 @@ const zh = {
 
   /* DetailDrawer */
   'detail.close': '关闭详情',
+  'detail.play': '自动播放（每 4 秒沿当前筛选顺序切换）',
+  'detail.pause': '暂停自动播放',
   'detail.prev': '上一张',
   'detail.next': '下一张',
   'detail.copyField': '复制{name}',
@@ -466,6 +468,8 @@ const en: Record<DictKey, string> = {
   'card.sameWorkflowTitle': 'Position within the same workflow',
 
   'detail.close': 'Close details',
+  'detail.play': 'Auto-play (advance every 4s in filter order)',
+  'detail.pause': 'Pause auto-play',
   'detail.prev': 'Previous image',
   'detail.next': 'Next image',
   'detail.copyField': 'Copy {name}',

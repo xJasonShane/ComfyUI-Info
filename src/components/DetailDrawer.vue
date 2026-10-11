@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NDrawer, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
@@ -69,6 +69,7 @@ watch(
 watch(show, (v) => {
   if (!v) {
     zoomed.value = false
+    playing.value = false
     resetZoom()
   }
 })
@@ -129,6 +130,27 @@ function onZoomPointerUp(e: PointerEvent) {
 function onZoomDblClick() {
   if (zoomScale.value > 1) resetZoom()
 }
+
+/* ---------- 幻灯片自动播放：沿当前筛选顺序定时切到下一张，末张 / 关抽屉自动停止 ---------- */
+const SLIDE_INTERVAL_MS = 4000
+const playing = ref(false)
+let playTimer: ReturnType<typeof setInterval> | null = null
+
+watch(playing, (on) => {
+  if (on) {
+    playTimer = setInterval(() => {
+      if (!hasNext.value) playing.value = false
+      else emit('nav', 1)
+    }, SLIDE_INTERVAL_MS)
+  } else if (playTimer !== null) {
+    clearInterval(playTimer)
+    playTimer = null
+  }
+})
+
+onBeforeUnmount(() => {
+  if (playTimer !== null) clearInterval(playTimer)
+})
 
 /* ---------- 实际分辨率标注：图片解码完成后读取原始像素尺寸 ---------- */
 const actualDims = ref<{ w: number; h: number } | null>(null)
@@ -479,6 +501,17 @@ async function copyImage() {
           </NButton>
           <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :title="playing ? t('detail.pause') : t('detail.play')"
+            :aria-label="playing ? t('detail.pause') : t('detail.play')"
+            :aria-pressed="playing"
+            @click="playing = !playing"
+          >
+            <template #icon><Icon :name="playing ? 'pause' : 'play'" :size="13" /></template>
+          </NButton>
           <NButton
             size="tiny"
             quaternary
