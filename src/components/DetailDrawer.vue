@@ -467,6 +467,16 @@ async function copyImage() {
       <div class="detail-panel">
         <div class="fileline">
           <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :title="t('detail.copyPath')"
+            :aria-label="t('detail.copyPath')"
+            @click="copy(item.path ?? item.name, t('detail.copyPath'))"
+          >
+            <template #icon><Icon name="copy" :size="12" /></template>
+          </NButton>
           <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
           <NButton
