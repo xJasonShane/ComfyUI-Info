@@ -27,6 +27,9 @@ const icons: Record<string, string> = {
     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
   archive:
     '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  star: '<path d="M12 2.8l2.85 5.78 6.38.93-4.62 4.5 1.09 6.36L12 17.37l-5.7 3-1.09-6.36-4.62-4.5 6.38-.93L12 2.8z"/>',
+  'star-filled':
+    '<path fill="currentColor" stroke="none" d="M12 2.8l2.85 5.78 6.38.93-4.62 4.5 1.09 6.36L12 17.37l-5.7 3-1.09-6.36-4.62-4.5 6.38-.93L12 2.8z"/>',
 }
 </script>
 

@@ -49,6 +49,8 @@ interface StoreState {
   autoRescan: boolean
   /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
   dupeOnly: boolean
+  /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
+  favOnly: boolean
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
@@ -102,6 +104,7 @@ const state = reactive<StoreState>({
   dirBookmarks: [],
   autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
   dupeOnly: false,
+  favOnly: false,
 })
 
 watch(
@@ -1075,6 +1078,7 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (state.dupeOnly && !sameSourceIds.value.has(it.id)) return false
+      if (state.favOnly && !favKeys.has(recordKey(it))) return false
       if (query && !matchQuery(it, query)) return false
       return true
     })
@@ -1216,6 +1220,54 @@ const sameSourceIds = computed(() => {
 
 /** F4：同源重复条目总数（≥2 张的组内条目），0 表示当前没有同源组 */
 export const dupeCount = computed(() => sameSourceIds.value.size)
+
+/* ---------- 收藏星标：按去重指纹（recordKey）记忆，跨会话保留 ---------- */
+// 收藏是用户策展数据：清空列表 / 移除条目都不动账，同指纹文件重新拖入或存档恢复后自动生效
+const FAVS_KEY = 'cii:favs'
+
+function loadFavorites(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAVS_KEY)
+    if (!raw) return new Set()
+    const arr: unknown = JSON.parse(raw)
+    return Array.isArray(arr)
+      ? new Set(arr.filter((k): k is string => typeof k === 'string'))
+      : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+const favKeys = reactive(loadFavorites())
+
+function persistFavorites() {
+  try {
+    localStorage.setItem(FAVS_KEY, JSON.stringify([...favKeys]))
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+/** 收藏标记表（itemId → 是否已收藏）：computed 一次算全量，卡片与详情抽屉共用 */
+export const favoriteFlags = computed(() => {
+  const flags = new Map<string, boolean>()
+  for (const it of state.items) flags.set(it.id, favKeys.has(recordKey(it)))
+  return flags
+})
+
+/** 当前列表内已收藏条数（驱动「只看收藏」开关的显隐） */
+export const favCount = computed(() => {
+  let n = 0
+  for (const it of state.items) if (favKeys.has(recordKey(it))) n++
+  return n
+})
+
+export function toggleFavorite(item: ImageItem) {
+  const key = recordKey(item)
+  if (favKeys.has(key)) favKeys.delete(key)
+  else favKeys.add(key)
+  persistFavorites()
+}
 
 export function toggleDark() {
   state.dark = !state.dark

@@ -5,7 +5,7 @@ import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
-import { retryItem, ensureItemUrl } from '../composables/store'
+import { favoriteFlags, retryItem, ensureItemUrl, toggleFavorite } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
 import { dateLocale, t } from '../locales'
 
@@ -16,6 +16,9 @@ const message = useMessage()
 const drawerWidth = useDrawerWidth(940)
 
 const p = computed(() => props.item?.params)
+
+/** 收藏标记：与卡片共用 favoriteFlags 全量表 */
+const faved = computed(() => (props.item ? (favoriteFlags.value.get(props.item.id) ?? false) : false))
 
 /* ---------- FEAT-8：详情大图点击放大（点遮罩关闭，切图 / 关抽屉自动收起） ---------- */
 const zoomed = ref(false)
@@ -216,6 +219,17 @@ function downloadJson(text: string | undefined, suffix: string) {
           <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
           <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :title="faved ? t('card.unfav') : t('card.fav')"
+            :aria-label="t('card.favAria')"
+            :aria-pressed="faved"
+            @click="toggleFavorite(item)"
+          >
+            <template #icon><Icon :name="faved ? 'star-filled' : 'star'" :size="14" /></template>
+          </NButton>
           <NButton
             size="tiny"
             quaternary

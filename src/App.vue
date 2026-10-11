@@ -54,6 +54,7 @@ import {
   retryAllFailed,
   stats,
   store,
+  toggleFavorite,
 } from './composables/store'
 import { exportItems, exportOptions } from './lib/export'
 import { copyText } from './lib/utils'
@@ -460,6 +461,7 @@ async function onDrop(e: DragEvent) {
                 @remove="onRemove(it)"
                 @select-toggle="toggleSelect(it)"
                 @select-range="rangeSelect(it)"
+                @toggle-fav="toggleFavorite(it)"
               />
             </div>
             <div :style="{ height: bottomPad + 'px' }" aria-hidden="true" />

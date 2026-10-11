@@ -71,6 +71,7 @@ beforeEach(() => {
   api.store.sourceFilter = 'comfyui'
   api.store.modelFilter = null
   api.store.autoRescan = false
+  api.store.favOnly = false
   vi.mocked(parser.parseImage).mockReset()
 })
 
@@ -488,6 +489,40 @@ it('modelOptions 从解析结果聚合去重并按使用频次排序', async () 
     { label: 'beta', value: 'beta' },
     { label: 'alpha', value: 'alpha' },
   ])
+})
+
+it('收藏：星标切换、只看收藏筛选、跨会话记忆与清空保留', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  api.addFiles([{ file: new File(['x'], 'a.png', { lastModified: 1000 }) }])
+  await flush()
+  const item = api.store.items[0]!
+  expect(api.favoriteFlags.value.get(item.id)).toBe(false)
+  expect(api.favCount.value).toBe(0)
+
+  api.toggleFavorite(item)
+  expect(api.favoriteFlags.value.get(item.id)).toBe(true)
+  expect(api.favCount.value).toBe(1)
+  // 偏好即时落盘（按去重指纹）
+  expect(JSON.parse(localStorage.getItem('cii:favs')!)).toEqual(['a.png|1|1000'])
+
+  // 只看收藏：未收藏的 b 被隐藏
+  api.addFiles([{ file: new File(['x'], 'b.png', { lastModified: 2 }) }])
+  await flush()
+  api.store.sourceFilter = 'all'
+  api.store.favOnly = true
+  expect(api.filteredItems.value.map((i) => i.name)).toEqual(['a.png'])
+  api.store.favOnly = false
+
+  // 清空列表不清收藏；同指纹文件重新拖入自动恢复标记
+  api.clearAll()
+  expect(api.favCount.value).toBe(0)
+  api.addFiles([{ file: new File(['x'], 'a.png', { lastModified: 1000 }) }])
+  await flush()
+  expect(api.favoriteFlags.value.get(api.store.items[0]!.id)).toBe(true)
+  // 再次切换取消
+  api.toggleFavorite(api.store.items[0]!)
+  expect(api.favoriteFlags.value.get(api.store.items[0]!.id)).toBe(false)
+  expect(JSON.parse(localStorage.getItem('cii:favs')!)).toEqual([])
 })
 
 it('rangeIds 区间选择：锚点到目标的有序区间，锚点失效退化为仅目标', () => {

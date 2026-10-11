@@ -19,6 +19,7 @@ import {
   clearAll,
   clearAllDirBookmarks,
   dupeCount,
+  favCount,
   filteredItems,
   forgetRescanHandle,
   importArchive,
@@ -351,6 +352,17 @@ const helpLines = computed(() => [
         />
       </template>
       {{ t('topbar.dupeOnlyTooltip') }}
+    </NTooltip>
+
+    <NTooltip v-if="favCount > 0">
+      <template #trigger>
+        <NSwitch
+          v-model:value="store.favOnly"
+          size="small"
+          :aria-label="t('topbar.favOnlyAria')"
+        />
+      </template>
+      {{ t('topbar.favOnlyTooltip', { n: favCount }) }}
     </NTooltip>
 
     <NTooltip v-if="store.items.length > 0">

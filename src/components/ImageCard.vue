@@ -2,12 +2,24 @@
 import { computed, onMounted, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
-import { ensureItemUrl, sameSourceGroups, store, workflowClusters } from '../composables/store'
+import {
+  ensureItemUrl,
+  favoriteFlags,
+  sameSourceGroups,
+  store,
+  workflowClusters,
+} from '../composables/store'
 import { t } from '../locales'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ item: ImageItem; index: number; selected?: boolean }>()
-const emit = defineEmits<{ open: []; remove: []; 'select-toggle': []; 'select-range': [] }>()
+const emit = defineEmits<{
+  open: []
+  remove: []
+  'select-toggle': []
+  'select-range': []
+  'toggle-fav': []
+}>()
 
 const broken = ref(false)
 
@@ -21,6 +33,9 @@ const cluster = computed(() =>
 
 /** F4：同源重复（同工作流同种子）组信息，组内 ≥2 张时展示角标 */
 const dupe = computed(() => sameSourceGroups.value.get(props.item.id))
+
+/** 收藏标记：favoriteFlags 全量表按 id 取值 */
+const faved = computed(() => favoriteFlags.value.get(props.item.id) ?? false)
 
 /** FEAT-8：URL 未创建前不渲染空 src 的 img（覆盖空占位而非「无法预览」） */
 const showImg = computed(
@@ -116,6 +131,18 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
       :aria-label="t('card.selectAria')"
       @click.stop.prevent="$emit('select-toggle')"
     />
+    <button
+      class="card-fav"
+      :class="{ on: faved }"
+      type="button"
+      tabindex="-1"
+      :title="faved ? t('card.unfav') : t('card.fav')"
+      :aria-pressed="!!faved"
+      :aria-label="t('card.favAria')"
+      @click.stop.prevent="$emit('toggle-fav')"
+    >
+      <Icon :name="faved ? 'star-filled' : 'star'" :size="13" />
+    </button>
     <button
       class="card-remove"
       type="button"

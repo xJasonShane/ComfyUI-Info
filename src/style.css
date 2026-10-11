@@ -413,6 +413,38 @@ body {
   line-height: 1;
 }
 
+/* 收藏星标：悬停出现于多选 / 移除按钮左侧；已收藏时常显 */
+.card .card-fav {
+  position: absolute;
+  top: 8px;
+  right: 68px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #cfc9bd;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+
+.card:hover .card-fav,
+.card .card-fav:focus-visible,
+.card .card-fav.on {
+  opacity: 1;
+}
+
+.card .card-fav.on {
+  color: var(--accent);
+}
+
 /* 移除按钮给左上让位：选择指示器可见（悬停 / 选中 / 触屏）时不重叠 */
 .card:hover .card-remove,
 .grid.selecting .card-remove,
@@ -425,6 +457,9 @@ body {
     right: 38px;
   }
   .card .card-check {
+    opacity: 1;
+  }
+  .card .card-fav {
     opacity: 1;
   }
 }
