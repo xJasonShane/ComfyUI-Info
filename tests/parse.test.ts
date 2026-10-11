@@ -558,6 +558,15 @@ describe('readImageMetadata 端到端', () => {
     expect(meta.source).toBe('a1111')
   })
 
+  it('扩展名与内容不符（JPEG 改名为 .png）按真实格式解析，不再误报无元数据', async () => {
+    const text = 'a cat\nNegative prompt: blurry\nSteps: 20, Sampler: Euler a, CFG scale: 7'
+    const tiff = buildTiff(new Uint8Array(asciiUserComment(text)))
+    const jpeg = buildJpegWithExif(tiff)
+    const meta = await readImageMetadata(new File([jpeg], 'mislabelled.png'))
+    expect(meta.source).toBe('a1111')
+    expect(meta.parameters).toBe(text)
+  })
+
   it('WebP 元数据位于图像数据之后（大文件）仍可识别', async () => {
     const tiff = buildTiff(new Uint8Array(asciiUserComment('hello')))
     const webp = buildWebpWithExif(tiff, HEAD_BYTES)

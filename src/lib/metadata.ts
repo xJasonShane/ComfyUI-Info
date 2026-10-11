@@ -185,9 +185,8 @@ export type ImageKind = 'png' | 'jpeg' | 'webp'
 
 const SIGNATURE_BYTES = 16
 
-/** 读文件头魔数判定真实格式：PNG 签名 / JPEG(FF D8 FF) / WebP(RIFF…WEBP) */
-export async function sniffKind(file: File): Promise<ImageKind | null> {
-  const head = new Uint8Array(await file.slice(0, SIGNATURE_BYTES).arrayBuffer())
+/** 文件头魔数判定真实格式：PNG 签名 / JPEG(FF D8 FF) / WebP(RIFF…WEBP) */
+export function sniffKindFromHead(head: Uint8Array): ImageKind | null {
   if (isPng(head)) return 'png'
   if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpeg'
   if (
@@ -206,18 +205,32 @@ export async function sniffKind(file: File): Promise<ImageKind | null> {
   return null
 }
 
+export async function sniffKind(file: File): Promise<ImageKind | null> {
+  return sniffKindFromHead(new Uint8Array(await file.slice(0, SIGNATURE_BYTES).arrayBuffer()))
+}
+
+/** 扩展名 → 期望格式（供 detectKind 做魔数校验）；无扩展名 / 生僻扩展名返回 null */
+function extKind(ext: string): ImageKind | null {
+  if (ext === 'png') return 'png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'jpeg'
+  if (ext === 'webp') return 'webp'
+  return null
+}
+
 /** 内容嗅探是否为受支持图片（无扩展名文件入列前的把关） */
 export async function hasSupportedSignature(file: File): Promise<boolean> {
   return (await sniffKind(file)) !== null
 }
 
-/** 扩展名优先，扩展名缺失 / 生僻时回退文件头嗅探 */
+/**
+ * 扩展名优先，但扩展名与文件头魔数不符（改扩展名的转存图）时以内容为准；
+ * 内容无法识别时退回扩展名猜测。读一次 16 字节头即可同时完成校验与嗅探。
+ */
 async function detectKind(file: File): Promise<ImageKind | null> {
-  const ext = extOf(file.name)
-  if (ext === 'png') return 'png'
-  if (ext === 'jpg' || ext === 'jpeg') return 'jpeg'
-  if (ext === 'webp') return 'webp'
-  return sniffKind(file)
+  const byExt = extKind(extOf(file.name))
+  const byContent = await sniffKind(file)
+  if (byContent && byExt && byContent !== byExt) return byContent
+  return byContent ?? byExt
 }
 
 export async function readImageMetadata(file: File): Promise<RawMetadata> {
