@@ -904,6 +904,17 @@ function searchTextField(it: ImageItem): string {
 
 export type NumField = 'steps' | 'cfg' | 'width' | 'height' | 'batch' | 'clip'
 
+/** `has:` 存在性条件：图片具备对应生成要素（可配 `-` 排除「有某要素」的图） */
+export type HasField = 'lora' | 'vae' | 'hires' | 'upscale' | 'controlnet'
+
+const HAS_FIELDS: Record<string, HasField> = {
+  lora: 'lora',
+  vae: 'vae',
+  hires: 'hires',
+  upscale: 'upscale',
+  controlnet: 'controlnet',
+}
+
 /** 数值范围条件（FEAT-3）：op 缺省为精确相等 */
 export interface NumCondition {
   field: NumField
@@ -923,6 +934,14 @@ export interface QueryConditions {
   pos: string[]
   /** `neg:xxx` 仅匹配负向提示词 */
   neg: string[]
+  /** `sampler:xxx` / `scheduler:xxx` 采样参数定向 */
+  sampler: string[]
+  scheduler: string[]
+  /** `vae:xxx` / `upscale:xxx` 模型资产定向 */
+  vae: string[]
+  upscale: string[]
+  /** `has:lora|vae|hires|upscale|controlnet` 存在性条件 */
+  has: HasField[]
   num: NumCondition[]
 }
 
@@ -934,7 +953,7 @@ export interface ParsedQuery {
 }
 
 const QUERY_FIELD_RE =
-  /^(model|lora|seed|path|date|pos|neg|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
 
 /** 数值字段别名：w / h 是 width / height 的简写 */
 const NUM_FIELDS: Record<string, NumField> = {
@@ -995,7 +1014,19 @@ function hitDate(cond: string, it: ImageItem): boolean {
 }
 
 function hitCondition(
-  kind: 'terms' | 'model' | 'lora' | 'seed' | 'path' | 'date' | 'pos' | 'neg',
+  kind:
+    | 'terms'
+    | 'model'
+    | 'lora'
+    | 'seed'
+    | 'path'
+    | 'date'
+    | 'pos'
+    | 'neg'
+    | 'sampler'
+    | 'scheduler'
+    | 'vae'
+    | 'upscale',
   value: string,
   it: ImageItem,
 ): boolean {
@@ -1018,6 +1049,36 @@ function hitCondition(
       return (it.params?.positive ?? []).some((s) => s.toLowerCase().includes(value))
     case 'neg':
       return (it.params?.negative ?? []).some((s) => s.toLowerCase().includes(value))
+    case 'sampler':
+      return (it.params?.samplers ?? []).some((s) =>
+        (s.sampler ?? '').toLowerCase().includes(value),
+      )
+    case 'scheduler':
+      return (it.params?.samplers ?? []).some((s) =>
+        (s.scheduler ?? '').toLowerCase().includes(value),
+      )
+    case 'vae':
+      return (it.params?.vaes ?? []).some((v) => v.toLowerCase().includes(value))
+    case 'upscale':
+      return (it.params?.upscalers ?? []).some((v) => v.toLowerCase().includes(value))
+  }
+}
+
+/** has: 存在性条件：hires 以「多阶段采样」为标志（高清修复第二阶段），其余按对应资产列表非空 */
+function hitHas(field: HasField, it: ImageItem): boolean {
+  const p = it.params
+  if (!p) return false
+  switch (field) {
+    case 'lora':
+      return p.loras.length > 0
+    case 'vae':
+      return p.vaes.length > 0
+    case 'hires':
+      return p.samplers.length > 1
+    case 'upscale':
+      return p.upscalers.length > 0
+    case 'controlnet':
+      return p.controlNets.length > 0
   }
 }
 
@@ -1061,10 +1122,26 @@ function hitNum(cond: NumCondition, it: ImageItem): boolean {
 }
 
 function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of ['terms', 'model', 'lora', 'seed', 'path', 'date', 'pos', 'neg'] as const) {
+  for (const kind of [
+    'terms',
+    'model',
+    'lora',
+    'seed',
+    'path',
+    'date',
+    'pos',
+    'neg',
+    'sampler',
+    'scheduler',
+    'vae',
+    'upscale',
+  ] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
     }
+  }
+  for (const f of conds.has) {
+    if (hitHas(f, it) !== want) return false
   }
   for (const cond of conds.num) {
     if (hitNum(cond, it) !== want) return false
@@ -1076,6 +1153,8 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * 解析搜索框语法（O1 增强）：
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
  * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
+ * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx`
+ * - 存在性 `has:lora|vae|hires|upscale|controlnet`，可配 `-` 排除
  * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
@@ -1094,6 +1173,11 @@ export function parseQuery(raw: string): ParsedQuery {
     date: [],
     pos: [],
     neg: [],
+    sampler: [],
+    scheduler: [],
+    vae: [],
+    upscale: [],
+    has: [],
     num: [],
   })
   const out: ParsedQuery = { all: empty(), none: empty() }
@@ -1128,9 +1212,26 @@ export function parseQuery(raw: string): ParsedQuery {
         // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
         // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
         if (value && (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(value))) {
-          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date' | 'pos' | 'neg'].push(
-            value.toLowerCase(),
-          )
+          // has: 存在性条件只收已知要素名，未知值忽略（与空值字段同语义）
+          if (field === 'has') {
+            const hf = HAS_FIELDS[value.toLowerCase()]
+            if (hf) bucket.has.push(hf)
+          } else {
+            bucket[
+              field as
+                | 'model'
+                | 'lora'
+                | 'seed'
+                | 'path'
+                | 'date'
+                | 'pos'
+                | 'neg'
+                | 'sampler'
+                | 'scheduler'
+                | 'vae'
+                | 'upscale'
+            ].push(value.toLowerCase())
+          }
         }
       }
     } else {

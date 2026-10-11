@@ -881,6 +881,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     pos: [],
     neg: [],
     num: [],
+    sampler: [],
+    scheduler: [],
+    vae: [],
+    upscale: [],
+    has: [],
   }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
     all: {
@@ -893,6 +898,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
     none: empty,
   })
@@ -910,6 +920,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
   })
   // 冒号后带引号的字段值：`model:"a b"` 整体成一个 token，值剥离引号后入桶
@@ -924,6 +939,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
     none: empty,
   })
@@ -940,6 +960,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: ['masterpiece'],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
     none: {
       terms: [],
@@ -951,6 +976,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: ['blurry'],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
   })
   // date 字段：非法格式照常入桶，由 hitDate 匹配时判否
@@ -965,6 +995,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
     none: {
       terms: [],
@@ -976,6 +1011,11 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       pos: [],
       neg: [],
       num: [],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
   })
   // seed 条件须为「可选比较符 + 数字」：残缺条件（如 `seed:>=`）忽略而非恒真
@@ -1003,8 +1043,52 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
         { field: 'batch', op: undefined, value: 2 },
         { field: 'clip', op: '>', value: 1 },
       ],
+      sampler: [],
+      scheduler: [],
+      vae: [],
+      upscale: [],
+      has: [],
     },
     none: empty,
+  })
+  // 采样 / 资产定向与存在性条件：has 只收已知要素名，未知值忽略（不产生恒真条件）
+  expect(
+    api.parseQuery(
+      'sampler:dpm -scheduler:karras vae:ft-mse upscale:4x has:lora -has:hires has:bogus',
+    ),
+  ).toEqual({
+    all: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: [],
+      neg: [],
+      num: [],
+      sampler: ['dpm'],
+      scheduler: [],
+      vae: ['ft-mse'],
+      upscale: ['4x'],
+      has: ['lora'],
+    },
+    none: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: [],
+      neg: [],
+      num: [],
+      sampler: [],
+      scheduler: ['karras'],
+      vae: [],
+      upscale: [],
+      has: ['hires'],
+    },
   })
 })
 
@@ -1071,6 +1155,68 @@ it('pos / neg 字段定向搜索：仅匹配对应方向的提示词', async () 
   expect(names('pos:dog')).toEqual(['b.png'])
   expect(names('neg:dog')).toEqual(['a.png'])
   expect(names('-neg:dog')).toEqual(['b.png'])
+  api.store.search = ''
+})
+
+it('sampler / scheduler / vae / upscale 定向与 has: 存在性条件', async () => {
+  const base = {
+    positive: [],
+    negative: [],
+    models: [],
+    loras: [],
+    samplers: [],
+    vaes: [],
+    upscalers: [],
+    controlNets: [],
+    nodeCount: 0,
+  }
+  const add = (name: string, params: Partial<typeof base>) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'comfyui' },
+      params: { ...base, ...params },
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }) }])
+  }
+  // a：单阶段 euler / karras，带 LoRA；b：两阶段（高清修复标志）dpmpp / sgm，带 VAE 与放大模型
+  add('a.png', {
+    samplers: [
+      { nodeId: '0', classType: 'KSampler', sampler: 'euler', scheduler: 'karras', seed: '1' },
+    ],
+    loras: [{ name: 'add_detail', strengthModel: 0.8 }],
+  })
+  add('b.png', {
+    samplers: [
+      {
+        nodeId: '0',
+        classType: 'KSampler',
+        sampler: 'dpmpp_2m',
+        scheduler: 'sgm_uniform',
+        seed: '2',
+      },
+      { nodeId: 'h', classType: 'Hires fix', denoise: 0.5 },
+    ],
+    vaes: ['vae-ft-mse'],
+    upscalers: ['4x-UltraSharp'],
+  })
+  await flush()
+  api.store.sourceFilter = 'all'
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  expect(names('sampler:euler')).toEqual(['a.png'])
+  expect(names('sampler:dpm')).toEqual(['b.png'])
+  expect(names('scheduler:karras')).toEqual(['a.png'])
+  expect(names('vae:ft-mse')).toEqual(['b.png'])
+  expect(names('upscale:ultrasharp')).toEqual(['b.png'])
+  // 存在性条件：按生成要素有无筛选，可配 - 排除；未知要素名忽略为无条件
+  expect(names('has:lora')).toEqual(['a.png'])
+  expect(names('-has:lora')).toEqual(['b.png'])
+  expect(names('has:hires')).toEqual(['b.png'])
+  expect(names('has:vae')).toEqual(['b.png'])
+  expect(names('has:upscale')).toEqual(['b.png'])
+  expect(names('has:controlnet')).toEqual([])
+  expect(names('has:bogus')).toEqual(['a.png', 'b.png'])
   api.store.search = ''
 })
 

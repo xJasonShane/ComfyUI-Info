@@ -111,6 +111,10 @@ const zh = {
   'help.date': '<code>date:2026-01-31</code> 按日期（本地时区，支持年 / 月前缀）',
   'help.path': '<code>path:目录</code> 按相对路径',
   'help.posneg': '<code>pos:xxx</code> / <code>neg:xxx</code> 仅匹配正向 / 负向提示词',
+  'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> 按采样器 / 调度器',
+  'help.vae': '<code>vae:xxx</code> / <code>upscale:xxx</code> 按 VAE / 放大模型',
+  'help.has':
+    '<code>has:lora</code> 只看带某要素的图（lora / vae / hires / upscale / controlnet，可配 -）',
   'help.exclude': '<code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）',
   'help.quoted':
     '<code>"model:a b"</code> 或 <code>model:"a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用',
@@ -389,6 +393,10 @@ const en: Record<DictKey, string> = {
   'help.path': '<code>path:dir</code> by relative path',
   'help.posneg':
     '<code>pos:xxx</code> / <code>neg:xxx</code> match positive / negative prompts only',
+  'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> by sampler / scheduler',
+  'help.vae': '<code>vae:xxx</code> / <code>upscale:xxx</code> by VAE / upscale model',
+  'help.has':
+    '<code>has:lora</code> images having an element (lora / vae / hires / upscale / controlnet, negatable)',
   'help.exclude': '<code>-term</code> exclude (e.g. <code>-blurry</code>, <code>-model:xx</code>)',
   'help.quoted':
     '<code>"model:a b"</code> / <code>model:"a b"</code> quotes allow spaces, combinable with <code>-</code>',
