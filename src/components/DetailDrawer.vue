@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NDrawer, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
+import { NButton, NDrawer, NDropdown, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
@@ -19,7 +19,7 @@ import { dateLocale, t } from '../locales'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
-const emit = defineEmits<{ nav: [dir: 1 | -1] }>()
+const emit = defineEmits<{ nav: [dir: 1 | -1]; compare: [dir: 1 | -1] }>()
 const message = useMessage()
 
 const {
@@ -40,6 +40,28 @@ const hasPrev = computed(() => navIndex.value > 0)
 const hasNext = computed(
   () => navIndex.value >= 0 && navIndex.value < filteredItems.value.length - 1,
 )
+
+/**
+ * 与相邻图片对比：双方都已解析出参数才可对比（与批量条 canCompare 同一门槛）；
+ * 邻居沿当前筛选顺序取，方向由调用处（下拉选项 / 事件）决定
+ */
+const neighborParsed = (dir: 1 | -1) => {
+  if (navIndex.value < 0) return false
+  const n = filteredItems.value[navIndex.value + dir]
+  return !!n && n.status === 'done' && !!n.params && !!p.value
+}
+const canComparePrev = computed(() => hasPrev.value && neighborParsed(-1))
+const canCompareNext = computed(() => hasNext.value && neighborParsed(1))
+
+/** 文件行对比下拉：与上一张 / 下一张对比，不可用方向置灰 */
+const compareOptions = computed(() => [
+  { label: t('detail.comparePrev'), key: '-1', disabled: !canComparePrev.value },
+  { label: t('detail.compareNext'), key: '1', disabled: !canCompareNext.value },
+])
+
+function onCompareSelect(key: string | number) {
+  emit('compare', Number(key) === 1 ? 1 : -1)
+}
 
 /** 收藏标记：与卡片共用 favoriteFlags 全量表 */
 const faved = computed(() =>
@@ -605,6 +627,22 @@ async function copyImage() {
             >
               <template #icon><Icon :name="playing ? 'pause' : 'play'" :size="13" /></template>
             </NButton>
+            <NDropdown
+              trigger="click"
+              placement="bottom-end"
+              :options="compareOptions"
+              @select="onCompareSelect"
+            >
+              <NButton
+                size="tiny"
+                quaternary
+                circle
+                :title="t('detail.compareTitle')"
+                :aria-label="t('detail.compareTitle')"
+              >
+                <template #icon><Icon name="git-compare" :size="13" /></template>
+              </NButton>
+            </NDropdown>
             <NButton
               size="tiny"
               quaternary

@@ -182,6 +182,9 @@ const zh = {
   'detail.next': '下一张',
   'detail.copyField': '复制{name}',
   'detail.copyPath': '复制文件路径',
+  'detail.compareTitle': '与相邻图片对比',
+  'detail.comparePrev': '与上一张对比',
+  'detail.compareNext': '与下一张对比',
   'detail.zoomIn': '点击放大',
   'detail.zoomClose': '关闭放大',
   'detail.zoomHint': '滚轮缩放 · 拖拽平移 · 双击复位',
@@ -251,6 +254,7 @@ const zh = {
   'cmp.file': '文件',
   'cmp.stage': '阶段{n} · ',
   'cmp.none': '所选图片还没有可对比的解析结果',
+  'cmp.swap': '交换 A / B',
 
   /* StatsDrawer */
   'stats.title': '生成统计',
@@ -487,6 +491,9 @@ const en: Record<DictKey, string> = {
   'detail.next': 'Next image',
   'detail.copyField': 'Copy {name}',
   'detail.copyPath': 'Copy file path',
+  'detail.compareTitle': 'Compare with neighbor',
+  'detail.comparePrev': 'Compare with previous',
+  'detail.compareNext': 'Compare with next',
   'detail.zoomIn': 'Click to zoom',
   'detail.zoomClose': 'Close zoom',
   'detail.zoomHint': 'Wheel to zoom · drag to pan · double-click to reset',
@@ -557,6 +564,7 @@ const en: Record<DictKey, string> = {
   'cmp.file': 'File',
   'cmp.stage': 'Stage {n} · ',
   'cmp.none': 'No parsed results to compare yet',
+  'cmp.swap': 'Swap A / B',
 
   'stats.title': 'Usage stats',
   'stats.sub': 'Aggregated from parsed images; click a row to filter',

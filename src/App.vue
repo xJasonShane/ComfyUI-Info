@@ -242,6 +242,28 @@ function onRemove(item: ImageItem) {
   }
 }
 
+/**
+ * 详情页一键与相邻图片对比：邻居沿当前筛选顺序取（与 ← / → 导航同序），
+ * 可用性已在抽屉内按「双方都已解析」置灰，这里兜底校验后打开对比抽屉
+ */
+function onCompareFromDetail(dir: 1 | -1) {
+  if (!current.value) return
+  const list = filteredItems.value
+  const idx = list.findIndex((i) => i.id === current.value!.id)
+  const next = idx + dir
+  if (idx < 0 || next < 0 || next >= list.length) return
+  const neighbor = list[next]!
+  if (neighbor.status !== 'done' || !neighbor.params || !current.value.params) return
+  comparePair.value = [current.value, neighbor]
+  showCompare.value = true
+}
+
+/** 对比抽屉交换 A / B */
+function swapCompare() {
+  const pair = comparePair.value
+  if (pair) comparePair.value = [pair[1]!, pair[0]!]
+}
+
 // 批量重试全部解析失败的图片（O4）
 function onRetryAll() {
   const n = retryAllFailed()
@@ -619,12 +641,18 @@ async function onDrop(e: DragEvent) {
           }}</NButton>
         </div>
 
-        <DetailDrawer v-model:show="showDetail" :item="current" @nav="navDetail" />
+        <DetailDrawer
+          v-model:show="showDetail"
+          :item="current"
+          @nav="navDetail"
+          @compare="onCompareFromDetail"
+        />
 
         <CompareDrawer
           v-model:show="showCompare"
           :a="comparePair?.[0] ?? null"
           :b="comparePair?.[1] ?? null"
+          @swap="swapCompare"
         />
 
         <div v-if="dragging" class="drop-overlay">

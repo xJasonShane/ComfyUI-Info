@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
-import { NDrawer } from 'naive-ui'
+import { NButton, NDrawer } from 'naive-ui'
 import type { ImageItem, LoraInfo, ParsedParams } from '../types'
 import { ensureItemUrl } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
 import { t } from '../locales'
+import Icon from './Icon.vue'
 
 const props = defineProps<{ a: ImageItem | null; b: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
+const emit = defineEmits<{ swap: [] }>()
 
 const {
   width: drawerWidth,
@@ -191,7 +193,16 @@ const nameB = computed(() => props.b?.path ?? props.b?.name ?? '')
       />
       <div class="cmp">
         <div class="cmp-head">
-          <span class="cmp-empty" />
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :title="t('cmp.swap')"
+            :aria-label="t('cmp.swap')"
+            @click="emit('swap')"
+          >
+            <template #icon><Icon name="arrow-left-right" :size="13" /></template>
+          </NButton>
           <div class="cmp-item">
             <img v-if="a?.url" :src="a.url" alt="" />
             <span class="name" :title="nameA">{{ nameA }}</span>
