@@ -1037,8 +1037,12 @@ export function parseQuery(raw: string): ParsedQuery {
         const cond = parseNumCondition(numField, m[2]!)
         if (cond) bucket.num.push(cond)
       } else if (m[2]) {
-        // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉
-        bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(m[2].toLowerCase())
+        // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉。
+        // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
+        // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
+        if (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(m[2])) {
+          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(m[2].toLowerCase())
+        }
       }
     } else {
       bucket.terms.push(token.toLowerCase())

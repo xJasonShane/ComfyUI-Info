@@ -787,6 +787,10 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     all: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2026-01-31'], num: [] },
     none: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2025-12'], num: [] },
   })
+  // seed 条件须为「可选比较符 + 数字」：残缺条件（如 `seed:>=`）忽略而非恒真
+  expect(api.parseQuery('seed:>=').all.seed).toEqual([])
+  expect(api.parseQuery('seed:>abc').all.seed).toEqual([])
+  expect(api.parseQuery('seed:>=123').all.seed).toEqual(['>=123'])
   // 数值范围条件（FEAT-3）：w/h 是别名，无操作符为精确相等，非法值忽略
   expect(
     api.parseQuery('steps:>30 w:>=1024 cfg:7.5 h:<768 batch:2 clip:>1 steps:abc steps:'),
