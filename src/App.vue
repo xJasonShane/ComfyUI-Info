@@ -59,7 +59,7 @@ import {
   store,
   toggleFavorite,
 } from './composables/store'
-import { exportItems, exportOptions } from './lib/export'
+import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
 import { copyText } from './lib/utils'
 import { statsVisible } from './composables/ui'
 import { locale, t } from './locales'
@@ -275,6 +275,21 @@ async function batchCopyPrompts() {
   }
   const ok = await copyText(prompts.join('\n'))
   if (ok) appMessage().success(t('msg.copiedPrompts', { n: prompts.length }))
+  else appMessage().error(t('common.copyFailed'))
+}
+
+/** 批量复制 A1111 风格参数摘要：每张图一个块，首行文件名便于区分归属 */
+async function batchCopySummaries() {
+  const blocks = selectedItems.value
+    .filter((i) => i.status === 'done' && i.params)
+    .map((i) => `${i.path ?? i.name}\n${buildParamsSummary(i.params!)}`)
+    .filter((s) => s.trim() !== '')
+  if (!blocks.length) {
+    appMessage().warning(t('msg.noParsedParams'))
+    return
+  }
+  const ok = await copyText(blocks.join('\n\n'))
+  if (ok) appMessage().success(t('msg.copiedSummaries', { n: blocks.length }))
   else appMessage().error(t('common.copyFailed'))
 }
 
@@ -562,6 +577,9 @@ async function onDrop(e: DragEvent) {
           </NButton>
           <NButton size="tiny" secondary @click="batchCopyPrompts">{{
             t('bar.copyPrompts')
+          }}</NButton>
+          <NButton size="tiny" secondary @click="batchCopySummaries">{{
+            t('bar.copySummaries')
           }}</NButton>
           <NButton size="tiny" secondary @click="batchSetFavorite">{{
             allSelectedFaved ? t('bar.unfavSelected') : t('bar.favSelected')
