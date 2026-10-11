@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NDrawer } from 'naive-ui'
+import { NButton, NDrawer, NInput, NPopconfirm, useMessage } from 'naive-ui'
 import {
   dailyCounts,
   dirStats,
   keywordStats,
+  renameTag,
+  removeTagEverywhere,
   resolutionStats,
   store,
+  tagCounts,
   usageStats,
 } from '../composables/store'
 import type { UsageStat } from '../composables/store'
@@ -17,6 +20,7 @@ import { downloadText } from '../lib/utils'
 import { t } from '../locales'
 
 const show = defineModel<boolean>('show', { default: false })
+const message = useMessage()
 
 const {
   width: drawerWidth,
@@ -45,10 +49,39 @@ const sections = computed<StatSection[]>(() => [
   { title: t('stats.resolutions'), kind: 'res', list: resolutionStats.value },
   { title: t('stats.keywords'), kind: 'keyword', list: keywordStats.value },
 ])
-const hasAny = computed(() => sections.value.some((s) => s.list.length > 0))
+const sectionsHaveAny = computed(() => sections.value.some((s) => s.list.length > 0))
+const hasAny = computed(() => sectionsHaveAny.value || tagCounts.value.length > 0)
 const statsExporting = ref(false)
 
 const maxCount = (list: UsageStat[]): number => list[0]?.count ?? 1
+const maxTagCount = computed(() => tagCounts.value[0]?.count ?? 1)
+
+/** 点击标签 → `tag:"…"` 定向筛选并关闭抽屉（F1 面板） */
+function pickTag(name: string) {
+  store.search = `tag:"${name}"`
+  show.value = false
+}
+
+/* ---------- 标签管理（F1）：行内重命名 / 全库删除，账本与详情页标签编辑同一份 ---------- */
+const renaming = ref<string | null>(null)
+const renameInput = ref('')
+
+function startRename(name: string) {
+  renaming.value = name
+  renameInput.value = name
+}
+
+function confirmRename() {
+  if (!renaming.value) return
+  const n = renameTag(renaming.value, renameInput.value)
+  if (n) message.success(t('msg.tagRenamed', { n }))
+  renaming.value = null
+}
+
+function deleteTagEverywhere(name: string) {
+  const n = removeTagEverywhere(name)
+  if (n) message.success(t('msg.tagRemoved', { n, name }))
+}
 
 /**
  * 点击统计项 → 应用对应筛选并关闭抽屉。模型走 modelFilter 精确筛选；
@@ -123,7 +156,59 @@ async function exportStats() {
           </NButton>
         </div>
 
-        <template v-if="hasAny">
+        <section v-if="tagCounts.length" class="stats-section">
+          <div class="stats-section-title">{{ t('stats.tags') }} ({{ tagCounts.length }})</div>
+          <div class="stats-list">
+            <div v-for="tg in tagCounts" :key="tg.name" class="tag-row">
+              <NInput
+                v-if="renaming === tg.name"
+                v-model:value="renameInput"
+                size="small"
+                :placeholder="t('stats.tagNewName')"
+                @keyup.enter="confirmRename"
+                @blur="confirmRename"
+              />
+              <template v-else>
+                <button
+                  type="button"
+                  class="stat-row"
+                  :title="t('stats.filterHint', { title: t('stats.tags'), name: tg.name })"
+                  @click="pickTag(tg.name)"
+                >
+                  <span class="stat-name">{{ tg.name }}</span>
+                  <i
+                    class="stat-bar"
+                    :style="{ width: `${Math.max(8, (tg.count / maxTagCount) * 100)}%` }"
+                  />
+                  <span class="stat-count">{{ tg.count }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="tag-act"
+                  :title="t('stats.tagRename')"
+                  :aria-label="t('stats.tagRename')"
+                  @click="startRename(tg.name)"
+                >
+                  <Icon name="pencil" :size="12" :stroke="2" />
+                </button>
+                <NPopconfirm @positive-click="deleteTagEverywhere(tg.name)">
+                  <template #trigger>
+                    <button
+                      type="button"
+                      class="tag-act"
+                      :title="t('stats.tagDelete')"
+                      :aria-label="t('stats.tagDelete')"
+                    >
+                      <Icon name="x" :size="12" :stroke="2.2" />
+                    </button>
+                  </template>
+                  {{ t('stats.tagDeleteConfirm', { name: tg.name }) }}
+                </NPopconfirm>
+              </template>
+            </div>
+          </div>
+        </section>
+        <template v-if="sectionsHaveAny">
           <section v-for="sec in sections" :key="sec.kind" class="stats-section">
             <div class="stats-section-title">{{ sec.title }} ({{ sec.list.length }})</div>
             <div v-if="sec.list.length" class="stats-list">
@@ -146,7 +231,7 @@ async function exportStats() {
             <p v-else class="stats-empty">{{ t('stats.emptySection') }}</p>
           </section>
         </template>
-        <p v-else class="stats-empty">{{ t('stats.empty') }}</p>
+        <p v-if="!hasAny" class="stats-empty">{{ t('stats.empty') }}</p>
       </div>
     </div>
   </NDrawer>

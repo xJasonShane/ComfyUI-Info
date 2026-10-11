@@ -6,6 +6,7 @@ import {
   buildImagesZip,
   buildParamsSummary,
   buildWorkflowZip,
+  ZipCapacityError,
 } from '../src/lib/export'
 import type { ImageItem, ParsedParams } from '../src/types'
 
@@ -367,3 +368,27 @@ function dv_entryCount(zip: Uint8Array): number {
   const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
   return dv.getUint16(zip.length - 22 + 10, true)
 }
+
+describe('ZIP 容量校验（B5）', () => {
+  it('条目数超 65535 时拒绝导出并给出可读错误（无 ZIP64，静默损坏不如显式报错）', async () => {
+    const items = Array.from({ length: 65_536 }, (_, i) =>
+      makeItem({
+        id: `i${i}`,
+        name: `f${i}.png`,
+        path: `d/f${i}.png`,
+        raw: { source: 'comfyui', prompt: 'w' },
+      }),
+    )
+    const err = await buildWorkflowZip(items).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ZipCapacityError)
+    expect((err as Error).message).toContain('65537')
+  })
+
+  it('总大小超 4GB 时在流式 CRC 之前前置拒绝', async () => {
+    // size 造假即可：校验先于任何对 Blob 内容的读取
+    const big = { size: 4 * 1024 ** 3 + 1 } as unknown as File
+    const items = [makeItem({ file: big })]
+    await expect(buildImagesZip(items)).rejects.toBeInstanceOf(ZipCapacityError)
+    await expect(buildDatasetZip(items)).rejects.toBeInstanceOf(ZipCapacityError)
+  })
+})

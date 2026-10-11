@@ -26,6 +26,8 @@ const zh = {
   'export.zip': '导出工作流 (ZIP)',
   'export.imagesZip': '导出原图 (ZIP)',
   'export.datasetZip': '导出训练集 (ZIP)',
+  'export.zipTooManyEntries': '条目数 {n} 超过 ZIP 上限 65535，请缩小筛选范围或分批导出',
+  'export.zipTooLarge': '打包总大小超过 ZIP 上限 4GB，请分批导出',
 
   /* 来源与排序 */
   'src.comfyui': 'ComfyUI 原图',
@@ -63,6 +65,12 @@ const zh = {
   'bar.removeSelected': '移除选中',
   'bar.removeConfirm': '确定移除选中的 {n} 张图片？',
   'bar.clearSelection': '取消选择',
+  'bar.toolbarAria': '批量操作',
+  'bar.tagSelected': '打标签',
+  'bar.tagPlaceholder': '输入标签名…',
+  'bar.tagApply': '添加到选中',
+  'bar.tagRemoveFromSelected': '从选中移除',
+
   'msg.copiedPrompts': '已复制 {n} 张图片的正向提示词',
   'msg.copiedSummaries': '已复制 {n} 张图片的参数摘要（附文件名）',
   'msg.noParsedParams': '所选图片中还没有已解析出参数的项',
@@ -70,11 +78,19 @@ const zh = {
   'msg.noExportable': '所选图片中还没有可导出的结果',
   'msg.noImageFiles': '所选图片中没有可打包的原图（存档项需重新拖入原文件）',
   'msg.pasted': '已粘贴添加 {n} 项',
+  'msg.tagApplied': '已为 {n} 张图片添加标签「{name}」',
+  'msg.tagRemoved': '已从 {n} 张图片移除标签「{name}」',
+  'msg.tagRenamed': '标签已重命名，涉及 {n} 张图片',
+  'msg.tagNoChange': '选中图片的标签已是目标状态',
+  'msg.rescanAllStarted': '正在重扫全部目录，新增 {n} 张…',
+  'msg.rescanAllNone': '全部目录均无新增图片',
 
   /* 拖拽覆盖层 */
   'drop.hint': '松开以添加图片 / 文件夹 / 工作流文件',
   'app.backTop': '回到顶部',
   'app.resizeDrawer': '拖拽调节抽屉宽度',
+  'app.title': 'ComfyUI·Info — 图片信息查看器',
+  'app.fatalBanner': '页面发生未预期的错误：{msg}（详情见控制台，刷新可恢复）',
 
   /* TopBar */
   'topbar.subtitle': '图片信息查看器',
@@ -89,6 +105,8 @@ const zh = {
   'topbar.dirs': '目录',
   'topbar.dirsTitle': '已记住的目录（点击切换重扫目标）',
   'topbar.clearBookmarks': '清除全部书签',
+  'topbar.rescanAll': '全部重扫',
+
   'msg.bookmarksCleared': '已清除全部目录书签',
   'msg.forgetDir': '已不再记住该目录',
   'topbar.forgetTitle': '不再记住该目录',
@@ -282,6 +300,12 @@ const zh = {
   'stats.dirs': '目录',
   'stats.resolutions': '分辨率',
   'stats.keywords': '高频提示词',
+  'stats.tags': '自定义标签',
+  'stats.tagRename': '重命名标签',
+  'stats.tagNewName': '新标签名',
+  'stats.tagDelete': '全库删除标签',
+  'stats.tagDeleteConfirm': '确定删除标签「{name}」？（所有图片上的该标签一并移除）',
+
   'stats.emptySection': '暂无数据',
   'stats.empty': '还没有已解析出参数的图片——先添加一些图片，再来看统计。',
   'stats.filterHint': '筛选{title}「{name}」',
@@ -348,6 +372,9 @@ const en: Record<DictKey, string> = {
   'export.zip': 'Export workflows (ZIP)',
   'export.imagesZip': 'Export originals (ZIP)',
   'export.datasetZip': 'Export dataset (ZIP)',
+  'export.zipTooManyEntries':
+    '{n} entries exceed the ZIP limit of 65,535 — narrow the filter or export in batches',
+  'export.zipTooLarge': 'Total size exceeds the 4 GB ZIP limit — export in batches',
 
   'src.comfyui': 'ComfyUI originals',
   'src.a1111': 'A1111 / WebUI',
@@ -382,6 +409,12 @@ const en: Record<DictKey, string> = {
   'bar.removeSelected': 'Remove selected',
   'bar.removeConfirm': 'Remove the {n} selected images?',
   'bar.clearSelection': 'Clear selection',
+  'bar.toolbarAria': 'Batch actions',
+  'bar.tagSelected': 'Tag',
+  'bar.tagPlaceholder': 'Tag name…',
+  'bar.tagApply': 'Add to selected',
+  'bar.tagRemoveFromSelected': 'Remove from selected',
+
   'msg.copiedPrompts': 'Copied positive prompts of {n} images',
   'msg.copiedSummaries': 'Copied parameter summaries of {n} images (with file names)',
   'msg.noParsedParams': 'No selected images have parsed parameters yet',
@@ -390,10 +423,18 @@ const en: Record<DictKey, string> = {
   'msg.noImageFiles':
     'No original images to pack in the selection (archived entries need their files re-added)',
   'msg.pasted': 'Added {n} items from clipboard',
+  'msg.tagApplied': 'Tagged {n} images with "{name}"',
+  'msg.tagRemoved': 'Removed tag "{name}" from {n} images',
+  'msg.tagRenamed': 'Tag renamed on {n} images',
+  'msg.tagNoChange': 'Selected images already match this tag state',
+  'msg.rescanAllStarted': 'Rescanned all directories — {n} new images',
+  'msg.rescanAllNone': 'No new images in any directory',
 
   'drop.hint': 'Drop to add images / folders / workflow files',
   'app.backTop': 'Back to top',
   'app.resizeDrawer': 'Drag to resize the drawer',
+  'app.title': 'ComfyUI·Info — Image Info Viewer',
+  'app.fatalBanner': 'Unexpected error: {msg} (see console for details; refresh to recover)',
 
   'topbar.subtitle': 'Image metadata viewer',
   'topbar.addImages': 'Add images',
@@ -409,6 +450,8 @@ const en: Record<DictKey, string> = {
   'topbar.dirs': 'Dirs',
   'topbar.dirsTitle': 'Remembered directories (click to switch the rescan target)',
   'topbar.clearBookmarks': 'Clear all bookmarks',
+  'topbar.rescanAll': 'Rescan all',
+
   'msg.bookmarksCleared': 'All directory bookmarks cleared',
   'msg.forgetDir': 'Directory forgotten',
   'topbar.forgetTitle': 'Forget this directory',
@@ -607,6 +650,12 @@ const en: Record<DictKey, string> = {
   'stats.dirs': 'Directories',
   'stats.resolutions': 'Resolutions',
   'stats.keywords': 'Top prompt keywords',
+  'stats.tags': 'Custom tags',
+  'stats.tagRename': 'Rename tag',
+  'stats.tagNewName': 'New tag name',
+  'stats.tagDelete': 'Delete tag everywhere',
+  'stats.tagDeleteConfirm': 'Delete tag "{name}" from all images?',
+
   'stats.emptySection': 'No data yet',
   'stats.empty': 'No parsed images yet — add some images first, then check the stats.',
   'stats.filterHint': 'Filter {title} "{name}"',

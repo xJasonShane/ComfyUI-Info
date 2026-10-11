@@ -1106,11 +1106,11 @@ describe('ParseScheduler（回退编排）', () => {
     expect(result.raw.source).toBe('comfyui')
   })
 
-  it('Worker 中途失效：该次解析回退主线程，池被终止且永久不再复用', async () => {
-    const fake = makeFakeTransport()
+  it('Worker 中途失效：重建池并重试同一文件，成功后继续用池（B3）', async () => {
+    const fakes = [makeFakeTransport(), makeFakeTransport()]
     let createCalls = 0
     const scheduler = new ParseScheduler(() => {
-      createCalls++
+      const fake = fakes[createCalls++]!
       const pool = new ParsePool(() => fake.transport, 1, 100)
       const creating = pool.create()
       // 探测任务在 create() 的同步段已入队，这里直接放行，探测随即通过
@@ -1118,23 +1118,83 @@ describe('ParseScheduler（回退编排）', () => {
       return creating
     })
     const png = buildPng([textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
-    const file = new File([png], 'c.png')
 
-    const pending = scheduler.parse(file)
+    const pending = scheduler.parse(new File([png], 'c.png'))
     await vi.waitFor(() => {
-      if (fake.jobs.length < 2) throw new Error('等待解析任务派发')
+      if (fakes[0]!.jobs.length < 2) throw new Error('等待首个解析任务派发')
     })
-    fake.jobs[1]!.reject(BROKEN) // Worker 解析途中整体失效
-    const result = await pending
-    expect(result.raw.source).toBe('comfyui') // 主线程兜底重新解析了同一文件
-    expect(fake.transport.terminated).toBe(true)
-    expect(createCalls).toBe(1)
+    fakes[0]!.jobs[1]!.reject(BROKEN) // 首池解析途中整体失效
 
-    // 后续解析直接走主线程：不再建池，也不再入队新任务（探测 + 首次失败的尝试共 2 条）
-    const again = await scheduler.parse(new File([png], 'c2.png'))
-    expect(again.raw.source).toBe('comfyui')
-    expect(createCalls).toBe(1)
-    expect(fake.jobs).toHaveLength(2)
+    // 重建池后同一文件重派到新池，而不是立即降级主线程
+    await vi.waitFor(() => {
+      if (fakes[1]!.jobs.length < 2) throw new Error('等待重建池后的任务派发')
+    })
+    expect(fakes[1]!.jobs[1]!.file.name).toBe('c.png')
+    fakes[1]!.jobs[1]!.resolve({ raw: { source: 'comfyui' } })
+    const result = await pending
+    expect(result.raw.source).toBe('comfyui')
+    expect(fakes[0]!.transport.terminated).toBe(true) // 失效池已终止
+    expect(createCalls).toBe(2)
+
+    // 池恢复后，后续解析继续走新池而非主线程
+    const again = scheduler.parse(new File([png], 'c2.png'))
+    await vi.waitFor(() => {
+      if (fakes[1]!.jobs.length < 3) throw new Error('等待后续任务派发')
+    })
+    fakes[1]!.jobs[2]!.resolve({ raw: { source: 'none' } })
+    expect((await again).raw.source).toBe('none')
+    expect(createCalls).toBe(2)
+  })
+
+  it('连续失效达上限：永久回退主线程，不再重建池', async () => {
+    let createCalls = 0
+    const scheduler = new ParseScheduler(() => {
+      createCalls++
+      return Promise.resolve(null) // 每次建池都失败
+    }, 2)
+    const png = buildPng([textChunkAscii('prompt', COMFY_PROMPT_ASCII)])
+    expect((await scheduler.parse(new File([png], 'a.png'))).raw.source).toBe('comfyui')
+    expect((await scheduler.parse(new File([png], 'b.png'))).raw.source).toBe('comfyui')
+    expect(createCalls).toBe(2) // 两次失败到达上限 → 永久降级
+
+    expect((await scheduler.parse(new File([png], 'c.png'))).raw.source).toBe('comfyui')
+    expect(createCalls).toBe(2) // 降级后不再尝试建池
+  })
+
+  it('失效后成功解析会重置连续失败计数（瞬时抖动不累积到永久降级）', async () => {
+    const fakes = [makeFakeTransport(), makeFakeTransport(), makeFakeTransport()]
+    let createCalls = 0
+    const scheduler = new ParseScheduler(() => {
+      const fake = fakes[createCalls++]!
+      const pool = new ParsePool(() => fake.transport, 1, 100)
+      const creating = pool.create()
+      fake.jobs[0]!.resolve({ raw: { source: 'none' } })
+      return creating
+    }, 2)
+    // 第 1 池任务失效（失败 1）→ 重建第 2 池重试同一文件 → 成功（计数清零）
+    const p1 = scheduler.parse(new File(['x'], 'a.png'))
+    await vi.waitFor(() => {
+      if (fakes[0]!.jobs.length < 2) throw new Error('等待任务派发')
+    })
+    fakes[0]!.jobs[1]!.reject(BROKEN)
+    await vi.waitFor(() => {
+      if (fakes[1]!.jobs.length < 2) throw new Error('等待重试派发')
+    })
+    fakes[1]!.jobs[1]!.resolve({ raw: { source: 'comfyui' } })
+    await expect(p1).resolves.toMatchObject({ raw: { source: 'comfyui' } })
+
+    // 第 2 池再次失效：若计数未清零，此处已到上限 2 → 永久降级；实际应重建第 3 池
+    const p2 = scheduler.parse(new File(['x'], 'b.png'))
+    await vi.waitFor(() => {
+      if (fakes[1]!.jobs.length < 3) throw new Error('等待任务派发')
+    })
+    fakes[1]!.jobs[2]!.reject(BROKEN)
+    await vi.waitFor(() => {
+      if (fakes[2]!.jobs.length < 2) throw new Error('等待重试派发')
+    })
+    fakes[2]!.jobs[1]!.resolve({ raw: { source: 'comfyui' } })
+    await expect(p2).resolves.toMatchObject({ raw: { source: 'comfyui' } })
+    expect(createCalls).toBe(3)
   })
 
   it('非 BROKEN 的解析错误原样向上抛出', async () => {
@@ -1171,14 +1231,17 @@ describe('ParseScheduler（回退编排）', () => {
     }
     vi.useFakeTimers()
     try {
-      const scheduler = new ParseScheduler(async () => {
-        const pool = new ParsePool(
-          () => new WorkerEntry(ProbeOnlyWorker as unknown as new () => Worker),
-          1,
-          100,
-        )
-        return pool.create() // 探测包由假 Worker 正常应答，池创建成功
-      })
+      const scheduler = new ParseScheduler(
+        async () => {
+          const pool = new ParsePool(
+            () => new WorkerEntry(ProbeOnlyWorker as unknown as new () => Worker),
+            1,
+            100,
+          )
+          return pool.create() // 探测包由假 Worker 正常应答，池创建成功
+        },
+        1, // 单次超时即永久降级（用上限 1 保持用例只推进一轮超时）
+      )
       const pending = scheduler.parse(new File([new Uint8Array(0)], 'probe.png'))
       await vi.advanceTimersByTimeAsync(JOB_TIMEOUT_MS + 1)
       // 任务超时 → BROKEN → 池终止并永久回退主线程：空文件主线程解析为「无元数据」

@@ -99,6 +99,17 @@ function resetZoom() {
   pan.value = { x: 0, y: 0 }
 }
 
+// 放大态打开时接管焦点（A7）：Tab 不再穿越到遮罩下方内容，Esc 语义分层——
+// 放大态先退出放大，遮罩关闭后才轮到抽屉的关闭快捷键
+watch(zoomed, (v) => {
+  if (v) requestAnimationFrame(() => overlayRef.value?.focus())
+})
+
+function onZoomEsc(e: KeyboardEvent) {
+  e.stopPropagation()
+  zoomed.value = false
+}
+
 watch(
   () => props.item?.id,
   () => {
@@ -611,6 +622,7 @@ async function copyImage() {
           class="img-zoom"
           :class="{ grab: zoomScale > 1, grabbing: panning }"
           role="button"
+          tabindex="-1"
           :aria-label="zoomScale > 1 ? t('detail.zoomHint') : t('detail.zoomClose')"
           @wheel.prevent="onZoomWheel"
           @pointerdown="onZoomPointerDown"
@@ -618,6 +630,7 @@ async function copyImage() {
           @pointerup="onZoomPointerUp"
           @pointercancel="onZoomPointerUp"
           @dblclick="onZoomDblClick"
+          @keydown.esc.stop="onZoomEsc"
         >
           <img
             :src="item.url"

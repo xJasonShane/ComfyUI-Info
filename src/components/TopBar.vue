@@ -31,6 +31,7 @@ import {
   modelOptions,
   parsing,
   recentSearches,
+  rescanAllDirectories,
   rescanDirectory,
   RESCAN_INTERVALS,
   saveFilterPreset,
@@ -111,22 +112,34 @@ function onForgetRescan() {
   message.success(t('msg.forgetDir'))
 }
 
-/* ---------- 多目录书签（FEAT-7）：在记住的目录间切换重扫目标 ---------- */
+/* ---------- 多目录书签（FEAT-7）：在记住的目录间切换重扫目标；全部重扫（F3） ---------- */
 const dirMenuOptions = computed(() => {
   const names = store.dirBookmarks
   if (!names.length) return []
   return [
     ...names.map((n) => ({ label: n === store.rescanName ? `✓ ${n}` : n, key: `use:${n}` })),
     { type: 'divider' as const, key: 'dir-divider' },
+    { label: t('topbar.rescanAll'), key: 'rescan-all' },
     { label: t('topbar.clearBookmarks'), key: 'clear-all' },
   ]
 })
+
+async function onRescanAll() {
+  const { added, failed } = await rescanAllDirectories()
+  if (failed && !added) message.warning(t('msg.rescanNoPermission'))
+  else if (added > 0 || parsing.value) message.success(t('msg.rescanAllStarted', { n: added }))
+  else message.info(t('msg.rescanAllNone'))
+}
 
 async function onDirMenu(key: string | number) {
   const k = String(key)
   if (k === 'clear-all') {
     clearAllDirBookmarks()
     message.success(t('msg.bookmarksCleared'))
+    return
+  }
+  if (k === 'rescan-all') {
+    await onRescanAll()
     return
   }
   const name = k.startsWith('use:') ? k.slice(4) : ''
@@ -369,6 +382,25 @@ function savePreset() {
         >
           <template #prefix><Icon name="search" :size="14" /></template>
         </NInput>
+      </template>
+      <div class="search-help">
+        <b>{{ t('help.title') }}</b>
+        <p v-for="line in helpLines" :key="line" v-html="line" />
+      </div>
+    </NPopover>
+
+    <!-- 语法速查的触屏 / 键盘入口（A10）：hover 弹层只有指针设备可达，这里补一个点按按钮 -->
+    <NPopover trigger="click" placement="bottom-end" :style="{ maxWidth: '300px' }">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('help.title')"
+          :title="t('help.title')"
+        >
+          <template #icon><Icon name="help-circle" :size="15" /></template>
+        </NButton>
       </template>
       <div class="search-help">
         <b>{{ t('help.title') }}</b>

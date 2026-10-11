@@ -6,7 +6,7 @@ import {
   isMetaTextFile,
   isSupportedImage,
 } from '../lib/metadata'
-import { parseImage } from '../lib/parser'
+import { parseImage, usingWorkers } from '../lib/parser'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import { t } from '../locales'
 import {
@@ -196,10 +196,27 @@ watch(
   },
 )
 
+/* ---------- 指纹缓存（C1） ---------- */
+// recordKey 拼串在条目生命周期内不变（path / size / mtime 建项后不再改），
+// favoriteFlags / favCount / tagLists / favOnly 筛选等 computed 每拍失效都要为全量条目
+// 重拼串，WeakMap 命中后 O(1) 复用；键为响应式代理，与原始对象各存一份无碍（值相同）
+const recordKeyCache = new WeakMap<ImageItem, string>()
+
+function recordKeyOf(it: ImageItem): string {
+  let k = recordKeyCache.get(it)
+  if (k === undefined) {
+    k = recordKey({ path: it.path, name: it.name, size: it.size, mtime: it.mtime })
+    recordKeyCache.set(it, k)
+  }
+  return k
+}
+
 /* ---------- 解析队列（有限并发） ---------- */
 let active = 0
 const queue: ImageItem[] = []
 const PARSE_LIMIT = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) * 2))
+// Worker 池整体回退主线程时（B3），全部解析都压在 UI 线程上——并发收敛到不卡交互的水平
+const MAIN_THREAD_PARSE_LIMIT = 3
 // 清空列表时递增：旧批次的在途解析完成时不再计数，避免污染新批次进度
 let batchEpoch = 0
 // 在途任务（从开始解析到结果应用）：与响应式 status 解耦——批量扫描期间 status 保持
@@ -257,7 +274,8 @@ function applyPending() {
 }
 
 function pump() {
-  while (active < PARSE_LIMIT && queue.length > 0) {
+  const limit = usingWorkers() ? PARSE_LIMIT : Math.min(PARSE_LIMIT, MAIN_THREAD_PARSE_LIMIT)
+  while (active < limit && queue.length > 0) {
     const item = queue.shift()
     if (!item) break
     active++
@@ -416,7 +434,7 @@ export function removeItems(items: ImageItem[]) {
   const queuedIds = new Set<string>()
   for (const it of removedItems) {
     liveIds.delete(it.id)
-    const key = recordKey(it)
+    const key = recordKeyOf(it)
     seenKeys.delete(key)
     if (it.detached) detachedByKey.delete(key)
     dirtyItems.delete(key)
@@ -534,18 +552,14 @@ export function clearAllDirBookmarks() {
   if (persistAvailable) void clearPersistedBookmarks().catch(() => {})
 }
 
-/**
- * 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析。
- * 分批边扫边入列；返回新增入列的文件数，无句柄或未获授权返回 null。
- */
-export async function rescanDirectory(): Promise<number | null> {
-  if (!rescanHandle) return null
+/** 扫描单个目录句柄（增量入列）：返回新增数，无权限 / 枚举失败返回 null（F3 抽取复用） */
+async function scanDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<number | null> {
   // 代际号在入口捕获（含权限等待之前）：清空列表前发起的整轮扫描都属旧代际
   const epoch = scanEpoch
-  if (!(await ensureReadPermission(rescanHandle))) return null
+  if (!(await ensureReadPermission(handle))) return null
   let added = 0
   try {
-    await collectDirectoryFiles(rescanHandle, (files) => {
+    await collectDirectoryFiles(handle, (files) => {
       // 代际检查：clearAll 后在途枚举的后续批次不再入列——seenKeys 已清空，
       // 继续入列会把刚清掉的文件全部当新文件重新解析（「清空后自己回来」）
       if (epoch !== scanEpoch) return
@@ -557,6 +571,30 @@ export async function rescanDirectory(): Promise<number | null> {
     return null
   }
   return added
+}
+
+/**
+ * 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析。
+ * 分批边扫边入列；返回新增入列的文件数，无句柄或未获授权返回 null。
+ */
+export async function rescanDirectory(): Promise<number | null> {
+  if (!rescanHandle) return null
+  return scanDirectoryHandle(rescanHandle)
+}
+
+/**
+ * 一键重扫全部记住的目录（F3）：顺序扫描每个书签并增量入列。
+ * 返回新增总数与失败的目录数（无权限 / 目录已失联）。
+ */
+export async function rescanAllDirectories(): Promise<{ added: number; failed: number }> {
+  let added = 0
+  let failed = 0
+  for (const { handle } of dirBookmarks.values()) {
+    const n = await scanDirectoryHandle(handle)
+    if (n === null) failed++
+    else added += n
+  }
+  return { added, failed }
 }
 
 /* ---------- 目录监视自动重扫（FEAT-1：边出图边看） ---------- */
@@ -650,7 +688,7 @@ function markDirty(item: ImageItem) {
   if (!persistAvailable) return
   // 已移除 / 已清空的项不再写库：removeItem / clearAll 后完成的在途解析不得“复活”到存档
   if (!liveIds.has(item.id)) return
-  const key = recordKey(item)
+  const key = recordKeyOf(item)
   deletedKeys.delete(key)
   dirtyItems.set(key, item)
   schedulePersist()
@@ -684,7 +722,7 @@ async function flushPersist() {
     // 随下一次 markDirty 触发的 flush 一并重试；失败不主动重排，持久失败（配额）不空转
     if (!isStale()) {
       for (const it of items) {
-        if (liveIds.has(it.id)) dirtyItems.set(recordKey(it), it)
+        if (liveIds.has(it.id)) dirtyItems.set(recordKeyOf(it), it)
       }
       // 删除标记不覆盖写库期间被重新 markDirty 的指纹（后者已从 deletedKeys 摘除）
       for (const k of keys) if (!dirtyItems.has(k)) deletedKeys.add(k)
@@ -1155,25 +1193,27 @@ function hitDate(cond: string, it: ImageItem): boolean {
   }
 }
 
-function hitCondition(
-  kind:
-    | 'terms'
-    | 'model'
-    | 'lora'
-    | 'seed'
-    | 'path'
-    | 'date'
-    | 'pos'
-    | 'neg'
-    | 'sampler'
-    | 'scheduler'
-    | 'vae'
-    | 'upscale'
-    | 'controlnet'
-    | 'tag',
-  value: string,
-  it: ImageItem,
-): boolean {
+/** 查询字段种类（C1；has / num 单列）：matchConditions 对每条目每拍遍历，
+ * 常量提升到模块级避免热路径上每次调用重新分配数组 */
+const QUERY_KINDS = [
+  'terms',
+  'model',
+  'lora',
+  'seed',
+  'path',
+  'date',
+  'pos',
+  'neg',
+  'sampler',
+  'scheduler',
+  'vae',
+  'upscale',
+  'controlnet',
+  'tag',
+] as const
+type QueryKind = (typeof QUERY_KINDS)[number]
+
+function hitCondition(kind: QueryKind, value: string, it: ImageItem): boolean {
   switch (kind) {
     case 'terms':
       return searchTextField(it).includes(value)
@@ -1208,7 +1248,7 @@ function hitCondition(
     case 'controlnet':
       return (it.params?.controlNets ?? []).some((v) => v.toLowerCase().includes(value))
     case 'tag':
-      return hitTagKey(recordKey(it), value)
+      return hitTagKey(recordKeyOf(it), value)
   }
 }
 
@@ -1228,7 +1268,7 @@ function hitHas(field: HasField, it: ImageItem): boolean {
     case 'controlnet':
       return p.controlNets.length > 0
     case 'tag':
-      return hitTagKey(recordKey(it), null)
+      return hitTagKey(recordKeyOf(it), null)
   }
 }
 
@@ -1272,22 +1312,7 @@ function hitNum(cond: NumCondition, it: ImageItem): boolean {
 }
 
 function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of [
-    'terms',
-    'model',
-    'lora',
-    'seed',
-    'path',
-    'date',
-    'pos',
-    'neg',
-    'sampler',
-    'scheduler',
-    'vae',
-    'upscale',
-    'controlnet',
-    'tag',
-  ] as const) {
+  for (const kind of QUERY_KINDS) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
     }
@@ -1373,22 +1398,7 @@ export function parseQuery(raw: string): ParsedQuery {
             const hf = HAS_FIELDS[value.toLowerCase()]
             if (hf) bucket.has.push(hf)
           } else {
-            bucket[
-              field as
-                | 'model'
-                | 'lora'
-                | 'seed'
-                | 'path'
-                | 'date'
-                | 'pos'
-                | 'neg'
-                | 'sampler'
-                | 'scheduler'
-                | 'vae'
-                | 'upscale'
-                | 'controlnet'
-                | 'tag'
-            ].push(value.toLowerCase())
+            bucket[field as Exclude<QueryKind, 'terms'>].push(value.toLowerCase())
           }
         }
       }
@@ -1399,9 +1409,23 @@ export function parseQuery(raw: string): ParsedQuery {
   return out
 }
 
+// 解析结果按搜索串缓存（C1）：filteredItems 每拍失效（扫描期间约 200ms 一次）都会
+// 重跑 tokenize + 正则，搜索串未变时直接复用；调用方只读桶内容，共享安全
+const queryCache = new Map<string, ParsedQuery>()
+
+function cachedParseQuery(q: string): ParsedQuery {
+  let parsed = queryCache.get(q)
+  if (!parsed) {
+    parsed = parseQuery(q)
+    if (queryCache.size >= 32) queryCache.clear() // 简单防膨胀：历史搜索串快速淘汰
+    queryCache.set(q, parsed)
+  }
+  return parsed
+}
+
 export const filteredItems = computed(() => {
   const q = state.search.trim().toLowerCase()
-  const query = q ? parseQuery(q) : null
+  const query = q ? cachedParseQuery(q) : null
   return state.items
     .filter((it) => {
       // 解析失败的项不受搜索 / 模型筛选影响，由来源筛选统一控制可见性
@@ -1417,7 +1441,7 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (state.dupeOnly && !sameSourceIds.value.has(it.id)) return false
-      if (state.favOnly && !favKeys.has(recordKey(it))) return false
+      if (state.favOnly && !favKeys.has(recordKeyOf(it))) return false
       if (query && !matchQuery(it, query)) return false
       return true
     })
@@ -1600,19 +1624,19 @@ function persistFavorites() {
 /** 收藏标记表（itemId → 是否已收藏）：computed 一次算全量，卡片与详情抽屉共用 */
 export const favoriteFlags = computed(() => {
   const flags = new Map<string, boolean>()
-  for (const it of state.items) flags.set(it.id, favKeys.has(recordKey(it)))
+  for (const it of state.items) flags.set(it.id, favKeys.has(recordKeyOf(it)))
   return flags
 })
 
 /** 当前列表内已收藏条数（驱动「只看收藏」开关的显隐） */
 export const favCount = computed(() => {
   let n = 0
-  for (const it of state.items) if (favKeys.has(recordKey(it))) n++
+  for (const it of state.items) if (favKeys.has(recordKeyOf(it))) n++
   return n
 })
 
 export function toggleFavorite(item: ImageItem) {
-  const key = recordKey(item)
+  const key = recordKeyOf(item)
   if (favKeys.has(key)) favKeys.delete(key)
   else favKeys.add(key)
   persistFavorites()
@@ -1625,7 +1649,7 @@ export function toggleFavorite(item: ImageItem) {
 export function setItemsFavorite(items: ImageItem[], faved: boolean) {
   let changed = false
   for (const it of items) {
-    const key = recordKey(it)
+    const key = recordKeyOf(it)
     if (faved ? !favKeys.has(key) : favKeys.has(key)) {
       if (faved) favKeys.add(key)
       else favKeys.delete(key)
@@ -1672,26 +1696,29 @@ function persistTags() {
 export const tagLists = computed(() => {
   const m = new Map<string, string[]>()
   for (const it of state.items) {
-    const tags = itemTags[recordKey(it)]
+    const tags = itemTags[recordKeyOf(it)]
     if (tags?.length) m.set(it.id, tags)
   }
   return m
 })
 
-/** 全库出现过的标签名（按使用频次降序）：详情页添加标签的候选建议 */
-export const allTagNames = computed(() => {
+/** 全库标签频次（名称 → 打标条目数，按频次降序）：标签面板与打标建议共用 */
+export const tagCounts = computed(() => {
   const freq = new Map<string, number>()
   for (const tags of Object.values(itemTags)) {
     for (const t of tags) freq.set(t, (freq.get(t) ?? 0) + 1)
   }
-  return Array.from(freq, ([name]) => name).sort(
-    (a, b) => freq.get(b)! - freq.get(a)! || nameCollator.compare(a, b),
+  return Array.from(freq, ([name, count]) => ({ name, count })).sort(
+    (a, b) => b.count - a.count || nameCollator.compare(a.name, b.name),
   )
 })
 
+/** 全库出现过的标签名（按使用频次降序）：详情页添加标签的候选建议 */
+export const allTagNames = computed(() => tagCounts.value.map((t) => t.name))
+
 /** 切换单个标签：加 / 移除并落盘，返回切换后是否带上该标签 */
 export function toggleItemTag(item: ImageItem, tag: string): boolean {
-  const key = recordKey(item)
+  const key = recordKeyOf(item)
   const list = itemTags[key] ?? []
   const i = list.indexOf(tag)
   if (i >= 0) {
@@ -1713,6 +1740,66 @@ function hitTagKey(key: string, tag: string | null): boolean {
   if (!tags?.length) return false
   if (tag === null) return true
   return tags.some((t) => t.toLowerCase().includes(tag))
+}
+
+/**
+ * 批量打标 / 移除标签（F1，幂等）：与单张标签同账本（按指纹跨会话记忆，
+ * 清空列表 / 移除条目不动账），返回实际变更的条目数。
+ */
+export function setItemsTag(items: ImageItem[], tag: string, on: boolean): number {
+  const name = tag.trim()
+  if (!name) return 0
+  let changed = 0
+  for (const it of items) {
+    const key = recordKeyOf(it)
+    const list = itemTags[key] ?? []
+    const i = list.indexOf(name)
+    if (on && i < 0) {
+      list.push(name)
+      itemTags[key] = list
+      changed++
+    } else if (!on && i >= 0) {
+      list.splice(i, 1)
+      if (list.length) itemTags[key] = list
+      else delete itemTags[key]
+      changed++
+    }
+  }
+  if (changed) persistTags()
+  return changed
+}
+
+/** 全库重命名标签（F1）：所有条目上的旧名替换为新名（重名去重），返回涉及条目数 */
+export function renameTag(from: string, to: string): number {
+  const oldName = from.trim()
+  const newName = to.trim()
+  if (!oldName || !newName || oldName === newName) return 0
+  let n = 0
+  for (const [key, list] of Object.entries(itemTags)) {
+    if (!list.includes(oldName)) continue
+    const next = list.filter((t) => t !== oldName)
+    if (!next.includes(newName)) next.push(newName)
+    itemTags[key] = next
+    n++
+  }
+  persistTags()
+  return n
+}
+
+/** 全库删除标签（F1）：所有条目上的该标签一并移除，返回涉及条目数 */
+export function removeTagEverywhere(tag: string): number {
+  const name = tag.trim()
+  if (!name) return 0
+  let n = 0
+  for (const [key, list] of Object.entries(itemTags)) {
+    if (!list.includes(name)) continue
+    const next = list.filter((t) => t !== name)
+    if (next.length) itemTags[key] = next
+    else delete itemTags[key]
+    n++
+  }
+  persistTags()
+  return n
 }
 
 export function toggleDark() {

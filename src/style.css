@@ -228,6 +228,11 @@ body {
     transform 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease;
+}
+
+/* 入场动画由 App 在首屏挂 .anim 门控（A6）：虚拟滚动随滚动不断挂载新卡片，
+ * 若每次挂载都重播会全程闪烁；首次滚动后移除 .anim，后续挂载直接呈现 */
+.grid.anim .card {
   animation: card-in 0.4s ease backwards;
   animation-delay: calc(min(var(--i, 0), 14) * 26ms);
 }
@@ -1610,4 +1615,60 @@ body {
 .zoom-close:hover {
   background: var(--panel);
   color: var(--text);
+}
+
+/* ---------- 批量打标 Popover（F1）与统计抽屉标签管理行 ---------- */
+.batch-tag-pop {
+  width: 240px;
+  font-size: 12px;
+}
+
+.batch-tag-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.batch-tag-actions .n-button {
+  flex: 1;
+}
+
+.tag-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.tag-row .stat-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.tag-act {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.tag-row:hover .tag-act,
+.tag-act:focus-visible {
+  opacity: 1;
+}
+
+.tag-act:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }

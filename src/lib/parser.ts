@@ -22,9 +22,18 @@ export interface ParseTransport {
 /**
  * 单任务超时：健康探测通过后 Worker 仍可能静默挂起（部分 file:// 环境、安全软件拦截等），
  * 不设上限会让任务永久 pending、卡片永远停在「解析中」且无法重试。
- * 大文件逐级补扫 + JSON 解析的合法耗时远低于该值，超时即判定通道失效，走 BROKEN 整体回退。
+ * 超时随文件大小自适应（B3）：基础值覆盖常规元数据读取，大文件在慢速介质（U 盘 / 机械盘）
+ * 上的头部逐级补读与 WebP 尾部补扫可能远超基础值——一次慢 IO 不应触发「通道失效 → 整池降级」。
  */
 export const JOB_TIMEOUT_MS = 30_000
+const TIMEOUT_MS_PER_MB = 500
+const TIMEOUT_EXTRA_CAP_MS = 90_000
+
+export function jobTimeoutFor(size: number, baseMs = JOB_TIMEOUT_MS): number {
+  return (
+    baseMs + Math.min(TIMEOUT_EXTRA_CAP_MS, Math.floor((size / (1024 * 1024)) * TIMEOUT_MS_PER_MB))
+  )
+}
 
 interface Job {
   resolve: (r: ParseResult) => void
@@ -64,11 +73,14 @@ export class WorkerEntry implements ParseTransport {
     const id = ++this.seq
     return new Promise((resolve, reject) => {
       // 探测通过后仍可能静默挂起（不再回包）：超时判定通道失效，走 BROKEN 整体回退主线程
-      const timer = setTimeout(() => {
-        this.jobs.delete(id)
-        this.fail()
-        reject(BROKEN)
-      }, this.jobTimeoutMs)
+      const timer = setTimeout(
+        () => {
+          this.jobs.delete(id)
+          this.fail()
+          reject(BROKEN)
+        },
+        jobTimeoutFor(file.size, this.jobTimeoutMs),
+      )
       this.jobs.set(id, { resolve, reject, timer })
       this.worker.postMessage({ id, file } satisfies ParseWorkerRequest)
     })
@@ -140,34 +152,73 @@ export class ParsePool {
   }
 }
 
-/** 回退编排：池可用走池（单次失效即永久降级），否则主线程兜底 */
+/** 主线程兜底：与 Worker 内完全相同的解析流程；与池路径同一出口做 interning，
+ * 回退主线程后长文本内容寻址去重不失效（B3） */
+async function parseOnMainThread(file: File): Promise<ParseResult> {
+  const raw = await readImageMetadata(file)
+  return internParseResult({ raw, params: extractParams(raw) })
+}
+
+/**
+ * 回退编排（B3）：池可用走池。Worker 中途失效不再「一次即永久降级」——
+ * 先终止失效池、重建并重试同一文件，连续失效达上限才永久回退主线程；
+ * 一次慢 IO / 单 Worker 崩溃不再让整个会话静默失去 Worker、万级扫描突然压垮 UI。
+ * 池创建失败同样计入连续失败（构造失败重试廉价，探测超时环境最多多等几次探测）。
+ */
 export class ParseScheduler {
   private poolPromise: Promise<ParsePool | null> | null = null
+  private poolFailures = 0
+  private permanentFallback = false
 
-  constructor(private createPool: () => Promise<ParsePool | null>) {}
+  constructor(
+    private createPool: () => Promise<ParsePool | null>,
+    private maxPoolFailures = 3,
+  ) {}
+
+  /** 是否仍在使用 Worker 池：主线程回退时调用方据此收敛解析并发，避免压死 UI */
+  get usingWorkers(): boolean {
+    return !this.permanentFallback
+  }
 
   parse(file: File): Promise<ParseResult> {
+    if (this.permanentFallback) return parseOnMainThread(file)
     if (this.poolPromise === null) this.poolPromise = this.createPool()
     return this.poolPromise.then((pool) => {
-      if (!pool) return parseOnMainThread(file)
+      if (!pool) {
+        this.poolPromise = null // 未达上限前下次解析重试建池
+        if (++this.poolFailures >= this.maxPoolFailures) this.permanentFallback = true
+        return parseOnMainThread(file)
+      }
       return pool
         .parse(file)
         .then(internParseResult)
+        .then((result) => {
+          this.poolFailures = 0 // 成功即重置连续失败计数
+          return result
+        })
         .catch((err) => {
           if (err !== BROKEN) throw err
-          // Worker 中途失效：终止并永久回退主线程
           pool.dispose()
-          this.poolPromise = Promise.resolve(null)
-          return parseOnMainThread(file)
+          this.poolPromise = null
+          if (++this.poolFailures >= this.maxPoolFailures) {
+            this.permanentFallback = true
+            return parseOnMainThread(file)
+          }
+          return this.parse(file) // 重建池并重试同一文件
         })
     })
   }
 }
 
-/** 主线程兜底：与 Worker 内完全相同的解析流程 */
-async function parseOnMainThread(file: File): Promise<ParseResult> {
-  const raw = await readImageMetadata(file)
-  return { raw, params: extractParams(raw) }
+const scheduler = new ParseScheduler(createDefaultPool)
+
+export function parseImage(file: File): Promise<ParseResult> {
+  return scheduler.parse(file)
+}
+
+/** 主线程回退并发收敛（B3）：store 的入队闸门据此把并发降到不卡 UI 的水平 */
+export function usingWorkers(): boolean {
+  return scheduler.usingWorkers
 }
 
 async function createDefaultPool(): Promise<ParsePool | null> {
@@ -179,10 +230,4 @@ async function createDefaultPool(): Promise<ParsePool | null> {
   } catch {
     return null
   }
-}
-
-const scheduler = new ParseScheduler(createDefaultPool)
-
-export function parseImage(file: File): Promise<ParseResult> {
-  return scheduler.parse(file)
 }

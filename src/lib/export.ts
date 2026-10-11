@@ -109,30 +109,39 @@ export async function exportItems(
     return
   }
   const stamp = new Date().toISOString().slice(0, 10)
-  if (format === 'csv')
-    downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-  else if (format === 'zip') {
-    const zip = await buildWorkflowZip(items)
-    if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
-  } else if (format === 'images' || format === 'dataset') {
-    // 原图打包只算实文件项（存档项无原图本体，参数文件无图片）；全被跳过时明确告知
-    const packable = items.filter((i) => i.file && !i.metaOnly)
-    if (!packable.length) {
-      message.warning(t('msg.noImageFiles'))
+  // ZIP 容量超限（B5）：可预期的用户级错误以消息提示，不作为异常冒泡
+  try {
+    if (format === 'csv')
+      downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+    else if (format === 'zip') {
+      const zip = await buildWorkflowZip(items)
+      if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
+    } else if (format === 'images' || format === 'dataset') {
+      // 原图打包只算实文件项（存档项无原图本体，参数文件无图片）；全被跳过时明确告知
+      const packable = items.filter((i) => i.file && !i.metaOnly)
+      if (!packable.length) {
+        message.warning(t('msg.noImageFiles'))
+        return
+      }
+      const zip =
+        format === 'dataset' ? await buildDatasetZip(packable) : await buildImagesZip(packable)
+      if (!zip) {
+        message.warning(t('msg.noImageFiles'))
+        return
+      }
+      const kind = format === 'dataset' ? 'dataset' : 'images'
+      downloadBinary(`${filenameBase}-${kind}-${stamp}.zip`, zip)
+      message.success(t('common.exportedItems', { n: packable.length }))
+      return
+    } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
+    message.success(t('common.exportedItems', { n: items.length }))
+  } catch (err) {
+    if (err instanceof ZipCapacityError) {
+      message.warning(err.message)
       return
     }
-    const zip =
-      format === 'dataset' ? await buildDatasetZip(packable) : await buildImagesZip(packable)
-    if (!zip) {
-      message.warning(t('msg.noImageFiles'))
-      return
-    }
-    const kind = format === 'dataset' ? 'dataset' : 'images'
-    downloadBinary(`${filenameBase}-${kind}-${stamp}.zip`, zip)
-    message.success(t('common.exportedItems', { n: packable.length }))
-    return
-  } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
-  message.success(t('common.exportedItems', { n: items.length }))
+    throw err
+  }
 }
 
 export interface StatsSection {
@@ -266,6 +275,16 @@ export function buildExportCsv(items: ImageItem[]): string {
 
 /* ---------- 工作流打包（无依赖 ZIP：store 模式不压缩，UTF-8 文件名） ---------- */
 
+/** B5：本实现无 ZIP64——条目数写入 16 位、偏移 / 大小写入 32 位，超限不会报错
+ * 而是静默产出损坏文件；导出前显式拒绝并给出可读原因 */
+export class ZipCapacityError extends Error {}
+
+function assertZipCapacity(count: number, centralOffset: number, centralSize = 0): void {
+  if (count > 0xffff) throw new ZipCapacityError(t('export.zipTooManyEntries', { n: count }))
+  if (centralOffset > 0xffffffff || centralSize > 0xffffffff)
+    throw new ZipCapacityError(t('export.zipTooLarge'))
+}
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256)
   for (let n = 0; n < 256; n++) {
@@ -352,6 +371,7 @@ async function buildZip(entries: ZipEntry[]): Promise<Blob> {
     offset += local.length + size
   }
   const centralSize = centralParts.reduce((n, c) => n + c.length, 0)
+  assertZipCapacity(entries.length, offset, centralSize)
   const eocd = new Uint8Array(22)
   const ev = new DataView(eocd.buffer)
   ev.setUint32(0, 0x06054b50, true)
@@ -430,6 +450,11 @@ async function streamCrc32(blob: Blob): Promise<number> {
 export async function buildImagesZip(items: ImageItem[]): Promise<Blob | null> {
   const files = items.filter((it) => it.file && !it.metaOnly)
   if (!files.length) return null
+  // 容量校验前置（B5）：流式 CRC 要完整读一遍每个文件，超限不应在算完全部 CRC 后才失败
+  assertZipCapacity(
+    files.length,
+    files.reduce((n, it) => n + (it.file?.size ?? 0), 0),
+  )
   const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   const used = new Set<string>()
   const entries: ZipEntry[] = []
@@ -456,6 +481,11 @@ export async function buildImagesZip(items: ImageItem[]): Promise<Blob | null> {
 export async function buildDatasetZip(items: ImageItem[]): Promise<Blob | null> {
   const files = items.filter((it) => it.file && !it.metaOnly)
   if (!files.length) return null
+  // 容量校验前置（B5）：每张图产出原图 + 标注两个条目
+  assertZipCapacity(
+    files.length * 2,
+    files.reduce((n, it) => n + (it.file?.size ?? 0), 0),
+  )
   const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   const encoder = new TextEncoder()
   const used = new Set<string>()

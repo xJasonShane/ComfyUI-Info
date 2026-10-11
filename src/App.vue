@@ -27,11 +27,13 @@ function appMessage(): MessageApi {
 <script setup lang="ts">
 import { computed, ref, watchEffect, watch, onMounted, onBeforeUnmount } from 'vue'
 import {
+  NAutoComplete,
   NButton,
   NConfigProvider,
   NDropdown,
   NMessageProvider,
   NPopconfirm,
+  NPopover,
   darkTheme,
   dateEnUS,
   dateZhCN,
@@ -55,8 +57,10 @@ import {
   removeItems,
   retryAllFailed,
   setItemsFavorite,
+  setItemsTag,
   stats,
   store,
+  tagCounts,
   toggleFavorite,
 } from './composables/store'
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
@@ -100,6 +104,12 @@ const galleryRef = ref<HTMLElement | null>(null)
 const galleryWidth = ref(0)
 /** 画廊顶边滚出视口的像素数（未滚到为负，钳到 0 参与 row 计算） */
 const viewTop = ref(0)
+// 视口高度建成响应式（A5）：endRow 的 computed 依赖它，窗口仅垂直方向变化时
+// 也立刻扩展渲染窗口，而不是等到用户滚动才自愈
+const winH = ref(window.innerHeight)
+// 入场动画只在首屏播一次（A6）：虚拟滚动窗口切片随滚动不断挂载新卡片，
+// 每次挂载都播 0.4s 动画会让快速滚动全程闪烁；首次滚动后即关闭
+const animateCards = ref(true)
 
 const cols = computed(() =>
   Math.max(1, Math.floor((galleryWidth.value + GRID_GAP) / (GRID_MIN.value + GRID_GAP))),
@@ -117,7 +127,7 @@ const startRow = computed(() =>
 const endRow = computed(() =>
   Math.min(
     totalRows.value,
-    Math.ceil((Math.max(0, viewTop.value) + window.innerHeight) / rowH.value) + OVERSCAN_ROWS,
+    Math.ceil((Math.max(0, viewTop.value) + winH.value) / rowH.value) + OVERSCAN_ROWS,
   ),
 )
 // 首帧未量得尺寸时先渲染一小页，量到后立即进入窗口化
@@ -144,6 +154,8 @@ function onWinScroll() {
   if (scrollRaf) return
   scrollRaf = requestAnimationFrame(() => {
     scrollRaf = 0
+    winH.value = window.innerHeight
+    if (animateCards.value) animateCards.value = false
     updateViewTop()
   })
 }
@@ -171,6 +183,19 @@ onBeforeUnmount(() => {
 watch(
   () => [store.items.length, filteredItems.value.length, store.sourceFilter, store.sortMode],
   () => updateViewTop(),
+)
+// 搜索 / 筛选 / 排序 / 看法切换：结果集语义变化即回顶（A8）——
+// 滚在万级列表深处改筛选，视口停在新结果中部极易误以为「没搜到」
+watch(
+  () => [
+    store.search,
+    store.modelFilter,
+    store.sourceFilter,
+    store.sortMode,
+    store.favOnly,
+    store.dupeOnly,
+  ],
+  () => window.scrollTo({ top: 0 }),
 )
 
 // 被“来源 / 搜索 / 模型”筛选挡住的已解析图片数量（用于空状态引导）
@@ -201,18 +226,20 @@ function showAll() {
 }
 
 /* ---------- 标签页标题：多开页签对照时一眼看出规模与筛选命中 ---------- */
-const BASE_TITLE = document.title || 'ComfyUI·Info'
+// 标题与 <html lang> 随界面语言走（A9）：index.html 的静态中文只在首帧存在
 watchEffect(() => {
+  document.documentElement.lang = locale.value === 'zh' ? 'zh-CN' : 'en'
+})
+watchEffect(() => {
+  const base = t('app.title')
   const total = store.items.length
   if (!total) {
-    document.title = BASE_TITLE
+    document.title = base
     return
   }
   const shown = filteredItems.value.length
   document.title =
-    filtersActive.value && shown !== total
-      ? `(${shown}/${total}) ${BASE_TITLE}`
-      : `(${total}) ${BASE_TITLE}`
+    filtersActive.value && shown !== total ? `(${shown}/${total}) ${base}` : `(${total}) ${base}`
 })
 
 /* ---------- 详情 ---------- */
@@ -234,10 +261,16 @@ watch(randomPickRequest, () => {
 function navDetail(dir: 1 | -1) {
   if (!current.value) return
   const list = filteredItems.value
+  if (!list.length) return
   const idx = list.findIndex((i) => i.id === current.value!.id)
+  // 当前图被新筛选筛掉（如详情页一键套用筛选后 idx<0）：落到新筛选结果首张，导航不断链（A4）
+  if (idx < 0) {
+    current.value = list[0]!
+    return
+  }
   const next = idx + dir
-  if (idx < 0 || next < 0 || next >= list.length) return
-  current.value = list[next]
+  if (next < 0 || next >= list.length) return
+  current.value = list[next]!
 }
 /** 移除后清场：URL 已随 removeItem 回收，仍打开的抽屉只会渲染裂图残影 */
 function closeDetailIfRemoved(gone: ReadonlySet<ImageItem>) {
@@ -394,6 +427,31 @@ const allSelectedFaved = computed(
 
 function batchSetFavorite() {
   setItemsFavorite(selectedItems.value, !allSelectedFaved.value)
+}
+
+/* ---------- 批量打标（F1）：与详情页标签编辑同一账本（按指纹跨会话记忆） ---------- */
+const batchTagInput = ref('')
+
+/** 输入建议：全库标签按频次排，前缀 / 子串命中过滤（与详情页建议同一数据源） */
+const batchTagSuggestions = computed(() => {
+  const q = batchTagInput.value.trim().toLowerCase()
+  return tagCounts.value
+    .filter((tg) => !q || tg.name.toLowerCase().includes(q))
+    .slice(0, 8)
+    .map((tg) => ({ label: tg.name, value: tg.name }))
+})
+
+function batchTag(on: boolean) {
+  const tag = batchTagInput.value.trim()
+  if (!tag || !selectedItems.value.length) return
+  const n = setItemsTag(selectedItems.value, tag, on)
+  if (n > 0) {
+    if (on) appMessage().success(t('msg.tagApplied', { n, name: tag }))
+    else appMessage().success(t('msg.tagRemoved', { n, name: tag }))
+    batchTagInput.value = ''
+  } else {
+    appMessage().info(t('msg.tagNoChange'))
+  }
 }
 
 function openCompare() {
@@ -636,7 +694,7 @@ async function onDrop(e: DragEvent) {
         <main ref="galleryRef" class="gallery" :style="{ '--card-min': `${store.thumbSize}px` }">
           <template v-if="filteredItems.length">
             <div :style="{ height: topPad + 'px' }" aria-hidden="true" />
-            <div class="grid" :class="{ selecting: selectedItems.length > 0 }">
+            <div class="grid" :class="{ selecting: selectedItems.length > 0, anim: animateCards }">
               <ImageCard
                 v-for="(it, idx) in visibleItems"
                 :key="it.id"
@@ -660,7 +718,12 @@ async function onDrop(e: DragEvent) {
           />
         </main>
 
-        <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
+        <div
+          v-if="selectedItems.length"
+          class="select-bar"
+          role="toolbar"
+          :aria-label="t('bar.toolbarAria')"
+        >
           <span class="sel-count" v-html="t('bar.selected', { n: selectedItems.length })" />
           <NButton size="tiny" secondary @click="selectAllFiltered">{{
             t('bar.selectAllFiltered')
@@ -684,6 +747,38 @@ async function onDrop(e: DragEvent) {
           <NButton size="tiny" secondary @click="batchSetFavorite">{{
             allSelectedFaved ? t('bar.unfavSelected') : t('bar.favSelected')
           }}</NButton>
+          <NPopover trigger="click" placement="top" :style="{ maxWidth: '280px' }">
+            <template #trigger>
+              <NButton size="tiny" secondary>
+                <template #icon><Icon name="tag" :size="12" /></template>
+                {{ t('bar.tagSelected') }}
+              </NButton>
+            </template>
+            <div class="batch-tag-pop">
+              <NAutoComplete
+                v-model:value="batchTagInput"
+                size="small"
+                :options="batchTagSuggestions"
+                :placeholder="t('bar.tagPlaceholder')"
+                :get-show="() => batchTagSuggestions.length > 0"
+                blur-after-select
+                @select="batchTag(true)"
+                @keyup.enter="batchTag(true)"
+              />
+              <div class="batch-tag-actions">
+                <NButton size="tiny" secondary @click="batchTag(true)">{{
+                  t('bar.tagApply')
+                }}</NButton>
+                <NButton
+                  size="tiny"
+                  secondary
+                  :disabled="!batchTagInput.trim()"
+                  @click="batchTag(false)"
+                  >{{ t('bar.tagRemoveFromSelected') }}</NButton
+                >
+              </div>
+            </div>
+          </NPopover>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
             <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">{{
               t('bar.exportSelected')

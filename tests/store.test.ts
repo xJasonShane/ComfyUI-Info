@@ -14,6 +14,8 @@ vi.mock('../src/lib/metadata', () => ({
 }))
 vi.mock('../src/lib/parser', () => ({
   parseImage: vi.fn(),
+  // 单测默认池模式；主线程回退并发收敛（B3）不在此覆盖
+  usingWorkers: () => true,
 }))
 // 持久化 mock 为「探测可用」：让 markDirty → flush → 写库链路真实运转，以便断言写库行为
 vi.mock('../src/lib/persist', async (importOriginal) => {
@@ -2012,4 +2014,76 @@ it('seed 范围比较兼容前导零写法（按数值位数而非原始位数�
   expect(names('seed:>009')).toEqual(['a.png'])
   expect(names('seed:>7')).toEqual(['a.png', 'b.png'])
   api.store.search = ''
+})
+
+describe('标签管理（F1）', () => {
+  it('批量打标 / 移除：幂等、返回实际变更数、tag: 搜索可命中', async () => {
+    vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+    api.addFiles([file('a.png'), file('b.png'), file('c.png')])
+    await flush()
+    const items = [...api.store.items]
+    expect(api.setItemsTag(items, '精选', true)).toBe(3)
+    expect(api.setItemsTag(items, '精选', true)).toBe(0) // 已是目标状态：幂等零变更
+    // 账本跨用例共享（localStorage 存根持久），按标签名定位而非全表比对
+    expect(api.tagCounts.value.find((tg) => tg.name === '精选')?.count).toBe(3)
+
+    expect(api.setItemsTag([items[0]!], '精选', false)).toBe(1)
+    expect(api.tagLists.value.get(items[0]!.id)).toBeUndefined()
+    expect(api.tagLists.value.get(items[1]!.id)).toEqual(['精选'])
+    expect(api.setItemsTag(items, '  ', true)).toBe(0) // 空白标签忽略
+
+    api.store.search = 'tag:精选'
+    expect(api.filteredItems.value.length).toBe(2)
+    api.store.search = ''
+  })
+
+  it('全库重命名（重名去重）与全库删除', async () => {
+    vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+    api.addFiles([file('a.png'), file('b.png')])
+    await flush()
+    const [a, b] = api.store.items
+    api.toggleItemTag(a!, '旧名')
+    api.toggleItemTag(a!, '保留')
+    api.toggleItemTag(b!, '旧名')
+
+    expect(api.renameTag('旧名', '新名')).toBe(2)
+    expect(api.tagLists.value.get(a!.id)).toEqual(['保留', '新名'])
+    expect(api.renameTag('旧名', '新名')).toBe(0) // 已无此标签
+    expect(api.renameTag('新名', ' 新名 ')).toBe(0) // 与自身同名（trim 后）：忽略
+
+    api.toggleItemTag(b!, '重复')
+    api.renameTag('重复', '新名') // 目标标签已在该条目上：去重不重复
+    expect(api.tagLists.value.get(b!.id)).toEqual(['新名'])
+
+    expect(api.removeTagEverywhere('新名')).toBe(2)
+    expect(api.tagCounts.value.some((tg) => tg.name === '新名')).toBe(false)
+  })
+})
+
+it('全部重扫（F3）：顺序扫每个书签并汇总新增，无权限目录单独计数', async () => {
+  const fsMod = await import('../src/lib/fs')
+  api.clearAllDirBookmarks() // 隔离此前用例遗留的书签
+  try {
+    const calls: string[] = []
+    vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async (handle, onBatch) => {
+      calls.push(handle.name)
+      if (handle.name === 'out2') onBatch([{ file: new File(['x'], 'n.png', { lastModified: 3 }) }])
+      return handle.name === 'out2' ? 1 : 0
+    })
+    vi.mocked(fsMod.ensureReadPermission).mockImplementation(async (h) => h.name !== 'out3')
+
+    await api.setRescanHandle({ name: 'out1' } as unknown as FileSystemDirectoryHandle)
+    await api.setRescanHandle({ name: 'out2' } as unknown as FileSystemDirectoryHandle)
+    await api.setRescanHandle({ name: 'out3' } as unknown as FileSystemDirectoryHandle)
+
+    const { added, failed } = await api.rescanAllDirectories()
+    // out3 无权限：ensureReadPermission 拦下，collectDirectoryFiles 不会被调用
+    expect(calls).toEqual(['out1', 'out2'])
+    expect(added).toBe(1)
+    expect(failed).toBe(1)
+  } finally {
+    api.clearAllDirBookmarks()
+    vi.mocked(fsMod.collectDirectoryFiles).mockReset()
+    vi.mocked(fsMod.ensureReadPermission).mockReset()
+  }
 })
