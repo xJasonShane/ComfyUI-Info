@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildDatasetZip,
   buildExportCsv,
   buildExportJson,
   buildImagesZip,
@@ -288,6 +289,76 @@ describe('buildImagesZip', () => {
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
     expect(dv.getUint32(14, true)).toBe(0x3610a686 >>> 0)
+  })
+})
+
+describe('buildDatasetZip', () => {
+  it('原图 + 同名 .txt 标注（正向提示词），按相对路径成对打包', async () => {
+    const blob = await buildDatasetZip([
+      makeItem({
+        params,
+        path: 'sets/v1/a.png',
+        file: new File([new Uint8Array([1, 2, 3])], 'a.png'),
+      }),
+    ])!
+    expect(blob.type).toBe('application/zip')
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+    expect(dv.getUint32(0, true)).toBe(0x04034b50)
+    const nameLen = dv.getUint16(26, true)
+    const size = dv.getUint32(18, true)
+    expect(new TextDecoder().decode(zip.subarray(30, 30 + nameLen))).toBe('sets/v1/a.png')
+    expect(size).toBe(3)
+    // 第二条目是同名 .txt 标注，内容为正向提示词
+    const second = 30 + nameLen + size
+    const name2Len = dv.getUint16(second + 26, true)
+    const size2 = dv.getUint32(second + 18, true)
+    expect(new TextDecoder().decode(zip.subarray(second + 30, second + 30 + name2Len))).toBe(
+      'sets/v1/a.txt',
+    )
+    expect(
+      new TextDecoder().decode(
+        zip.subarray(second + 30 + name2Len, second + 30 + name2Len + size2),
+      ),
+    ).toBe('masterpiece, a cat')
+    expect(dv_entryCount(zip)).toBe(2)
+    expect(await buildDatasetZip([])).toBeNull()
+  })
+
+  it('同名冲突：标注名跟随图片的去重序号，不串对', async () => {
+    const blob = await buildDatasetZip([
+      makeItem({ name: 'a.png', params, file: new File([new Uint8Array([1])], 'a.png') }),
+      makeItem({ name: 'a.png', file: new File([new Uint8Array([2])], 'a.png') }),
+    ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const text = new TextDecoder().decode(zip)
+    expect(text).toContain('a.txt')
+    expect(text).toContain('a (2).png')
+    expect(text).toContain('a (2).txt')
+    expect(dv_entryCount(zip)).toBe(4)
+  })
+
+  it('无参数 / 无正向提示词的图片给空标注占位', async () => {
+    const blob = await buildDatasetZip([
+      makeItem({ name: 'b.png', file: new File([new Uint8Array([9])], 'b.png') }),
+      makeItem({
+        name: 'c.png',
+        params: { ...params, positive: ['', '  '] },
+        file: new File([new Uint8Array([8])], 'c.png'),
+      }),
+    ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+    // b.png 的标注 b.txt 是第二条目，内容为空（大小 0）
+    const nameLen = dv.getUint16(26, true)
+    const second = 30 + nameLen + dv.getUint32(18, true)
+    expect(
+      new TextDecoder().decode(
+        zip.subarray(second + 30, second + 30 + dv.getUint16(second + 26, true)),
+      ),
+    ).toBe('b.txt')
+    expect(dv.getUint32(second + 18, true)).toBe(0)
+    expect(dv_entryCount(zip)).toBe(4)
   })
 })
 

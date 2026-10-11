@@ -88,6 +88,7 @@ export const exportOptions = computed(() => [
   { label: t('export.csv'), key: 'csv' },
   { label: t('export.zip'), key: 'zip' },
   { label: t('export.imagesZip'), key: 'images' },
+  { label: t('export.datasetZip'), key: 'dataset' },
 ])
 
 /**
@@ -113,15 +114,21 @@ export async function exportItems(
   else if (format === 'zip') {
     const zip = await buildWorkflowZip(items)
     if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
-  } else if (format === 'images') {
+  } else if (format === 'images' || format === 'dataset') {
     // 原图打包只算实文件项（存档项无原图本体，参数文件无图片）；全被跳过时明确告知
     const packable = items.filter((i) => i.file && !i.metaOnly)
-    const zip = packable.length ? await buildImagesZip(packable) : null
+    if (!packable.length) {
+      message.warning(t('msg.noImageFiles'))
+      return
+    }
+    const zip =
+      format === 'dataset' ? await buildDatasetZip(packable) : await buildImagesZip(packable)
     if (!zip) {
       message.warning(t('msg.noImageFiles'))
       return
     }
-    downloadBinary(`${filenameBase}-images-${stamp}.zip`, zip)
+    const kind = format === 'dataset' ? 'dataset' : 'images'
+    downloadBinary(`${filenameBase}-${kind}-${stamp}.zip`, zip)
     message.success(t('common.exportedItems', { n: packable.length }))
     return
   } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
@@ -436,6 +443,38 @@ export async function buildImagesZip(items: ImageItem[]): Promise<Blob | null> {
     used.add(name)
     const file = it.file!
     entries.push({ name, data: file, size: file.size, crc: await streamCrc32(file) })
+  }
+  return buildZip(entries)
+}
+
+/**
+ * 训练集打包（原图 + 同名 .txt 标注文件）：每张图附带一个正向提示词作 caption 的
+ * sidecar 文本，可直接投喂 kohya 等训练管线（无参数的图片给空标注占位，便于人工补写）。
+ * 标注名跟随其图片的去重名（同名冲突序号一致），目录结构与原图打包相同。
+ * 存档项 / 参数文件没有原图本体，由调用方先行过滤。
+ */
+export async function buildDatasetZip(items: ImageItem[]): Promise<Blob | null> {
+  const files = items.filter((it) => it.file && !it.metaOnly)
+  if (!files.length) return null
+  const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
+  const encoder = new TextEncoder()
+  const used = new Set<string>()
+  const entries: ZipEntry[] = []
+  for (const it of files) {
+    const rawName = safe(it.path ?? it.name)
+    let name = rawName
+    for (let n = 2; used.has(name); n++) {
+      const dot = rawName.lastIndexOf('.')
+      name = dot > 0 ? `${rawName.slice(0, dot)} (${n})${rawName.slice(dot)}` : `${rawName} (${n})`
+    }
+    used.add(name)
+    const file = it.file!
+    entries.push({ name, data: file, size: file.size, crc: await streamCrc32(file) })
+    // 标注 = 正向提示词（多行原样）；无参数 / 无提示词时空内容占位
+    const caption = (it.params?.positive ?? []).filter((s) => s.trim() !== '').join('\n')
+    const dot = name.lastIndexOf('.')
+    const stem = dot > 0 ? name.slice(0, dot) : name
+    entries.push({ name: `${stem}.txt`, data: encoder.encode(caption) })
   }
   return buildZip(entries)
 }

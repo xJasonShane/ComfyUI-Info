@@ -25,6 +25,7 @@ const zh = {
   'export.csv': '导出 CSV (Excel)',
   'export.zip': '导出工作流 (ZIP)',
   'export.imagesZip': '导出原图 (ZIP)',
+  'export.datasetZip': '导出训练集 (ZIP)',
 
   /* 来源与排序 */
   'src.comfyui': 'ComfyUI 原图',
@@ -325,6 +326,7 @@ const en: Record<DictKey, string> = {
   'export.csv': 'Export CSV (Excel)',
   'export.zip': 'Export workflows (ZIP)',
   'export.imagesZip': 'Export originals (ZIP)',
+  'export.datasetZip': 'Export dataset (ZIP)',
 
   'src.comfyui': 'ComfyUI originals',
   'src.a1111': 'A1111 / WebUI',
