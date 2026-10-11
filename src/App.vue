@@ -197,6 +197,21 @@ function showAll() {
   store.modelFilter = null
 }
 
+/* ---------- 标签页标题：多开页签对照时一眼看出规模与筛选命中 ---------- */
+const BASE_TITLE = document.title || 'ComfyUI·Info'
+watchEffect(() => {
+  const total = store.items.length
+  if (!total) {
+    document.title = BASE_TITLE
+    return
+  }
+  const shown = filteredItems.value.length
+  document.title =
+    filtersActive.value && shown !== total
+      ? `(${shown}/${total}) ${BASE_TITLE}`
+      : `(${total}) ${BASE_TITLE}`
+})
+
 /* ---------- 详情 ---------- */
 const current = ref<ImageItem | null>(null)
 const showDetail = ref(false)
