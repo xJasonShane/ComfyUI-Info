@@ -74,7 +74,19 @@ const sections = computed<DiffSection[]>(() => {
       rows: [
         mk('文件', a.path ?? a.name, b.path ?? b.name),
         mk('模型', pa?.models.length ? pa.models.join(' + ') : null, pb?.models.length ? pb.models.join(' + ') : null),
+        mk('VAE', pa?.vaes.length ? pa.vaes.join(' + ') : null, pb?.vaes.length ? pb.vaes.join(' + ') : null),
+        mk('Clip Skip', pa?.clipSkip != null ? String(pa.clipSkip) : null, pb?.clipSkip != null ? String(pb.clipSkip) : null),
         mk('出图尺寸', sizeText(pa), sizeText(pb)),
+        mk(
+          '放大模型',
+          pa?.upscalers.length ? pa.upscalers.join(' + ') : null,
+          pb?.upscalers.length ? pb.upscalers.join(' + ') : null,
+        ),
+        mk(
+          'ControlNet',
+          pa?.controlNets.length ? pa.controlNets.join(' + ') : null,
+          pb?.controlNets.length ? pb.controlNets.join(' + ') : null,
+        ),
         mk(
           '工作流节点',
           pa?.nodeCount ? `${pa.nodeCount} 个` : null,

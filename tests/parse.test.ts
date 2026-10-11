@@ -767,6 +767,45 @@ describe('extractComfyParams', () => {
     const p = extractComfyParams(prompt)!
     expect(p.samplers[0]!.sampler).toBe('dpmpp_2m')
   })
+
+  it('扩展参数：VAE / Clip Skip / 放大模型 / ControlNet（FEAT-2）', () => {
+    const prompt = JSON.stringify({
+      '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20, cfg: 7 } },
+      '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'm.safetensors' } },
+      '8': { class_type: 'VAELoader', inputs: { vae_name: 'vae-ft-mse.safetensors' } },
+      '9': { class_type: 'CLIPSetLastLayer', inputs: { stop_at_clip_layer: -2 } },
+      '10': { class_type: 'UpscaleModelLoader', inputs: { model_name: '4x-UltraSharp.pth' } },
+      '11': { class_type: 'ControlNetLoader', inputs: { control_net_name: 'canny.safetensors' } },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.vaes).toEqual(['vae-ft-mse.safetensors'])
+    expect(p.clipSkip).toBe(3) // stop_at_clip_layer -2 = 跳过 2 层
+    expect(p.upscalers).toEqual(['4x-UltraSharp.pth'])
+    expect(p.controlNets).toEqual(['canny.safetensors'])
+    // 默认 1（不跳层）不记录
+    const plain = extractComfyParams(
+      JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 1 } } }),
+    )!
+    expect(plain.clipSkip).toBeUndefined()
+    expect(plain.vaes).toEqual([])
+  })
+
+  it('UI 格式工作流同样提取扩展参数（FEAT-2）', () => {
+    const wf = JSON.stringify({
+      nodes: [
+        { id: 1, type: 'CheckpointLoaderSimple', widgets_values: ['m.safetensors'] },
+        { id: 2, type: 'VAELoader', widgets_values: ['vae.safetensors'] },
+        { id: 3, type: 'CLIPSetLastLayer', widgets_values: [-1] },
+        { id: 4, type: 'UpscaleModelLoader', widgets_values: ['4xESRGAN.pth'] },
+        { id: 5, type: 'ControlNetLoader', widgets_values: ['depth.safetensors'] },
+      ],
+    })
+    const p = extractUiWorkflowParams(wf)!
+    expect(p.vaes).toEqual(['vae.safetensors'])
+    expect(p.clipSkip).toBe(2) // -1 = 跳过 1 层
+    expect(p.upscalers).toEqual(['4xESRGAN.pth'])
+    expect(p.controlNets).toEqual(['depth.safetensors'])
+  })
 })
 
 describe('extractParams', () => {
@@ -839,6 +878,22 @@ describe('parseA1111Parameters', () => {
     )
     expect(p.samplers).toHaveLength(1)
     expect(p.samplers[0].denoise).toBe(0.45)
+  })
+
+  it('扩展键：Clip skip / VAE / Batch size（FEAT-2）', () => {
+    const p = parseA1111Parameters(
+      'a cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 5, Size: 512x768, Clip skip: 2, VAE: vae-ft-mse, Batch size: 4',
+    )
+    expect(p.clipSkip).toBe(2)
+    expect(p.vaes).toEqual(['vae-ft-mse'])
+    expect(p.batch).toBe(4)
+    // 未提供时不虚构：clipSkip 缺省、vaes 空数组
+    const plain = parseA1111Parameters('a cat\nSteps: 20, Sampler: Euler a')
+    expect(plain.clipSkip).toBeUndefined()
+    expect(plain.vaes).toEqual([])
+    // Clip skip 1 是默认值，不记录
+    const skip1 = parseA1111Parameters('a cat\nSteps: 20, Clip skip: 1')
+    expect(skip1.clipSkip).toBeUndefined()
   })
 })
 

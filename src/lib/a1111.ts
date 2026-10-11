@@ -46,6 +46,9 @@ export function parseA1111Parameters(text: string): ParsedParams {
     models: [],
     loras: [],
     samplers: [],
+    vaes: [],
+    upscalers: [],
+    controlNets: [],
     nodeCount: 0,
     rawText: text,
   }
@@ -156,6 +159,13 @@ export function parseA1111Parameters(text: string): ParsedParams {
     }
   }
   if (pairs['Model']) out.models.push(pairs['Model'])
+
+  // FEAT-2 扩展键：Clip skip（A1111 默认 1 不记录，只存 ≥2 的显式设置）、VAE、批量
+  const clipSkip = Number(pairs['Clip skip'])
+  if (Number.isFinite(clipSkip) && clipSkip >= 2) out.clipSkip = clipSkip
+  if (pairs['VAE']) out.vaes.push(pairs['VAE'])
+  const batchSize = Number(pairs['Batch size'])
+  if (Number.isFinite(batchSize) && batchSize > 0) out.batch = batchSize
 
   return out
 }

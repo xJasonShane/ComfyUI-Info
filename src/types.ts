@@ -43,6 +43,14 @@ export interface ParsedParams {
   nodeCount: number
   /** A1111 原始参数文本 */
   rawText?: string
+  /** VAE 模型名（VAELoader / A1111 "VAE" 键） */
+  vaes: string[]
+  /** Clip Skip（CLIPSetLastLayer / A1111 "Clip skip"；默认 1 不记录，只存 ≥2） */
+  clipSkip?: number
+  /** 放大模型（UpscaleModelLoader） */
+  upscalers: string[]
+  /** ControlNet 模型（ControlNetLoader） */
+  controlNets: string[]
 }
 
 /** 一次完整解析的结果：原始元数据 + 提取出的结构化参数 */

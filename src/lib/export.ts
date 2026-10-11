@@ -55,6 +55,10 @@ export function buildExportJson(items: ImageItem[]): string {
       rec.models = p.models
       rec.loras = p.loras
       rec.samplers = p.samplers
+      if (p.vaes.length) rec.vaes = p.vaes
+      if (p.clipSkip !== undefined) rec.clipSkip = p.clipSkip
+      if (p.upscalers.length) rec.upscalers = p.upscalers
+      if (p.controlNets.length) rec.controlNets = p.controlNets
       if (p.width !== undefined) rec.width = p.width
       if (p.height !== undefined) rec.height = p.height
       if (p.batch !== undefined) rec.batch = p.batch
@@ -117,6 +121,10 @@ export function buildExportCsv(items: ImageItem[]): string {
     '修改时间',
     '模型',
     'LoRA',
+    'Clip Skip',
+    'VAE',
+    '放大模型',
+    'ControlNet',
     '采样器',
     '调度器',
     '步数',
@@ -144,6 +152,10 @@ export function buildExportCsv(items: ImageItem[]): string {
       new Date(it.mtime).toISOString(),
       p?.models.join(' + ') || undefined,
       p?.loras.map(formatLora).join('; ') || undefined,
+      p?.clipSkip,
+      p?.vaes.join(' + ') || undefined,
+      p?.upscalers.join(' + ') || undefined,
+      p?.controlNets.join(' + ') || undefined,
       s?.sampler,
       s?.scheduler,
       s?.steps,

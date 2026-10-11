@@ -5,9 +5,11 @@ import Icon from './Icon.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
   addFiles,
+  buildArchiveBackup,
   clearAll,
   filteredItems,
   forgetRescanHandle,
+  importArchive,
   modelOptions,
   parsing,
   rescanDirectory,
@@ -20,6 +22,7 @@ import {
 } from '../composables/store'
 import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
+import { downloadText } from '../lib/utils'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
@@ -95,6 +98,43 @@ async function exportAs(key: string | number) {
     exporting.value = false
   }
 }
+
+/* ---------- 存档备份（FEAT-6：导出 / 导入，防清库与跨设备迁移） ---------- */
+const archiveOptions = [
+  { label: '导出存档备份', key: 'export' },
+  { label: '导入存档备份', key: 'import' },
+]
+
+const archiveInput = ref<HTMLInputElement | null>(null)
+
+async function onArchiveMenu(key: string | number) {
+  if (key === 'export') {
+    const { text, count } = buildArchiveBackup()
+    if (!count) {
+      message.info('当前列表没有可备份的存档记录')
+      return
+    }
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadText(`comfyui-info-archive-${stamp}.json`, text)
+    message.success(`已导出 ${count} 条存档记录（不含图片本体）`)
+  } else {
+    archiveInput.value?.click()
+  }
+}
+
+async function onImportArchiveFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f) return
+  try {
+    const n = await importArchive(await f.text())
+    if (n) message.success(`已导入 ${n} 条存档记录`)
+    else message.info('备份中的记录均已存在，未新增')
+  } catch (err) {
+    message.error(`导入失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
 </script>
 
 <template>
@@ -161,6 +201,12 @@ async function exportAs(key: string | number) {
         导出
       </NButton>
     </NDropdown>
+    <NDropdown trigger="click" :options="archiveOptions" @select="onArchiveMenu">
+      <NButton size="small" secondary title="备份 / 恢复本地存档（参数与诊断信息，不含图片本体）">
+        <template #icon><Icon name="archive" /></template>
+        存档
+      </NButton>
+    </NDropdown>
     <NTooltip v-if="store.items.length > 0">
       <template #trigger>
         <NPopconfirm @positive-click="clearAll">
@@ -194,6 +240,7 @@ async function exportAs(key: string | number) {
         <p><code>lora:xxx</code> 按 LoRA 名称或哈希</p>
         <p><code>seed:123</code> 按种子（支持片段）</p>
         <p><code>seed:&gt;100</code> 种子范围（&gt; ≥ &lt; ≤）</p>
+        <p><code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> 数值范围</p>
         <p><code>path:目录</code> 按相对路径</p>
         <p><code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）</p>
         <p><code>"model:a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用</p>
@@ -270,5 +317,6 @@ async function exportAs(key: string | number) {
       @change="onPick"
     />
     <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onPick" />
+    <input ref="archiveInput" type="file" accept=".json,application/json" hidden @change="onImportArchiveFile" />
   </header>
 </template>

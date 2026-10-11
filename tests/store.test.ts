@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
 import type { ImageItem } from '../src/types'
+import type { PersistRecord } from '../src/lib/persist'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
 vi.mock('../src/lib/metadata', () => ({
@@ -27,6 +28,7 @@ vi.mock('../src/lib/persist', async (importOriginal) => {
     clearPersisted: vi.fn(async () => {}),
     saveHandle: vi.fn(async () => {}),
     clearHandle: vi.fn(async () => {}),
+    importPersisted: vi.fn(async () => []),
   }
 })
 // 目录扫描 mock：自动重扫用例需要可控的枚举与权限，其余用例不触碰目录扫描
@@ -490,6 +492,133 @@ it('重新拖入与存档项同指纹的文件时自动回挂，不重新解析'
   expect(api.store.batchTotal).toBe(0) // 元数据已在库中，不重新排队解析
 })
 
+it('存档 v3：大文本拆分去重与物化往返（OPT-5）', async () => {
+  const { splitPersistRecord, materializeRecord } = await import('../src/lib/persist')
+  const prompt = '{"3":{"class_type":"KSampler"}}'
+  const rec: PersistRecord = {
+    key: 'v1/a.png|1|1000',
+    name: 'a.png',
+    path: 'v1/a.png',
+    size: 1,
+    mtime: 1000,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui', prompt, hints: ['线索'] },
+    params: {
+      positive: ['cat'],
+      negative: [],
+      models: ['m'],
+      loras: [],
+      samplers: [],
+      vaes: [],
+      upscalers: [],
+      controlNets: [],
+      width: 512,
+      height: 512,
+      nodeCount: 1,
+      rawText: 'Steps: 20',
+    },
+    savedAt: 42,
+  }
+  const { stored, blobs } = splitPersistRecord(rec)
+  expect(stored.v).toBe(3)
+  expect(blobs).toHaveLength(2) // prompt 与 rawText 是不同内容 → 2 份
+  const back = materializeRecord(stored, new Map(blobs.map((b) => [b.hash, b.text])))!
+  expect(back).toEqual(rec)
+
+  // A1111 场景：parameters 与 params.rawText 同内容，全库只存一份
+  const a1111: PersistRecord = {
+    key: 'b.png|1|1',
+    name: 'b.png',
+    size: 1,
+    mtime: 1,
+    status: 'done',
+    source: 'a1111',
+    raw: { source: 'a1111', parameters: 'Steps: 20' },
+    params: {
+      positive: [],
+      negative: [],
+      models: [],
+      loras: [],
+      samplers: [],
+      vaes: [],
+      upscalers: [],
+      controlNets: [],
+      nodeCount: 0,
+      rawText: 'Steps: 20',
+    },
+    savedAt: 0,
+  }
+  const split2 = splitPersistRecord(a1111)
+  expect(split2.blobs).toHaveLength(1)
+  expect(split2.stored.parameters).toBe(split2.stored.rawText)
+
+  // 引用悬空（blob 缺失）按记录损坏剔除
+  expect(materializeRecord(stored, new Map())).toBeNull()
+})
+
+it('存档备份：序列化与解析往返，非法结构抛错（FEAT-6）', async () => {
+  const { serializeArchive, parseArchive } = await import('../src/lib/persist')
+  const rec: PersistRecord = {
+    key: 'a.png|1|1',
+    name: 'a.png',
+    size: 1,
+    mtime: 1,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui' },
+    savedAt: 0,
+  }
+  const text = serializeArchive([rec])
+  expect(parseArchive(text)).toEqual([rec])
+  expect(() => parseArchive('{"items":[]}')).toThrow()
+  expect(() => parseArchive('not json')).toThrow()
+  // 无法识别的条目剔除，不中断导入
+  expect(parseArchive(JSON.stringify({ records: [rec, { junk: true }] }))).toEqual([rec])
+})
+
+it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）', async () => {
+  const { importPersisted } = await import('../src/lib/persist')
+  const rec: PersistRecord = {
+    key: 'v2/b.png|1|5',
+    name: 'b.png',
+    path: 'v2/b.png',
+    size: 1,
+    mtime: 5,
+    status: 'done',
+    source: 'a1111',
+    raw: { source: 'a1111', parameters: 'cat\nSteps: 20' },
+    params: {
+      positive: ['cat'],
+      negative: [],
+      models: [],
+      loras: [],
+      samplers: [],
+      vaes: [],
+      upscalers: [],
+      controlNets: [],
+      nodeCount: 0,
+      rawText: 'cat\nSteps: 20',
+    },
+    savedAt: 0,
+  }
+  vi.mocked(importPersisted).mockResolvedValueOnce([rec])
+  const n = await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))
+  expect(n).toBe(1)
+  expect(api.store.items.length).toBe(1)
+  expect(api.store.items[0].detached).toBe(true)
+  // 惰性搜索串按需构建：存档项按参数可搜索（OPT-6）
+  api.store.sourceFilter = 'all'
+  api.store.search = 'cat'
+  expect(api.filteredItems.value.length).toBe(1)
+  api.store.search = ''
+
+  // 库中已存在的指纹全部跳过
+  vi.mocked(importPersisted).mockResolvedValueOnce([])
+  expect(await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))).toBe(0)
+  expect(api.store.items.length).toBe(1)
+})
+
 it('toRecord / fromRecord：列表项与存档记录往返', async () => {
   const { toRecord, fromRecord } = await import('../src/lib/persist')
   const parameters = 'x\nSteps: 20, Model: m1'
@@ -578,16 +707,35 @@ it('自动重扫：周期增量触发、解析中跳过、句柄丢失后停表�
 })
 
 it('parseQuery 拆分字段限定与普通关键词', () => {
-  const empty = { terms: [], model: [], lora: [], seed: [], path: [] }
+  const empty = { terms: [], model: [], lora: [], seed: [], path: [], num: [] }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
-    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [] },
+    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [], num: [] },
     none: empty,
   })
   expect(api.parseQuery('   ')).toEqual({ all: empty, none: empty })
   // 引号 + 否定组合：修复前分词正则先于 `-` 剥离执行，会在空格处被拆坏
   expect(api.parseQuery('-"model:a b"')).toEqual({
     all: empty,
-    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [] },
+    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [], num: [] },
+  })
+  // 数值范围条件（FEAT-3）：w/h 是别名，无操作符为精确相等，非法值忽略
+  expect(api.parseQuery('steps:>30 w:>=1024 cfg:7.5 h:<768 batch:2 clip:>1 steps:abc steps:')).toEqual({
+    all: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      num: [
+        { field: 'steps', op: '>', value: 30 },
+        { field: 'width', op: '>=', value: 1024 },
+        { field: 'cfg', op: undefined, value: 7.5 },
+        { field: 'height', op: '<', value: 768 },
+        { field: 'batch', op: undefined, value: 2 },
+        { field: 'clip', op: '>', value: 1 },
+      ],
+    },
+    none: empty,
   })
 })
 
@@ -625,6 +773,37 @@ it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', as
   expect(names('seed:<=111222333')).toEqual(['a.png'])
   expect(names('seed:>=111222333')).toEqual(['a.png', 'b.png'])
   expect(names('seed:<5')).toEqual([])
+  api.store.search = ''
+})
+
+it('数值范围搜索：steps / cfg / 尺寸 / 批量 / Clip Skip（FEAT-3）', async () => {
+  const add = (name: string, parameters: string) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }) }])
+  }
+  add('a.png', 'cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 5, Size: 512x768, Clip skip: 2, VAE: vae-ft-mse')
+  add('b.png', 'dog\nSteps: 30, Sampler: DPM++ 2M, CFG scale: 5.5, Seed: 6, Size: 1024x1024, Batch size: 2')
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  expect(names('steps:>25')).toEqual(['b.png'])
+  expect(names('cfg:<6')).toEqual(['b.png'])
+  expect(names('w:>=1024')).toEqual(['b.png'])
+  expect(names('h:<=768')).toEqual(['a.png'])
+  expect(names('batch:>=2')).toEqual(['b.png'])
+  expect(names('clip:>1')).toEqual(['a.png'])
+  // 多条件 AND + 排除组合
+  expect(names('steps:>25 cfg:<6')).toEqual(['b.png'])
+  expect(names('steps:>25 cfg:<6 -batch:>=2')).toEqual([])
+  // VAE 名称走普通关键词搜索域
+  expect(names('vae-ft-mse')).toEqual(['a.png'])
   api.store.search = ''
 })
 

@@ -3,13 +3,20 @@
  * 刷新或关闭浏览器后历史记录仍在，重新拖入原文件即按指纹自动回挂。
  * file:// 直接打开、隐私模式等场景下 IndexedDB 可能不可用——启动时用真实读写探测，
  * 不可用则整体降级为纯内存（与未引入持久化前行为一致）；所有读写失败均静默吞掉。
+ *
+ * v3 存储布局（OPT-5）：工作流 / 参数文本等大字段按内容寻址拆入 blobs store，
+ * 同内容全库存一份、记录侧只存引用——同工作流批量出图的万级存档体积降一个量级。
+ * v2 旧记录（大文本内联）读取时原样可用，并一次性写回迁移为 v3。
+ * 孤儿 blob（记录被删 / 内容更新后遗留）以「历史去重内容数」为上界，体积可忽略，
+ * 不做 GC——回收需要跨 store 对账，竞态风险大于收益。
  */
 import { toRaw } from 'vue'
 import type { ImageItem, ImageSource, ParsedParams, RawMetadata } from '../types'
 
 const DB_NAME = 'comfyui-info'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const STORE = 'items'
+const BLOB_STORE = 'blobs'
 const HANDLE_STORE = 'handles'
 
 /** IndexedDB 中的单条存档；主键与列表去重指纹同一构造 */
@@ -84,6 +91,152 @@ function isValidRecord(value: unknown): value is PersistRecord {
   )
 }
 
+/* ---------- v3：大文本内容寻址 ---------- */
+
+/**
+ * 工作流 / 参数文本的内容指纹：双 32 位 FNV 车道（不同乘数）+ 精确长度，
+ * ~64 位有效位宽——键即存储地址，万级去重下碰撞概率可忽略。
+ * 结果按内容缓存：同工作流批量出图的重复串在一次会话里只需哈希一次。
+ */
+const hashCache = new Map<string, string>()
+
+function contentHash(text: string): string {
+  const cached = hashCache.get(text)
+  if (cached) return cached
+  let h1 = 0x811c9dc5
+  let h2 = 0x01000193
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 0x01000193)
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b)
+  }
+  const hash = `${(h1 >>> 0).toString(36)}${(h2 ^ text.length).toString(36)}${text.length.toString(36)}`
+  if (hashCache.size > 8192) hashCache.clear() // 防御性上限：内容种类异常膨胀时整体重来
+  hashCache.set(text, hash)
+  return hash
+}
+
+/** v3 存储记录：大文本字段以内容哈希引用 blobs store，结构化参数已摘除 rawText */
+export interface StoredRecord {
+  v: 3
+  key: string
+  name: string
+  path?: string
+  size: number
+  mtime: number
+  status: 'done' | 'error'
+  source: ImageSource
+  /** 诊断线索（小文本，内联存储） */
+  hints?: string[]
+  error?: string
+  savedAt: number
+  /** 以下四者为 blobs 引用（内容哈希），undefined = 无此内容 */
+  prompt?: string
+  workflow?: string
+  parameters?: string
+  rawText?: string
+  params?: Omit<ParsedParams, 'rawText'>
+}
+
+export interface BlobRow {
+  hash: string
+  text: string
+}
+
+/** 记录 → 存储形状：大文本拆入 blobs（同内容去重），params 摘除 rawText（导出供往返单测） */
+export function splitPersistRecord(rec: PersistRecord): { stored: StoredRecord; blobs: BlobRow[] } {
+  const blobs: BlobRow[] = []
+  const ref = (text: string | undefined): string | undefined => {
+    if (text === undefined) return undefined
+    const hash = contentHash(text)
+    if (!blobs.some((b) => b.hash === hash)) blobs.push({ hash, text })
+    return hash
+  }
+  let params: StoredRecord['params']
+  if (rec.params) {
+    const copy: ParsedParams = { ...rec.params }
+    delete copy.rawText
+    params = copy
+  }
+  const stored: StoredRecord = {
+    v: 3,
+    key: rec.key,
+    name: rec.name,
+    path: rec.path,
+    size: rec.size,
+    mtime: rec.mtime,
+    status: rec.status,
+    source: rec.source,
+    hints: rec.raw.hints,
+    error: rec.error,
+    savedAt: rec.savedAt,
+    prompt: ref(rec.raw.prompt),
+    workflow: ref(rec.raw.workflow),
+    parameters: ref(rec.raw.parameters),
+    rawText: ref(rec.params?.rawText),
+    params,
+  }
+  return { stored, blobs }
+}
+
+/** 存储形状 → 记录：按 blobs 物化引用；引用悬空视为记录损坏，返回 null 剔除 */
+export function materializeRecord(
+  stored: StoredRecord,
+  blobs: Map<string, string>,
+): PersistRecord | null {
+  const pick = (hash: string | undefined): string | undefined =>
+    hash === undefined ? undefined : blobs.get(hash)
+  const prompt = pick(stored.prompt)
+  const workflow = pick(stored.workflow)
+  const parameters = pick(stored.parameters)
+  const rawText = pick(stored.rawText)
+  if (
+    (stored.prompt !== undefined && prompt === undefined) ||
+    (stored.workflow !== undefined && workflow === undefined) ||
+    (stored.parameters !== undefined && parameters === undefined) ||
+    (stored.rawText !== undefined && rawText === undefined)
+  ) {
+    return null
+  }
+  let params: ParsedParams | undefined
+  if (stored.params) {
+    // 旧记录缺少 v3 新增的数组字段：显式回填空数组保证类型与运行时完整
+    params = {
+      ...stored.params,
+      vaes: stored.params.vaes ?? [],
+      upscalers: stored.params.upscalers ?? [],
+      controlNets: stored.params.controlNets ?? [],
+    }
+    if (rawText !== undefined) params.rawText = rawText
+  }
+  return {
+    key: stored.key,
+    name: stored.name,
+    path: stored.path,
+    size: stored.size,
+    mtime: stored.mtime,
+    status: stored.status,
+    source: stored.source,
+    raw: { source: stored.source, prompt, workflow, parameters, hints: stored.hints },
+    params,
+    error: stored.error,
+    savedAt: stored.savedAt,
+  }
+}
+
+function isStoredRecord(value: unknown): value is StoredRecord {
+  const rec = value as StoredRecord
+  return (
+    !!rec &&
+    rec.v === 3 &&
+    typeof rec.key === 'string' &&
+    typeof rec.name === 'string' &&
+    typeof rec.mtime === 'number' &&
+    (rec.status === 'done' || rec.status === 'error') &&
+    typeof rec.source === 'string'
+  )
+}
+
 let dbPromise: Promise<IDBDatabase> | null = null
 
 function openDb(): Promise<IDBDatabase> {
@@ -92,6 +245,10 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) {
         req.result.createObjectStore(STORE, { keyPath: 'key' })
+      }
+      if (!req.result.objectStoreNames.contains(BLOB_STORE)) {
+        // v3：大文本内容寻址存储（同内容只存一份，记录侧存哈希引用）
+        req.result.createObjectStore(BLOB_STORE, { keyPath: 'hash' })
       }
       if (!req.result.objectStoreNames.contains(HANDLE_STORE)) {
         // 记住「最近扫描目录」的句柄（File System Access API，仅 Chromium 系支持并可结构化克隆）
@@ -135,6 +292,14 @@ function settled(tx: IDBTransaction): Promise<void> {
   })
 }
 
+function getAllFrom(db: IDBDatabase, storeName: string): Promise<unknown[]> {
+  const req = db.transaction(storeName).objectStore(storeName).getAll()
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result as unknown[])
+    req.onerror = () => reject(req.error ?? new Error('读取存档失败'))
+  })
+}
+
 /**
  * 可用性探测：完整走一遍「建库 → 写入 → 删除」探测记录。
  * 任何一步失败（含 file:// 受限、Safari 隐私模式直接抛错）即判定不可用，结果进程内缓存。
@@ -156,23 +321,40 @@ export async function probePersistence(): Promise<boolean> {
   }
 }
 
-/** 读取全部存档，剔除无法识别的历史记录（如旧版本结构） */
+/** 读取全部存档：v3 记录按 blobs 物化，v2 旧记录原样可用并写回迁移 */
 export async function loadPersisted(): Promise<PersistRecord[]> {
   const db = await getDb()
-  const req = db.transaction(STORE).objectStore(STORE).getAll()
-  const rows = await new Promise<unknown[]>((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result as unknown[])
-    req.onerror = () => reject(req.error ?? new Error('读取存档失败'))
-  })
-  return rows.filter(isValidRecord)
+  const itemRows = await getAllFrom(db, STORE)
+  const blobRows = (await getAllFrom(db, BLOB_STORE)) as BlobRow[]
+  const blobs = new Map(blobRows.map((b) => [b.hash, b.text]))
+  const records: PersistRecord[] = []
+  const legacy: PersistRecord[] = []
+  for (const row of itemRows) {
+    if (isStoredRecord(row)) {
+      const rec = materializeRecord(row, blobs)
+      if (rec) records.push(rec)
+    } else if (isValidRecord(row)) {
+      records.push(row)
+      legacy.push(row)
+    }
+  }
+  // v2 → v3 一次性迁移：写失败只是维持旧形状（下次读取再试），不影响本次会话
+  if (legacy.length) void putPersisted(legacy).catch(() => {})
+  return records
 }
 
 export async function putPersisted(records: PersistRecord[]): Promise<void> {
   if (!records.length) return
+  const splits = records.map(splitPersistRecord)
   const db = await getDb()
-  const tx = db.transaction(STORE, 'readwrite')
-  const store = tx.objectStore(STORE)
-  for (const rec of records) store.put(rec)
+  // 同一事务先写 blobs 再写记录：中断最多留下无引用的孤儿 blob，不会出现记录引用悬空
+  const tx = db.transaction([STORE, BLOB_STORE], 'readwrite')
+  const blobStore = tx.objectStore(BLOB_STORE)
+  const itemStore = tx.objectStore(STORE)
+  for (const { blobs } of splits) {
+    for (const b of blobs) blobStore.put(b)
+  }
+  for (const { stored } of splits) itemStore.put(stored)
   await settled(tx)
 }
 
@@ -185,11 +367,12 @@ export async function deletePersisted(keys: string[]): Promise<void> {
   await settled(tx)
 }
 
-/** 清空全部存档（随「清空列表」一并触发，所见即所得） */
+/** 清空全部存档（随「清空列表」一并触发，所见即所得），内容 blob 一并清除 */
 export async function clearPersisted(): Promise<void> {
   const db = await getDb()
-  const tx = db.transaction(STORE, 'readwrite')
+  const tx = db.transaction([STORE, BLOB_STORE], 'readwrite')
   tx.objectStore(STORE).clear()
+  tx.objectStore(BLOB_STORE).clear()
   await settled(tx)
 }
 
@@ -220,4 +403,41 @@ export async function clearHandle(): Promise<void> {
   const tx = db.transaction(HANDLE_STORE, 'readwrite')
   tx.objectStore(HANDLE_STORE).delete('last')
   await settled(tx)
+}
+
+/* ---------- 存档备份（FEAT-6：导出 / 导入，防清库与跨设备迁移） ---------- */
+
+const ARCHIVE_VERSION = 3
+
+/** 存档备份序列化：与存档记录同构（含参数与诊断信息，不含图片本体） */
+export function serializeArchive(records: PersistRecord[]): string {
+  return JSON.stringify(
+    { version: ARCHIVE_VERSION, exportedAt: new Date().toISOString(), count: records.length, records },
+    null,
+    2,
+  )
+}
+
+/** 解析存档备份：剔除无法识别的条目；整体结构不对时抛错由调用方提示 */
+export function parseArchive(text: string): PersistRecord[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new Error('不是有效的 JSON 文件')
+  }
+  const o = parsed as { records?: unknown }
+  if (!o || !Array.isArray(o.records)) throw new Error('缺少 records 数组，不是存档备份文件')
+  return o.records.filter(isValidRecord)
+}
+
+/** 导入存档：与库存同指纹（key）的记录跳过，返回实际写入的新记录 */
+export async function importPersisted(records: PersistRecord[]): Promise<PersistRecord[]> {
+  if (!records.length) return []
+  const db = await getDb()
+  const rows = await getAllFrom(db, STORE)
+  const existing = new Set(rows.map((r) => (r as { key?: unknown }).key))
+  const fresh = records.filter((r) => !existing.has(r.key))
+  if (fresh.length) await putPersisted(fresh)
+  return fresh
 }

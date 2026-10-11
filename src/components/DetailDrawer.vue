@@ -92,11 +92,15 @@ const generalRows = computed<[string, string][]>(() => {
   const rows: [string, string][] = []
   if (!params) return rows
   if (params.models.length) rows.push(['模型', params.models.join(' + ')])
+  if (params.vaes.length) rows.push(['VAE', params.vaes.join(' + ')])
+  if (params.clipSkip !== undefined) rows.push(['Clip Skip', String(params.clipSkip)])
   if (params.width && params.height) {
     let s = `${params.width} × ${params.height}`
     if (params.batch && params.batch > 1) s += `，每批 ${params.batch} 张`
     rows.push(['出图尺寸', s])
   }
+  if (params.upscalers.length) rows.push(['放大模型', params.upscalers.join(' + ')])
+  if (params.controlNets.length) rows.push(['ControlNet', params.controlNets.join(' + ')])
   if (params.nodeCount) rows.push(['工作流节点', `${params.nodeCount} 个`])
   return rows
 })

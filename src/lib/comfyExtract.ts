@@ -63,6 +63,9 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     models: [],
     loras: [],
     samplers: [],
+    vaes: [],
+    upscalers: [],
+    controlNets: [],
     nodeCount: Object.keys(map).length,
   }
 
@@ -231,6 +234,25 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
       }
       if (!out.loras.some((l) => l.name === lora.name)) out.loras.push(lora)
     }
+
+    // FEAT-2 扩展参数：按 class_type 匹配的辅助模型 / 设置，同名去重
+    if (/CLIPSetLastLayer/i.test(cls)) {
+      const stop = asNum(inputs.stop_at_clip_layer)
+      // stop_at_clip_layer 为负：-1 = 跳过最后 1 层（即 A1111 语境的 Clip Skip 2）
+      if (stop !== undefined && stop < 0) out.clipSkip = 1 - stop
+    }
+    if (/VAELoader/i.test(cls)) {
+      const v = asText(inputs.vae_name)
+      if (v && !out.vaes.includes(v)) out.vaes.push(v)
+    }
+    if (/UpscaleModelLoader/i.test(cls)) {
+      const v = asText(inputs.model_name)
+      if (v && !out.upscalers.includes(v)) out.upscalers.push(v)
+    }
+    if (/ControlNetLoader/i.test(cls)) {
+      const v = asText(inputs.control_net_name)
+      if (v && !out.controlNets.includes(v)) out.controlNets.push(v)
+    }
   }
 
   out.samplers.sort((a, b) => (Number(a.nodeId) || 0) - (Number(b.nodeId) || 0))
@@ -328,6 +350,9 @@ export function extractUiWorkflowParams(text: string): ParsedParams | null {
     models: [],
     loras: [],
     samplers: [],
+    vaes: [],
+    upscalers: [],
+    controlNets: [],
     nodeCount: nodes.length,
   }
 
@@ -378,6 +403,19 @@ export function extractUiWorkflowParams(text: string): ParsedParams | null {
       }
       const b = asNum(wv[2])
       if (b !== undefined) out.batch = b
+    }
+    // FEAT-2 扩展参数：UI 格式 widgets_values[0] 即对应值，同名去重
+    if (/CLIPSetLastLayer/i.test(cls)) {
+      const stop = asNum(wv[0])
+      // stop_at_clip_layer 为负：-1 = 跳过最后 1 层（即 A1111 语境的 Clip Skip 2）
+      if (stop !== undefined && stop < 0) out.clipSkip = 1 - stop
+    }
+    if (/VAELoader/i.test(cls) && firstText && !out.vaes.includes(firstText)) out.vaes.push(firstText)
+    if (/UpscaleModelLoader/i.test(cls) && firstText && !out.upscalers.includes(firstText)) {
+      out.upscalers.push(firstText)
+    }
+    if (/ControlNetLoader/i.test(cls) && firstText && !out.controlNets.includes(firstText)) {
+      out.controlNets.push(firstText)
     }
   }
 

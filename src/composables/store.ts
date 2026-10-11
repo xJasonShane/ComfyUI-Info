@@ -8,12 +8,15 @@ import {
   clearPersisted,
   deletePersisted,
   fromRecord,
+  importPersisted,
   loadHandle,
   loadPersisted,
+  parseArchive,
   probePersistence,
   putPersisted,
   recordKey,
   saveHandle,
+  serializeArchive,
   toRecord,
   type PersistRecord,
 } from '../lib/persist'
@@ -463,12 +466,13 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
  * （用户在恢复完成前已拖入同指纹文件时，以实际文件为准）。
  * 必须以响应式代理入列并用同一代理建回挂索引：addFiles 回挂时改写的是这个代理，
  * 绕过代理的原始对象不会触发视图更新。
+ * 搜索串不在此构建（P2 惰性化，见 searchTextField）——万级存档恢复只做建项，
+ * 长文本拼接与小写化按需 / 空闲分批进行。
  */
 export function restoreArchived(records: PersistRecord[]) {
   for (const rec of records) {
     if (seenKeys.has(rec.key)) continue
     const item = reactive<ImageItem>(fromRecord(rec))
-    item.searchText = buildSearchText(item, item.params)
     detachedByKey.set(rec.key, item)
     liveIds.add(item.id)
     state.items.push(item)
@@ -517,7 +521,7 @@ async function hydrate() {
   try {
     persistAvailable = await probePersistence()
     if (!persistAvailable) return
-    restoreArchived(await loadPersisted())
+    await restoreArchivedInChunks(await loadPersisted())
     const handle = await loadHandle()
     if (handle) {
       rescanHandle = handle
@@ -529,6 +533,58 @@ async function hydrate() {
     console.warn('[comfyui-info] 会话恢复失败，本次会话不启用持久化:', err)
     persistAvailable = false
   }
+}
+
+/* ---------- 启动恢复分批进行（OPT-6）：万级存档不整段阻塞首屏 ---------- */
+
+const RESTORE_CHUNK = 1000
+
+const yieldToMain = () => new Promise<void>((r) => setTimeout(r, 0))
+
+/**
+ * 存档分批装回：每批之间让出主线程处理渲染与输入，卡片渐进出现；
+ * 全部装回后再空闲分批预热存档项的搜索串（命中 WeakMap 缓存后首次搜索零等待）。
+ */
+async function restoreArchivedInChunks(records: PersistRecord[]) {
+  for (let i = 0; i < records.length; i += RESTORE_CHUNK) {
+    restoreArchived(records.slice(i, i + RESTORE_CHUNK))
+    await yieldToMain()
+  }
+  for (let i = 0; i < state.items.length; i += RESTORE_CHUNK) {
+    let warmed = false
+    for (let j = i; j < Math.min(i + RESTORE_CHUNK, state.items.length); j++) {
+      const it = state.items[j]!
+      if (it.searchText === undefined && !searchTextCache.has(it)) {
+        searchTextCache.set(it, buildSearchText(it, it.params))
+        warmed = true
+      }
+    }
+    if (warmed) await yieldToMain()
+  }
+}
+
+/* ---------- 存档备份（FEAT-6：防清库 / 跨设备迁移） ---------- */
+
+/** 当前列表全部可存档项 → 备份文本（含参数与诊断信息，不含图片本体） */
+export function buildArchiveBackup(): { text: string; count: number } {
+  const records = state.items.map(toRecord).filter((r) => r !== null)
+  return { text: serializeArchive(records), count: records.length }
+}
+
+/**
+ * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数；
+ * 持久化不可用时仅恢复到本会话内存。备份结构非法时抛错由调用方提示。
+ */
+export async function importArchive(text: string): Promise<number> {
+  const records = parseArchive(text)
+  const fresh = records.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
+  if (persistAvailable) {
+    const written = await importPersisted(fresh)
+    restoreArchived(written)
+    return written.length
+  }
+  restoreArchived(fresh)
+  return fresh.length
 }
 void hydrate()
 
@@ -618,8 +674,10 @@ export const usageStats = computed(() => {
 })
 
 /**
- * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数，按任意生成要素定位图片。
- * 在解析结果落定时（parseItem）构建一次并小写化，应用时挂上，筛选热路径不再重复拼接。
+ * 搜索域：相对路径 / 文件名 + 提示词 + 模型 / LoRA（含哈希）/ 采样参数 + VAE / 放大模型 /
+ * ControlNet，按任意生成要素定位图片。
+ * 在解析结果落定时（parseItem）构建一次并小写化，应用时挂上，筛选热路径不再重复拼接；
+ * 存档项走 searchTextField 按需构建（P2 惰性化，恢复期不逐条拼接长串）。
  */
 function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
   const parts = [it.path ?? it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
@@ -633,7 +691,35 @@ function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
     if (s.classType) parts.push(s.classType)
     if (s.seed) parts.push(s.seed)
   }
+  parts.push(...(p?.vaes ?? []), ...(p?.upscalers ?? []), ...(p?.controlNets ?? []))
   return parts.join('\n').toLowerCase()
+}
+
+/**
+ * 搜索串按需缓存：解析路径在结果落定时构建（item.searchText，随节拍分摊）；
+ * 存档项恢复时没有搜索串，首次命中筛选热路径时按需构建并缓存——
+ * 避免万级存档恢复时整段拼接长文本阻塞首屏。
+ */
+const searchTextCache = new WeakMap<ImageItem, string>()
+
+function searchTextField(it: ImageItem): string {
+  const eager = it.searchText
+  if (eager !== undefined) return eager
+  let built = searchTextCache.get(it)
+  if (built === undefined) {
+    built = buildSearchText(it, it.params)
+    searchTextCache.set(it, built)
+  }
+  return built
+}
+
+export type NumField = 'steps' | 'cfg' | 'width' | 'height' | 'batch' | 'clip'
+
+/** 数值范围条件（FEAT-3）：op 缺省为精确相等 */
+export interface NumCondition {
+  field: NumField
+  op?: '>' | '>=' | '<' | '<='
+  value: number
 }
 
 export interface QueryConditions {
@@ -642,6 +728,7 @@ export interface QueryConditions {
   lora: string[]
   seed: string[]
   path: string[]
+  num: NumCondition[]
 }
 
 export interface ParsedQuery {
@@ -651,7 +738,28 @@ export interface ParsedQuery {
   none: QueryConditions
 }
 
-const QUERY_FIELD_RE = /^(model|lora|seed|path):(.+)$/i
+const QUERY_FIELD_RE = /^(model|lora|seed|path|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+
+/** 数值字段别名：w / h 是 width / height 的简写 */
+const NUM_FIELDS: Record<string, NumField> = {
+  steps: 'steps',
+  cfg: 'cfg',
+  width: 'width',
+  w: 'width',
+  height: 'height',
+  h: 'height',
+  batch: 'batch',
+  clip: 'clip',
+}
+
+/** 数值字段值解析：支持 > / >= / < / <= 前缀；空值或非数值时忽略该条件 */
+function parseNumCondition(field: NumField, raw: string): NumCondition | null {
+  const m = raw.trim().match(/^(>=|<=|>|<)?\s*(\S+)$/)
+  if (!m) return null
+  const value = Number(m[2])
+  if (!Number.isFinite(value)) return null
+  return { field, op: m[1] as NumCondition['op'], value }
+}
 
 /** O1：64 位种子不能安全转 Number，范围比较用「位数 + 字典序」比较非负整数字符串 */
 function compareSeed(a: string, b: string): number {
@@ -677,10 +785,10 @@ function hitSeed(cond: string, it: ImageItem): boolean {
   }
 }
 
-function hitCondition(kind: keyof QueryConditions, value: string, it: ImageItem): boolean {
+function hitCondition(kind: 'terms' | 'model' | 'lora' | 'seed' | 'path', value: string, it: ImageItem): boolean {
   switch (kind) {
     case 'terms':
-      return (it.searchText ?? it.name.toLowerCase()).includes(value)
+      return searchTextField(it).includes(value)
     case 'model':
       return (it.params?.models ?? []).some((m) => m.toLowerCase().includes(value))
     case 'lora':
@@ -694,11 +802,53 @@ function hitCondition(kind: keyof QueryConditions, value: string, it: ImageItem)
   }
 }
 
+/** 数值字段在条目上的取值集合（采样参数取全部阶段，任一命中即可） */
+function numValues(field: NumField, p: ParsedParams): number[] {
+  if (field === 'steps' || field === 'cfg') {
+    const out: number[] = []
+    for (const s of p.samplers) {
+      const v = field === 'steps' ? s.steps : s.cfg
+      if (v !== undefined) out.push(v)
+    }
+    return out
+  }
+  const v =
+    field === 'width'
+      ? p.width
+      : field === 'height'
+        ? p.height
+        : field === 'batch'
+          ? p.batch
+          : p.clipSkip
+  return v !== undefined ? [v] : []
+}
+
+function hitNum(cond: NumCondition, it: ImageItem): boolean {
+  const p = it.params
+  if (!p) return false
+  const values = numValues(cond.field, p)
+  if (!values.length) return false
+  return values.some((v) =>
+    cond.op === undefined
+      ? v === cond.value
+      : cond.op === '>'
+        ? v > cond.value
+        : cond.op === '>='
+          ? v >= cond.value
+          : cond.op === '<'
+            ? v < cond.value
+            : v <= cond.value,
+  )
+}
+
 function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of Object.keys(conds) as (keyof QueryConditions)[]) {
+  for (const kind of ['terms', 'model', 'lora', 'seed', 'path'] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
     }
+  }
+  for (const cond of conds.num) {
+    if (hitNum(cond, it) !== want) return false
   }
   return true
 }
@@ -706,13 +856,15 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
 /**
  * 解析搜索框语法（O1 增强）：
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
+ * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
+ *   无操作符为精确相等；非数值值忽略该条件
  * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
  * - `"model:a b"` 带引号的字段值可含空格
  * - `-关键词` / `-model:xxx` 排除条件，任一命中即整条不匹配
  * 正向条件按 AND 组合，大小写不敏感。
  */
 export function parseQuery(raw: string): ParsedQuery {
-  const empty = (): QueryConditions => ({ terms: [], model: [], lora: [], seed: [], path: [] })
+  const empty = (): QueryConditions => ({ terms: [], model: [], lora: [], seed: [], path: [], num: [] })
   const out: ParsedQuery = { all: empty(), none: empty() }
   // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏
   const tokens = raw.trim().match(/-?"[^"]*"|\S+/g) ?? []
@@ -729,7 +881,15 @@ export function parseQuery(raw: string): ParsedQuery {
     const m = token.match(QUERY_FIELD_RE)
     const bucket = negated ? out.none : out.all
     if (m) {
-      bucket[m[1]!.toLowerCase() as keyof Omit<QueryConditions, 'terms'>].push(m[2]!.toLowerCase())
+      const field = m[1]!.toLowerCase()
+      const numField = NUM_FIELDS[field]
+      if (numField) {
+        const cond = parseNumCondition(numField, m[2]!)
+        if (cond) bucket.num.push(cond)
+      } else if (m[2]) {
+        // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉
+        bucket[field as 'model' | 'lora' | 'seed' | 'path'].push(m[2].toLowerCase())
+      }
     } else {
       bucket.terms.push(token.toLowerCase())
     }

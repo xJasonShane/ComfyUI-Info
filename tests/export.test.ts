@@ -34,6 +34,10 @@ const params: ParsedParams = {
     },
     { nodeId: 'hires', classType: 'Hires fix', steps: 12, denoise: 0.7 },
   ],
+  vaes: ['vae-ft-mse'],
+  clipSkip: 2,
+  upscalers: [],
+  controlNets: [],
   width: 1024,
   height: 1536,
   batch: 2,
@@ -55,6 +59,8 @@ describe('buildExportJson', () => {
     expect(parsed.items[0].models).toEqual(['dreamshaper_8.safetensors'])
     expect(parsed.items[0].loras[0].hash).toBe('aaaabbbb')
     expect(parsed.items[0].samplers).toHaveLength(2)
+    expect(parsed.items[0].vaes).toEqual(['vae-ft-mse'])
+    expect(parsed.items[0].clipSkip).toBe(2)
     expect(parsed.items[1].source).toBe('error')
     expect(parsed.items[1].error).toBe('读取失败')
     expect(parsed.items[1].positive).toBeUndefined()
@@ -68,7 +74,7 @@ describe('buildExportCsv', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff)
     const lines = csv.slice(1).split('\r\n')
     expect(lines).toHaveLength(2)
-    expect(lines[0].startsWith('文件名,路径,大小(字节),来源,修改时间,模型,LoRA')).toBe(true)
+    expect(lines[0].startsWith('文件名,路径,大小(字节),来源,修改时间,模型,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器')).toBe(true)
     expect(lines[1].startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
     expect(lines[1]).toContain('"masterpiece, a cat"') // 含逗号的提示词整体加引号
     expect(lines[1]).toContain('add_detail(m:0.8 c:0.8 #aaaabbbb)')
@@ -114,13 +120,23 @@ describe('buildExportCsv', () => {
     ])
     const rows = csv.slice(1).split('\r\n')
     const empty = rows[1].split(',')
-    expect(empty).toHaveLength(20)
+    expect(empty).toHaveLength(24)
     expect(empty.slice(0, 4)).toEqual(['a.png', '', '1234', 'none'])
     expect(empty[4]).toMatch(/^\d{4}-\d{2}-\d{2}T/) // 修改时间（ISO）
     expect(empty.slice(5).every((c) => c === '')).toBe(true)
     const failed = rows[2].split(',')
     expect(failed[3]).toBe('error')
-    expect(failed[19]).toBe('boom')
+    expect(failed[23]).toBe('boom')
+  })
+
+  it('扩展参数列：Clip Skip / VAE / 放大模型 / ControlNet（FEAT-2）', () => {
+    const csv = buildExportCsv([
+      makeItem({
+        params: { ...params, vaes: ['vae-ft-mse'], clipSkip: 2, upscalers: ['4x-US'], controlNets: ['canny'] },
+      }),
+    ])
+    const line = csv.slice(1).split('\r\n')[1]!
+    expect(line).toContain(',2,vae-ft-mse,4x-US,canny,DPM++ 2M Karras')
   })
 })
 
