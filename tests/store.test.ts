@@ -494,6 +494,27 @@ it('重新拖入与存档项同指纹的文件时自动回挂，不重新解析'
   expect(api.store.batchTotal).toBe(0) // 元数据已在库中，不重新排队解析
 })
 
+it('移除存档项不动批次计数（从未计入 batchTotal 的项不得减成负数）', () => {
+  api.restoreArchived([
+    {
+      key: 'v1/a.png|1|1000',
+      name: 'a.png',
+      path: 'v1/a.png',
+      size: 1,
+      mtime: 1000,
+      status: 'done',
+      source: 'comfyui',
+      raw: { source: 'comfyui' },
+      savedAt: 0,
+    },
+  ])
+  api.removeItem(api.store.items[0]!)
+  expect(api.store.items.length).toBe(0)
+  expect(api.store.batchTotal).toBe(0)
+  expect(api.store.batchDone).toBe(0)
+  expect(api.parsing.value).toBe(false)
+})
+
 it('存档 v3：大文本拆分去重与物化往返（OPT-5）', async () => {
   const { splitPersistRecord, materializeRecord } = await import('../src/lib/persist')
   const prompt = '{"3":{"class_type":"KSampler"}}'

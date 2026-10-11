@@ -129,6 +129,10 @@ let batchEpoch = 0
 // 在途任务（从开始解析到结果应用）：与响应式 status 解耦——批量扫描期间 status 保持
 // 'pending' 直到结果应用，removeItem 据此集合区分「排队 / 在途 / 已出结果」做计数对账
 const inflight = new Set<string>()
+// 已计入批次总数（batchTotal）的项：只有实文件入列 / 重试会递增 batchTotal，
+// 存档恢复与回挂项从未计入——removeItems 对账时只对已计入项递减，否则移除存档卡片
+// 会把计数减成负数，后续扫描的进度条与 parsing 边界随之错乱
+const batchCounted = new WeakSet<ImageItem>()
 
 /* ---------- 解析结果节拍应用（P1：聚合计算去抖） ---------- */
 // 每张图完成时直接写响应式字段会触发 stats / filteredItems / usageStats / modelOptions
@@ -295,6 +299,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false): number {
   state.items.push(item)
   liveIds.add(item.id)
   state.batchTotal++
+  batchCounted.add(item)
   queue.push(item)
   return 1
 }
@@ -346,11 +351,13 @@ export function removeItems(items: ImageItem[]) {
       // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
     } else if (it.status === 'pending') {
       queuedIds.add(it.id)
-      state.batchTotal--
+      if (batchCounted.has(it)) state.batchTotal--
     } else {
-      // done / error：两本账一起减
-      state.batchTotal--
-      state.batchDone--
+      // done / error：两本账一起减（仅限已计入批次的项；存档项从未计入，不能动账）
+      if (batchCounted.has(it)) {
+        state.batchTotal--
+        state.batchDone--
+      }
     }
   }
   // 排队项一次性出队（逐条 indexOf 是 O(队列长 × 移除数)）
