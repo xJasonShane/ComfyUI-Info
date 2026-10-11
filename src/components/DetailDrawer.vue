@@ -29,10 +29,42 @@ watch(
   () => props.item?.id,
   () => {
     zoomed.value = false
+    actualDims.value = null
   },
 )
 watch(show, (v) => {
   if (!v) zoomed.value = false
+})
+
+/* ---------- 实际分辨率标注：图片解码完成后读取原始像素尺寸 ---------- */
+const actualDims = ref<{ w: number; h: number } | null>(null)
+
+function onImgLoad(e: Event) {
+  const img = e.target as HTMLImageElement
+  actualDims.value = { w: img.naturalWidth, h: img.naturalHeight }
+}
+
+/**
+ * 实际尺寸与参数出图尺寸的对比标注：等比例不一致即放大 / 缩小（高清修复、
+ * 后处理缩放），非等比例（裁剪、旋转）只提示不一致；一致或无参数时不标注。
+ */
+const dimsNote = computed(() => {
+  const a = actualDims.value
+  const params = p.value
+  if (!a || !params?.width || !params.height) return ''
+  if (a.w === params.width && a.h === params.height) return ''
+  const rx = a.w / params.width
+  const ry = a.h / params.height
+  if (Math.abs(rx - ry) >= 0.01) return t('detail.dimsMismatch')
+  const r = Math.round(((rx + ry) / 2) * 100) / 100
+  return r > 1 ? t('detail.upscaled', { r }) : t('detail.downscaled', { r })
+})
+
+const dimsTitle = computed(() => {
+  const a = actualDims.value
+  const params = p.value
+  if (!a || !params?.width || !params.height || !dimsNote.value) return undefined
+  return t('detail.dimsDiffTitle', { w: a.w, h: a.h, pw: params.width, ph: params.height })
 })
 
 // P2：详情大图与抽屉浏览同样按需创建预览 URL
@@ -255,8 +287,12 @@ async function copyImage() {
           :src="item.url"
           :alt="item.name"
           :title="t('detail.zoomIn')"
+          @load="onImgLoad"
           @click="zoomed = true"
         />
+        <div v-if="actualDims" class="img-dims" :title="dimsTitle">
+          {{ actualDims.w }} × {{ actualDims.h }} px<span v-if="dimsNote"> · {{ dimsNote }}</span>
+        </div>
         <div v-if="item.url && item.file" class="img-actions">
           <NButton
             size="tiny"

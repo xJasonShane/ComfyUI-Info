@@ -151,6 +151,11 @@ const zh = {
   'detail.downloadImage': '下载原图',
   'detail.imageCopied': '图片已复制到剪贴板',
   'detail.imageCopyFailed': '复制图片失败：浏览器不支持或未授权剪贴板访问',
+  'detail.upscaled': '已放大 ×{r}',
+  'detail.downscaled': '已缩小 ×{r}',
+  'detail.dimsMismatch': '与参数尺寸不一致',
+  'detail.dimsDiffTitle':
+    '实际分辨率 {w} × {h}，参数出图尺寸 {pw} × {ph}（不一致通常来自高清修复 / 后处理）',
   'detail.metaFileNoPreview': '参数文件（无预览图）',
   'detail.imageNotLoaded': '图片未加载',
   'detail.reattachHint': '重新拖入原文件即可回挂预览',
@@ -407,6 +412,11 @@ const en: Record<DictKey, string> = {
   'detail.downloadImage': 'Download image',
   'detail.imageCopied': 'Image copied to clipboard',
   'detail.imageCopyFailed': 'Failed to copy image: clipboard unavailable or permission denied',
+  'detail.upscaled': 'Upscaled ×{r}',
+  'detail.downscaled': 'Downscaled ×{r}',
+  'detail.dimsMismatch': 'Differs from params',
+  'detail.dimsDiffTitle':
+    'Actual {w} × {h}, param size {pw} × {ph} (the difference usually comes from hires fix / post-processing)',
   'detail.metaFileNoPreview': 'Params file (no preview)',
   'detail.imageNotLoaded': 'Image not loaded',
   'detail.reattachHint': 'Re-drop the original file to re-attach the preview',

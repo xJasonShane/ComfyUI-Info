@@ -804,6 +804,20 @@ body {
   z-index: 1;
 }
 
+/* 大图左下角实际分辨率标注（与参数出图尺寸不一致时附放大 / 缩小倍数） */
+.img-dims {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .detail-panel {
   flex: 1;
   min-width: 348px;
