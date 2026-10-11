@@ -23,7 +23,9 @@ import { t } from '../locales'
 import {
   clearDirBookmarks as clearPersistedBookmarks,
   clearPersisted,
+  contentVersionKey,
   deletePersisted,
+  fileIdentityKey,
   fromRecord,
   inspectArchive,
   importPersisted,
@@ -206,10 +208,20 @@ watch(
 )
 
 /* ---------- 指纹缓存（C1） ---------- */
-// recordKey 拼串在条目生命周期内不变（path / size / mtime 建项后不再改），
+// 版本键在同一内容版本的条目生命周期内不变；文件更新时主动清除该缓存，
 // favoriteFlags / favCount / tagLists / favOnly 筛选等 computed 每拍失效都要为全量条目
 // 重拼串，WeakMap 命中后 O(1) 复用；键为响应式代理，与原始对象各存一份无碍（值相同）
 const recordKeyCache = new WeakMap<ImageItem, string>()
+const fileIdentityKeyCache = new WeakMap<ImageItem, string>()
+
+function fileIdentityKeyOf(it: ImageItem): string {
+  let k = fileIdentityKeyCache.get(it)
+  if (k === undefined) {
+    k = fileIdentityKey(it)
+    fileIdentityKeyCache.set(it, k)
+  }
+  return k
+}
 
 function recordKeyOf(it: ImageItem): string {
   let k = recordKeyCache.get(it)
@@ -226,12 +238,28 @@ function recordKeyOf(it: ImageItem): string {
   return k
 }
 
-/** 旧版来源无 ID 时使用的别名键；仅在能唯一对应一个条目时用于安全迁移 / 回挂。 */
+/** 忽略来源 ID 的位置别名；无相对路径时保留完整版本条件以免误认同名文件。 */
 function legacyRecordKey(it: Pick<ImageItem, 'path' | 'name' | 'size' | 'mtime'>): string {
-  return recordKey({ path: it.path, name: it.name, size: it.size, mtime: it.mtime })
+  if (it.path) return `legacy:${encodeURIComponent(it.path)}`
+  return `legacy:${recordKey({ name: it.name, size: it.size, mtime: it.mtime })}`
 }
 
 const legacyItemsByKey = new Map<string, Set<ImageItem>>()
+const itemsByIdentityKey = new Map<string, Set<ImageItem>>()
+
+function indexIdentityItem(item: ImageItem) {
+  const key = fileIdentityKeyOf(item)
+  let group = itemsByIdentityKey.get(key)
+  if (!group) itemsByIdentityKey.set(key, (group = new Set()))
+  group.add(item)
+}
+
+function unindexIdentityItem(item: ImageItem) {
+  const key = fileIdentityKeyOf(item)
+  const group = itemsByIdentityKey.get(key)
+  group?.delete(item)
+  if (group?.size === 0) itemsByIdentityKey.delete(key)
+}
 
 function indexLegacyItem(item: ImageItem) {
   const key = legacyRecordKey(item)
@@ -262,6 +290,7 @@ function adoptSourceId(item: ImageItem, sourceId: string): boolean {
 
   if (item.detached) detachedByKey.delete(oldKey)
   else seenKeys.delete(oldKey)
+  unindexIdentityItem(item)
   dirtyItems.delete(oldKey)
   const pendingThumb = dirtyThumbs.get(oldKey)
   if (pendingThumb) {
@@ -270,6 +299,8 @@ function adoptSourceId(item: ImageItem, sourceId: string): boolean {
   }
   item.sourceId = sourceId
   recordKeyCache.delete(item)
+  fileIdentityKeyCache.delete(item)
+  indexIdentityItem(item)
   if (item.detached) detachedByKey.set(newKey, item)
   else seenKeys.add(newKey)
 
@@ -303,9 +334,27 @@ const PARSE_LIMIT = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4)
 const MAIN_THREAD_PARSE_LIMIT = 3
 // 清空列表时递增：旧批次的在途解析完成时不再计数，避免污染新批次进度
 let batchEpoch = 0
-// 在途任务（从开始解析到结果应用）：与响应式 status 解耦——批量扫描期间 status 保持
-// 'pending' 直到结果应用，removeItem 据此集合区分「排队 / 在途 / 已出结果」做计数对账
-const inflight = new Set<string>()
+// 解析代数：同一位置的文件版本更新时作废旧结果，并让旧任务收尾后只重排最新版本。
+const parseRevision = new WeakMap<ImageItem, number>()
+// 同一条目可同时有旧结果待应用和新版本解析任务；按解析代数分别记账。
+const inflight = new Map<string, Set<number>>()
+const activeParses = new Set<string>()
+
+function markInflight(id: string, revision: number) {
+  let revisions = inflight.get(id)
+  if (!revisions) inflight.set(id, (revisions = new Set()))
+  revisions.add(revision)
+}
+
+function unmarkInflight(id: string, revision: number) {
+  const revisions = inflight.get(id)
+  revisions?.delete(revision)
+  if (revisions?.size === 0) inflight.delete(id)
+}
+
+function hasInflight(id: string): boolean {
+  return (inflight.get(id)?.size ?? 0) > 0
+}
 // 已计入批次总数（batchTotal）的项：只有实文件入列 / 重试会递增 batchTotal，
 // 存档恢复与回挂项从未计入——removeItems 对账时只对已计入项递减，否则移除存档卡片
 // 会把计数减成负数，后续扫描的进度条与 parsing 边界随之错乱
@@ -317,6 +366,7 @@ const batchCounted = new WeakSet<ImageItem>()
 // 重算；扫描全部结束（active 归零且队列空）时立即收尾应用，单张 / 小批量场景零延迟。
 interface PendingResult {
   item: ImageItem
+  revision: number
   raw: RawMetadata
   params?: ParsedParams
   /** F2：EXIF 内嵌缩略图（原始字节），随写库批次存入 blobs store */
@@ -346,9 +396,10 @@ function applyPending() {
   const batch = pendingResults
   pendingResults = []
   for (const r of batch) {
-    inflight.delete(r.item.id)
+    unmarkInflight(r.item.id, r.revision)
     // 已移除 / 已清空的项：丢弃孤儿结果（与 markDirty 的存活校验同源，B1）
     if (!liveIds.has(r.item.id)) continue
+    if ((parseRevision.get(r.item) ?? 0) !== r.revision) continue
     r.item.raw = r.raw
     r.item.source = r.raw.source
     r.item.params = r.params
@@ -371,21 +422,42 @@ function pump() {
 }
 
 async function parseItem(item: ImageItem, epoch: number) {
-  inflight.add(item.id)
+  const revision = parseRevision.get(item) ?? 0
+  markInflight(item.id, revision)
+  activeParses.add(item.id)
   try {
     // 入队的都是实文件项（存档项不解析）
     const { raw, params, thumb } = await parseImage(item.file!)
     // 搜索串在结果落定时构建一次（应用时直接挂上）：筛选热路径只做 includes，不再每键重建
-    pendingResults.push({ item, raw, params, thumb, searchText: buildSearchText(item, params) })
+    pendingResults.push({
+      item,
+      revision,
+      raw,
+      params,
+      thumb,
+      searchText: buildSearchText(item, params),
+    })
   } catch (e) {
     pendingResults.push({
       item,
+      revision,
       raw: { source: 'none' },
       error: e instanceof Error ? e.message : String(e),
     })
   } finally {
     active--
+    activeParses.delete(item.id)
     if (epoch === batchEpoch) state.batchDone++
+    if (
+      epoch === batchEpoch &&
+      liveIds.has(item.id) &&
+      (parseRevision.get(item) ?? 0) !== revision &&
+      !queue.includes(item)
+    ) {
+      // 当前解析结果已经过期：计入旧任务完成，再为最新文件版本补一项解析任务。
+      state.batchTotal++
+      queue.push(item)
+    }
     if (active === 0 && queue.length === 0) applyPending()
     else scheduleApply()
     pump()
@@ -394,12 +466,12 @@ async function parseItem(item: ImageItem, epoch: number) {
 
 /* ---------- 添加 / 清空 ---------- */
 let seq = 0
-// 已加载文件的指纹（recordKey：路径或文件名|大小|修改时间），O(1) 查重；增删 items 时必须同步维护
+// 已加载文件的版本键（recordKey：位置|大小|修改时间），O(1) 查精确版本；增删 items 时必须同步维护
 const seenKeys = new Set<string>()
 // 存活项 id 集合（与 seenKeys 同步增删）：markDirty 写库前校验，
 // 防止已移除 / 已清空的项在解析完成时把孤儿记录重新写回存档（「复活」竞态）
 const liveIds = new Set<string>()
-// 待回挂的存档项索引（recordKey → item），addFiles 时按指纹自动回挂
+// 待回挂的存档项索引（版本键 → item），addFiles 时按精确版本自动回挂
 const detachedByKey = new Map<string, ImageItem>()
 
 export function retryItem(item: ImageItem) {
@@ -427,7 +499,7 @@ export function retryAllFailed(): number {
   return n
 }
 
-/** 返回本次直接入列的新增数量（去重后）；无扩展名文件的嗅探确认是异步入列，不计入返回值 */
+/** 返回本次新增或更新并触发解析的数量（去重后）；无扩展名文件嗅探为异步操作，不计入返回值 */
 export function addFiles(files: IncomingFile[]): number {
   const deferred: IncomingFile[] = []
   let added = 0
@@ -447,15 +519,112 @@ export function addFiles(files: IncomingFile[]): number {
   return added
 }
 
-/** 入列单个文件：返回是否新增（指纹已存在 / 存档回挂不产生解析任务，均不算新增） */
+function discardIdentityVersions(items: ImageItem[], keep: ImageItem | undefined, targetKey: string) {
+  for (const item of items) {
+    if (item === keep) continue
+    const oldKey = recordKeyOf(item)
+    if (oldKey === targetKey) continue
+    removeItems([item])
+    migrateUserMetadataKey(oldKey, targetKey)
+  }
+}
+
+/** Update an existing location in place, preserving its UI identity and user metadata. */
+function updateExistingVersion(
+  item: ImageItem,
+  file: File,
+  path?: string,
+  metaOnly = false,
+  sourceId?: string,
+): number {
+  const oldKey = recordKeyOf(item)
+  const nextIdentity = { path, name: file.name, sourceId, size: file.size, mtime: file.lastModified }
+  const nextKey = recordKey(nextIdentity)
+  if (
+    oldKey === nextKey ||
+    contentVersionKey(item) === contentVersionKey({ size: file.size, mtime: file.lastModified })
+  )
+    return 0
+
+  const queued = queue.includes(item)
+  const parsingNow = activeParses.has(item.id)
+  const revision = parseRevision.get(item) ?? 0
+  unindexIdentityItem(item)
+  unindexLegacyItem(item)
+  seenKeys.delete(oldKey)
+  detachedByKey.delete(oldKey)
+  dirtyItems.delete(oldKey)
+  dirtyThumbs.delete(oldKey)
+  deletedKeys.add(oldKey)
+  migrateUserMetadataKey(oldKey, nextKey)
+
+  if (item.url) URL.revokeObjectURL(item.url)
+  if (item.thumb) URL.revokeObjectURL(item.thumb)
+  item.file = file
+  item.url = ''
+  item.name = file.name
+  item.path = path
+  item.sourceId = sourceId
+  item.size = file.size
+  item.mtime = file.lastModified
+  item.status = 'pending'
+  item.source = 'none'
+  item.raw = { source: 'none' }
+  item.params = undefined
+  item.error = undefined
+  item.searchText = undefined
+  item.thumb = undefined
+  item.thumbB64 = undefined
+  item.detached = false
+  item.metaOnly = metaOnly || undefined
+  recordKeyCache.delete(item)
+  fileIdentityKeyCache.delete(item)
+  parseRevision.set(item, revision + 1)
+  seenKeys.add(nextKey)
+  indexIdentityItem(item)
+  indexLegacyItem(item)
+
+  if (!queued && !parsingNow) {
+    // Includes completed files and parser results already staged for the next UI apply tick.
+    state.batchTotal++
+    batchCounted.add(item)
+    queue.push(item)
+  }
+  schedulePersist()
+  pump()
+  return 1
+}
+
+/** 入列文件：先按稳定位置身份发现新版本，再按版本键去重或回挂精确存档。 */
 function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: string): number {
   const identity = { path, name: file.name, sourceId, size: file.size, mtime: file.lastModified }
-  let key = recordKey(identity)
+  const key = recordKey(identity)
+  const identityKey = fileIdentityKey(identity)
+  const exactItems = [...(itemsByIdentityKey.get(identityKey) ?? [])]
+  const exactItem = exactItems.find((item) => recordKeyOf(item) === key)
+  if (exactItem) {
+    discardIdentityVersions(exactItems, exactItem, key)
+    if (!exactItem.detached || seenKeys.has(key)) return 0
+    exactItem.file = file
+    exactItem.url = URL.createObjectURL(file)
+    exactItem.detached = false
+    seenKeys.add(key)
+    detachedByKey.delete(key)
+    markDirty(exactItem)
+    return 0
+  }
+
   if (seenKeys.has(key)) return 0
-  // 与存档项同指纹：回挂文件恢复预览，元数据已在库中，不再重新解析
+
+  // 与存档项同版本：回挂原文件即可；较旧版本会在位置身份匹配后清理。
   let archived = detachedByKey.get(key)
+  if (archived) {
+    const sameIdentity = [...(itemsByIdentityKey.get(identityKey) ?? [])]
+    discardIdentityVersions(sameIdentity, archived, key)
+  }
+
   if (!archived && sourceId) {
-    // 升级前 / 跨设备备份里的记录没有本机目录 ID。仅当路径指纹唯一时迁移，
+    // 升级前 / 跨设备备份里的记录没有本机目录 ID。仅当路径身份唯一时迁移，
     // 避免同名目录中的记录被错误吸收到当前来源。
     const legacyGroup = legacyItemsByKey.get(legacyRecordKey(identity))
     if (legacyGroup?.size === 1) {
@@ -464,15 +633,32 @@ function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: str
         candidate &&
         candidate.detached &&
         candidate.sourceId !== sourceId &&
-        (!candidate.sourceId ||
-          candidate.sourceId.startsWith('imported:'))
+        (!candidate.sourceId || candidate.sourceId.startsWith('imported:'))
       if (candidate && canAdopt && adoptSourceId(candidate, sourceId)) {
-        key = recordKeyOf(candidate)
-        if (candidate.detached) archived = candidate
-        else return 0
+        if (recordKeyOf(candidate) === key) {
+          archived = candidate
+          const sameIdentity = [...(itemsByIdentityKey.get(identityKey) ?? [])]
+          discardIdentityVersions(sameIdentity, candidate, key)
+        } else {
+          const sameIdentity = [...(itemsByIdentityKey.get(identityKey) ?? [])]
+          discardIdentityVersions(sameIdentity, candidate, key)
+          return updateExistingVersion(candidate, file, path, metaOnly, sourceId)
+        }
       }
     }
   }
+
+  if (!archived) {
+    const sameIdentity = [...(itemsByIdentityKey.get(identityKey) ?? [])]
+    if (sameIdentity.length) {
+      const candidate = sameIdentity.sort(
+        (a, b) => Number(Boolean(b.file)) - Number(Boolean(a.file)) || b.mtime - a.mtime,
+      )[0]!
+      discardIdentityVersions(sameIdentity, candidate, key)
+      return updateExistingVersion(candidate, file, path, metaOnly, sourceId)
+    }
+  }
+
   if (archived) {
     archived.file = file
     archived.url = URL.createObjectURL(file)
@@ -482,6 +668,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: str
     markDirty(archived)
     return 0
   }
+
   seenKeys.add(key)
   // 必须以响应式代理入队：解析是异步改写 item 字段，绕过代理不会触发视图更新
   const item = reactive<ImageItem>({
@@ -501,6 +688,7 @@ function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: str
   })
   state.items.push(item)
   liveIds.add(item.id)
+  indexIdentityItem(item)
   indexLegacyItem(item)
   state.batchTotal++
   batchCounted.add(item)
@@ -541,10 +729,12 @@ export function removeItems(items: ImageItem[]) {
   }
   if (!removedItems.length) return
   state.items = keep
+  const queuedItems = new Set(queue)
   const queuedIds = new Set<string>()
   for (const it of removedItems) {
     liveIds.delete(it.id)
     const key = recordKeyOf(it)
+    unindexIdentityItem(it)
     unindexLegacyItem(it)
     seenKeys.delete(key)
     if (it.detached) detachedByKey.delete(key)
@@ -553,12 +743,16 @@ export function removeItems(items: ImageItem[]) {
     deletedKeys.add(key)
     URL.revokeObjectURL(it.url)
     if (it.thumb) URL.revokeObjectURL(it.thumb)
-    if (inflight.has(it.id)) {
-      // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
-      // 与保留的 batchTotal 对齐，应用时结果被 liveIds 拦截，不会出现进度错乱或写库复活
-    } else if (it.status === 'pending') {
+    const wasQueued = queuedItems.has(it)
+    if (wasQueued) {
       queuedIds.add(it.id)
       if (batchCounted.has(it)) state.batchTotal--
+    }
+    if (hasInflight(it.id)) {
+      // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
+      // 与保留的 batchTotal 对齐；若另有排队的新版本，上面已单独撤销其计数
+    } else if (it.status === 'pending') {
+      if (!wasQueued && batchCounted.has(it)) state.batchTotal--
     } else {
       // done / error：两本账一起减（仅限已计入批次的项；存档项从未计入，不能动账）
       if (batchCounted.has(it)) {
@@ -588,8 +782,10 @@ export function clearAll() {
   liveIds.clear()
   detachedByKey.clear()
   legacyItemsByKey.clear()
+  itemsByIdentityKey.clear()
   queue.length = 0
   inflight.clear()
+  activeParses.clear()
   scanEpoch++ // 在途目录枚举的后续批次按代际丢弃，不得把清掉的文件找回
   // 自动重扫开着的话，下一拍会把目录里所有文件当新文件全部拉回，「清空」形同虚设——
   // 清空即停止监视（偏好开关同步熄灭，重新记住目录 / 手动开启可恢复）
@@ -739,7 +935,7 @@ export function clearAllDirBookmarks() {
   void flushPersistNow()
 }
 
-/** 扫描单个目录句柄（增量入列）：返回新增数，无权限 / 枚举失败返回 null（F3 抽取复用） */
+/** 扫描单个目录句柄（增量入列）：返回新增或更新数，无权限 / 枚举失败返回 null（F3 抽取复用） */
 async function scanDirectoryHandle(
   handle: FileSystemDirectoryHandle,
   sourceId: string,
@@ -764,8 +960,8 @@ async function scanDirectoryHandle(
 }
 
 /**
- * 一键重扫记住的目录：只增量添加新文件，已有文件按指纹回挂 / 去重，不会重复解析。
- * 分批边扫边入列；返回新增入列的文件数，无句柄或未获授权返回 null。
+ * 一键重扫记住的目录：新增文件入列；同位置的新版本更新原项并重解析，精确版本去重 / 回挂。
+ * 分批边扫边入列；返回新增或更新并重新解析的文件数，无句柄或未获授权返回 null。
  */
 export async function rescanDirectory(): Promise<number | null> {
   if (!rescanHandle || !rescanBookmarkId) return null
@@ -774,7 +970,7 @@ export async function rescanDirectory(): Promise<number | null> {
 
 /**
  * 一键重扫全部记住的目录（F3）：顺序扫描每个书签并增量入列。
- * 返回新增总数与失败的目录数（无权限 / 目录已失联）。
+ * 返回新增或更新总数与失败的目录数（无权限 / 目录已失联）。
  */
 export async function rescanAllDirectories(): Promise<{ added: number; failed: number }> {
   let added = 0
@@ -867,8 +1063,8 @@ function hasPendingPersistence(): boolean {
 }
 
 /**
- * 把存档记录装回列表（hydrate 与测试共用）：跳过同指纹已存在项
- * （用户在恢复完成前已拖入同指纹文件时，以实际文件为准）。
+ * 把存档记录装回列表（hydrate 与测试共用）：跳过同位置已存在的实时文件，
+ * 并保留同一位置最新内容版本（用户已拖入的文件优先）。
  * 必须以响应式代理入列并用同一代理建回挂索引：addFiles 回挂时改写的是这个代理，
  * 绕过代理的原始对象不会触发视图更新。
  * 搜索串不在此构建（P2 惰性化，见 searchTextField）——万级存档恢复只做建项，
@@ -882,11 +1078,68 @@ export function restoreArchived(records: PersistRecord[]) {
     // 存档项从不写入 seenKeys（为了允许回挂），这里以 detachedByKey 兜底防重复卡片
     if (detachedByKey.has(rec.key)) continue
     const item = reactive<ImageItem>(fromRecord(rec))
+    const sameIdentity = [...(itemsByIdentityKey.get(fileIdentityKeyOf(item)) ?? [])]
+    const liveItem = sameIdentity.find((existing) => !existing.detached)
+    if (liveItem) {
+      const liveKey = recordKeyOf(liveItem)
+      migrateUserMetadataKey(rec.key, liveKey)
+      if (rec.key !== liveKey) {
+        deletedKeys.add(rec.key)
+        schedulePersist()
+      }
+      continue
+    }
+    const archivedItems = sameIdentity.filter((existing) => existing.detached)
+    if (archivedItems.length) {
+      const latest = archivedItems.reduce((best, candidate) =>
+        candidate.mtime >= best.mtime ? candidate : best,
+      )
+      const useIncoming = rec.mtime >= latest.mtime
+      const targetKey = useIncoming ? rec.key : recordKeyOf(latest)
+      for (const stale of archivedItems) {
+        if (stale === latest) continue
+        const staleKey = recordKeyOf(stale)
+        removeItems([stale])
+        migrateUserMetadataKey(staleKey, targetKey)
+      }
+      if (useIncoming) replaceDetachedRecord(latest, rec)
+      else if (rec.key !== targetKey) {
+        migrateUserMetadataKey(rec.key, targetKey)
+        deletedKeys.add(rec.key)
+        schedulePersist()
+      }
+      continue
+    }
     detachedByKey.set(rec.key, item)
     liveIds.add(item.id)
+    indexIdentityItem(item)
     indexLegacyItem(item)
     state.items.push(item)
   }
+}
+
+/** Replace a detached archive snapshot while keeping its UI identity and stable identity index. */
+function replaceDetachedRecord(item: ImageItem, rec: PersistRecord) {
+  const oldKey = recordKeyOf(item)
+  const replacement = fromRecord(rec)
+  const id = item.id
+  unindexIdentityItem(item)
+  unindexLegacyItem(item)
+  detachedByKey.delete(oldKey)
+  dirtyItems.delete(oldKey)
+  dirtyThumbs.delete(oldKey)
+  if (item.thumb) URL.revokeObjectURL(item.thumb)
+  if (oldKey !== rec.key) {
+    deletedKeys.add(oldKey)
+    migrateUserMetadataKey(oldKey, rec.key)
+  }
+  Object.assign(item, replacement, { id, searchText: undefined, thumb: undefined })
+  recordKeyCache.delete(item)
+  fileIdentityKeyCache.delete(item)
+  detachedByKey.set(rec.key, item)
+  indexIdentityItem(item)
+  indexLegacyItem(item)
+  markDirty(item)
 }
 
 function markDirty(item: ImageItem) {
@@ -1112,6 +1365,7 @@ interface PreparedArchiveImport {
   inspection: ArchiveInspection
   localRecords: PersistRecord[]
   fresh: PersistRecord[]
+  alreadyPresent: number
   localFavorites: string[]
   localTags: Record<string, string[]>
   duplicateRecords: number
@@ -1124,9 +1378,12 @@ function prepareArchiveImport(text: string): PreparedArchiveImport {
   // 来源 ID 是目录句柄的本机身份。当前机器已有同一来源时保留它以便幂等导入；
   // 外部备份的 ID 加 imported 前缀，重新选择本机目录时可按唯一旧路径别名迁移。
   const remappedKeys = new Map<string, string>()
-  const localRecords: PersistRecord[] = []
-  const localKeys = new Set<string>()
+  const candidatesByIdentity = new Map<
+    string,
+    { record: PersistRecord; sourceKeys: string[] }
+  >()
   let duplicateRecords = inspection.duplicateRecords
+  let identityMatches = 0
   for (const rec of records) {
     const alreadyKnown = seenKeys.has(rec.key) || detachedByKey.has(rec.key)
     const sourceId =
@@ -1143,13 +1400,47 @@ function prepareArchiveImport(text: string): PreparedArchiveImport {
       size: rec.size,
       mtime: rec.mtime,
     })
-    remappedKeys.set(rec.key, key)
-    if (localKeys.has(key)) {
+    const localIdentity = { ...rec, sourceId }
+    let current = [...(itemsByIdentityKey.get(fileIdentityKey(localIdentity)) ?? [])].find(
+      (item) => !item.detached,
+    )
+    if (!current && rec.path) {
+      const legacyMatches = [...(legacyItemsByKey.get(legacyRecordKey(rec)) ?? [])].filter(
+        (item) => !item.detached,
+      )
+      if (legacyMatches.length === 1) current = legacyMatches[0]
+    }
+    if (current) {
+      remappedKeys.set(rec.key, recordKeyOf(current))
+      identityMatches++
+      continue
+    }
+    const candidate = candidatesByIdentity.get(fileIdentityKey(localIdentity))
+    if (candidate) {
+      candidate.sourceKeys.push(rec.key)
+      duplicateRecords++
+      if (rec.mtime >= candidate.record.mtime) {
+        candidate.record = { ...rec, sourceId, key }
+      }
+    } else {
+      candidatesByIdentity.set(fileIdentityKey(localIdentity), {
+        record: { ...rec, sourceId, key },
+        sourceKeys: [rec.key],
+      })
+    }
+  }
+  const localRecords: PersistRecord[] = []
+  const localKeys = new Set<string>()
+  for (const candidate of candidatesByIdentity.values()) {
+    for (const sourceKey of candidate.sourceKeys) {
+      remappedKeys.set(sourceKey, candidate.record.key)
+    }
+    if (localKeys.has(candidate.record.key)) {
       duplicateRecords++
       continue
     }
-    localKeys.add(key)
-    localRecords.push({ ...rec, sourceId, key })
+    localKeys.add(candidate.record.key)
+    localRecords.push(candidate.record)
   }
   const localFavorites = [...new Set(favorites.map((key) => remappedKeys.get(key) ?? key))]
   const localTags: Record<string, string[]> = {}
@@ -1158,7 +1449,15 @@ function prepareArchiveImport(text: string): PreparedArchiveImport {
     localTags[mapped] = [...new Set([...(localTags[mapped] ?? []), ...names])]
   }
   const fresh = localRecords.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
-  return { inspection, localRecords, fresh, localFavorites, localTags, duplicateRecords }
+  return {
+    inspection,
+    localRecords,
+    fresh,
+    alreadyPresent: identityMatches + localRecords.length - fresh.length,
+    localFavorites,
+    localTags,
+    duplicateRecords,
+  }
 }
 
 /** Validate without mutation and report what the eventual import will add or skip. */
@@ -1177,7 +1476,7 @@ export function previewArchiveImport(text: string): ArchiveImportPreview {
     records: prepared.inspection.records.length,
     invalidRecords: prepared.inspection.invalidRecords,
     duplicateRecords: prepared.duplicateRecords,
-    alreadyPresent: prepared.localRecords.length - prepared.fresh.length,
+    alreadyPresent: prepared.alreadyPresent,
     willImport: prepared.fresh.length,
     favorites: prepared.localFavorites.length,
     newFavorites,

@@ -38,7 +38,31 @@ export interface PersistRecord {
   thumbB64?: string
 }
 
-/** 存档主键 = 来源 ID（如有）+ 路径或文件名 + 大小 + 修改时间；回挂与去重共用此构造。 */
+/** 快速内容版本标记由文件大小与修改时间组成；不参与稳定文件位置身份。 */
+export function contentVersionKey(it: { size: number; mtime: number }): string {
+  return `${it.size}|${it.mtime}`
+}
+
+/**
+ * 稳定文件身份 = 目录来源（如有）+ 相对路径 / 文件名。
+ * 普通单文件选择不提供位置时，以旧版完整键作保守回退，避免合并无法区分的同名文件。
+ */
+export function fileIdentityKey(it: {
+  path?: string
+  name: string
+  sourceId?: string
+  size: number
+  mtime: number
+}): string {
+  if (!it.path && !it.sourceId) return `unlocated:${recordKey(it)}`
+  const location = it.path ?? it.name
+  const source = it.sourceId ? `${encodeURIComponent(it.sourceId)}|` : ''
+  return `identity:${source}${encodeURIComponent(location)}`
+}
+
+/**
+ * 持久化 / 收藏 / 标签使用的版本键。维持历史字面格式，避免升级时打断现有存档。
+ */
 export function recordKey(it: {
   path?: string
   name: string
@@ -46,7 +70,7 @@ export function recordKey(it: {
   size: number
   mtime: number
 }): string {
-  const pathKey = `${it.path ?? it.name}|${it.size}|${it.mtime}`
+  const pathKey = `${it.path ?? it.name}|${contentVersionKey(it)}`
   return it.sourceId ? `source:${encodeURIComponent(it.sourceId)}|${pathKey}` : pathKey
 }
 
