@@ -51,6 +51,8 @@ interface StoreState {
   dupeOnly: boolean
   /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
   favOnly: boolean
+  /** 画廊缩略图最小列宽（px，150–420）：卡片大小调节偏好 */
+  thumbSize: number
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
@@ -92,6 +94,19 @@ const schemeQuery =
     ? window.matchMedia('(prefers-color-scheme: light)')
     : null
 
+/* ---------- 缩略图大小偏好：画廊卡片最小列宽（150–420px），非法存储值回退默认 ---------- */
+const THUMB_KEY = 'cii:thumb'
+const THUMB_DEFAULT = 206
+
+function loadThumbSize(): number {
+  try {
+    const v = Number(localStorage.getItem(THUMB_KEY))
+    return Number.isFinite(v) && v >= 150 && v <= 420 ? v : THUMB_DEFAULT
+  } catch {
+    return THUMB_DEFAULT
+  }
+}
+
 const state = reactive<StoreState>({
   items: [],
   search: storedFilters.search,
@@ -106,6 +121,7 @@ const state = reactive<StoreState>({
   autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
   dupeOnly: false,
   favOnly: false,
+  thumbSize: loadThumbSize(),
 })
 
 if (!storedTheme && schemeQuery) {
@@ -119,6 +135,17 @@ if (!storedTheme && schemeQuery) {
 watch(
   () => state.sortMode,
   (m) => localStorage.setItem('cii:sort', m),
+)
+
+watch(
+  () => state.thumbSize,
+  (v) => {
+    try {
+      localStorage.setItem(THUMB_KEY, String(v))
+    } catch {
+      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+    }
+  },
 )
 
 watch(

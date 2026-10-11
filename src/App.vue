@@ -86,10 +86,11 @@ watchEffect(() => {
 })
 
 /* ---------- 画廊虚拟滚动（P3）：按行列窗口渲染，万级列表滚动恒定 DOM 量 ---------- */
-// 与 style.css .grid 的 minmax(206px, 1fr) / gap 13px 保持一致，保证列数计算与实际布局吻合
-const GRID_MIN = 206
+// 与 style.css .grid 的 minmax(var(--card-min), 1fr) / gap 13px 保持一致，保证列数计算与实际布局吻合；
+// --card-min 由 gallery 元素绑定 store.thumbSize（缩略图大小偏好），列数随之响应式重算
 const GRID_GAP = 13
 const OVERSCAN_ROWS = 3
+const GRID_MIN = computed(() => store.thumbSize)
 
 const galleryRef = ref<HTMLElement | null>(null)
 const galleryWidth = ref(0)
@@ -97,7 +98,7 @@ const galleryWidth = ref(0)
 const viewTop = ref(0)
 
 const cols = computed(() =>
-  Math.max(1, Math.floor((galleryWidth.value + GRID_GAP) / (GRID_MIN + GRID_GAP))),
+  Math.max(1, Math.floor((galleryWidth.value + GRID_GAP) / (GRID_MIN.value + GRID_GAP))),
 )
 const rowH = computed(() => {
   if (!galleryWidth.value) return 0
@@ -447,7 +448,7 @@ async function onDrop(e: DragEvent) {
           <span v-if="parsing" style="color: var(--accent)">{{ t('stat.parsing') }}</span>
         </div>
 
-        <main ref="galleryRef" class="gallery">
+        <main ref="galleryRef" class="gallery" :style="{ '--card-min': `${store.thumbSize}px` }">
           <template v-if="filteredItems.length">
             <div :style="{ height: topPad + 'px' }" aria-hidden="true" />
             <div class="grid" :class="{ selecting: selectedItems.length > 0 }">

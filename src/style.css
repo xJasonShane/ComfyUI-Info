@@ -196,7 +196,7 @@ body {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(206px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 206px), 1fr));
   gap: 13px;
 }
 
@@ -992,6 +992,22 @@ body {
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 11.5px;
+}
+
+/* 缩略图大小滑杆弹层 */
+.thumb-size-pop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.thumb-size-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 40px;
+  text-align: right;
 }
 
 .prompt-text {

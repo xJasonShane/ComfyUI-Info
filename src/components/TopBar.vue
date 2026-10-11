@@ -7,6 +7,7 @@ import {
   NPopconfirm,
   NPopover,
   NSelect,
+  NSlider,
   NSwitch,
   NTooltip,
   useMessage,
@@ -122,6 +123,9 @@ async function onDirMenu(key: string | number) {
 }
 
 const exporting = ref(false)
+
+/** 缩略图大小滑杆的悬浮提示：直接显示像素值 */
+const fmtThumb = (v: number) => `${v}px`
 
 async function exportAs(key: string | number) {
   // 只导出已出结果的项；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
@@ -342,6 +346,32 @@ const helpLines = computed(() => [
       :consistent-menu-width="false"
       style="width: 124px"
     />
+
+    <NPopover v-if="store.items.length > 0" trigger="click" placement="bottom">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('topbar.thumbSize')"
+          :title="t('topbar.thumbSize')"
+        >
+          <template #icon><Icon name="sliders" /></template>
+        </NButton>
+      </template>
+      <div class="thumb-size-pop">
+        <span>{{ t('topbar.thumbSize') }}</span>
+        <NSlider
+          v-model:value="store.thumbSize"
+          :min="150"
+          :max="420"
+          :step="10"
+          :format-tooltip="fmtThumb"
+          style="width: 150px"
+        />
+        <span class="thumb-size-val">{{ store.thumbSize }}px</span>
+      </div>
+    </NPopover>
 
     <NTooltip v-if="dupeCount > 0">
       <template #trigger>

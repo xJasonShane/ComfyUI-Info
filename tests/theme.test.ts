@@ -1,3 +1,4 @@
+import { nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 
 /**
@@ -19,9 +20,10 @@ interface FakeMql {
   listeners: ((e: { matches: boolean }) => void)[]
 }
 
-function stubEnv(opts: { storedTheme?: string; prefersLight: boolean }): FakeMql {
+function stubEnv(opts: { storedTheme?: string; prefersLight: boolean; thumb?: string }): FakeMql {
   const storage = makeStorage()
   if (opts.storedTheme) storage.setItem('cii:theme', opts.storedTheme)
+  if (opts.thumb) storage.setItem('cii:thumb', opts.thumb)
   const mql: FakeMql = { matches: opts.prefersLight, listeners: [] }
   vi.stubGlobal('localStorage', storage)
   vi.stubGlobal('navigator', { hardwareConcurrency: 4 })
@@ -79,5 +81,27 @@ describe('主题偏好', () => {
     expect(api.store.dark).toBe(true)
     emit(mql, false)
     expect(api.store.dark).toBe(true) // 未受系统变化影响（无监听）
+  })
+})
+
+describe('缩略图大小偏好', () => {
+  it('无偏好时默认 206，调整后写入偏好', async () => {
+    stubEnv({ prefersLight: true })
+    const api = await importStore()
+    expect(api.store.thumbSize).toBe(206)
+    api.store.thumbSize = 320
+    await nextTick()
+    expect(localStorage.getItem('cii:thumb')).toBe('320')
+  })
+
+  it('重启恢复合法存储值，越界 / 非法值回退默认', async () => {
+    stubEnv({ prefersLight: true, thumb: '320' })
+    expect((await importStore()).store.thumbSize).toBe(320)
+
+    stubEnv({ prefersLight: true, thumb: '9999' })
+    expect((await importStore()).store.thumbSize).toBe(206)
+
+    stubEnv({ prefersLight: true, thumb: 'abc' })
+    expect((await importStore()).store.thumbSize).toBe(206)
   })
 })
