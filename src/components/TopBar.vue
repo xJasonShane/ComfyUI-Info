@@ -192,6 +192,7 @@ const helpLines = computed(() => [
   t('help.numRange'),
   t('help.date'),
   t('help.path'),
+  t('help.posneg'),
   t('help.exclude'),
   t('help.quoted'),
   t('help.and'),

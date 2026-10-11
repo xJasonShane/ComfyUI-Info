@@ -807,27 +807,112 @@ it('重扫目录枚举失败（目录被删 / 拔盘）返回 null，不抛未�
 })
 
 it('parseQuery 拆分字段限定与普通关键词', () => {
-  const empty = { terms: [], model: [], lora: [], seed: [], path: [], date: [], num: [] }
+  const empty = {
+    terms: [],
+    model: [],
+    lora: [],
+    seed: [],
+    path: [],
+    date: [],
+    pos: [],
+    neg: [],
+    num: [],
+  }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
-    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [], date: [], num: [] },
+    all: {
+      terms: ['cat'],
+      model: ['majic'],
+      lora: [],
+      seed: ['123'],
+      path: [],
+      date: [],
+      pos: [],
+      neg: [],
+      num: [],
+    },
     none: empty,
   })
   expect(api.parseQuery('   ')).toEqual({ all: empty, none: empty })
   // 引号 + 否定组合：修复前分词正则先于 `-` 剥离执行，会在空格处被拆坏
   expect(api.parseQuery('-"model:a b"')).toEqual({
     all: empty,
-    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [], date: [], num: [] },
+    none: {
+      terms: [],
+      model: ['a b'],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: [],
+      neg: [],
+      num: [],
+    },
   })
   // 冒号后带引号的字段值：`model:"a b"` 整体成一个 token，值剥离引号后入桶
   expect(api.parseQuery('model:"a b"')).toEqual({
-    all: { terms: [], model: ['a b'], lora: [], seed: [], path: [], date: [], num: [] },
+    all: {
+      terms: [],
+      model: ['a b'],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: [],
+      neg: [],
+      num: [],
+    },
     none: empty,
   })
   expect(api.parseQuery('-model:"a b c"').none.model).toEqual(['a b c'])
+  // pos / neg 字段：仅匹配对应方向提示词，大小写不敏感，可与引号 / 排除连用
+  expect(api.parseQuery('POS:masterpiece -neg:blurry')).toEqual({
+    all: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: ['masterpiece'],
+      neg: [],
+      num: [],
+    },
+    none: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: [],
+      pos: [],
+      neg: ['blurry'],
+      num: [],
+    },
+  })
   // date 字段：非法格式照常入桶，由 hitDate 匹配时判否
   expect(api.parseQuery('date:2026-01-31 -date:2025-12')).toEqual({
-    all: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2026-01-31'], num: [] },
-    none: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2025-12'], num: [] },
+    all: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: ['2026-01-31'],
+      pos: [],
+      neg: [],
+      num: [],
+    },
+    none: {
+      terms: [],
+      model: [],
+      lora: [],
+      seed: [],
+      path: [],
+      date: ['2025-12'],
+      pos: [],
+      neg: [],
+      num: [],
+    },
   })
   // seed 条件须为「可选比较符 + 数字」：残缺条件（如 `seed:>=`）忽略而非恒真
   expect(api.parseQuery('seed:>=').all.seed).toEqual([])
@@ -844,6 +929,8 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       seed: [],
       path: [],
       date: [],
+      pos: [],
+      neg: [],
       num: [
         { field: 'steps', op: '>', value: 30 },
         { field: 'width', op: '>=', value: 1024 },
@@ -894,6 +981,32 @@ it('搜索语法增强：排除 / 引号含空格值 / 种子范围（O1）', as
   expect(names('seed:<=111222333')).toEqual(['a.png'])
   expect(names('seed:>=111222333')).toEqual(['a.png', 'b.png'])
   expect(names('seed:<5')).toEqual([])
+  api.store.search = ''
+})
+
+it('pos / neg 字段定向搜索：仅匹配对应方向的提示词', async () => {
+  const add = (name: string, parameters: string) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }) }])
+  }
+  // a：正向 cat / 负向 dog；b：正向 dog / 负向 cat——同一词按方向区分
+  add('a.png', 'cat\nNegative prompt: dog\nSteps: 20, Seed: 1')
+  add('b.png', 'dog\nNegative prompt: cat\nSteps: 20, Seed: 2')
+  await flush()
+  api.store.sourceFilter = 'all'
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  expect(names('cat')).toEqual(['a.png', 'b.png']) // 裸关键词匹配全域（正负都算）
+  expect(names('pos:cat')).toEqual(['a.png'])
+  expect(names('neg:cat')).toEqual(['b.png'])
+  expect(names('pos:dog')).toEqual(['b.png'])
+  expect(names('neg:dog')).toEqual(['a.png'])
+  expect(names('-neg:dog')).toEqual(['b.png'])
   api.store.search = ''
 })
 

@@ -905,6 +905,10 @@ export interface QueryConditions {
   path: string[]
   /** `date:YYYY-MM-DD`（支持 YYYY / YYYY-MM 前缀，本地时区按天匹配 mtime） */
   date: string[]
+  /** `pos:xxx` 仅匹配正向提示词 */
+  pos: string[]
+  /** `neg:xxx` 仅匹配负向提示词 */
+  neg: string[]
   num: NumCondition[]
 }
 
@@ -915,7 +919,8 @@ export interface ParsedQuery {
   none: QueryConditions
 }
 
-const QUERY_FIELD_RE = /^(model|lora|seed|path|date|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+const QUERY_FIELD_RE =
+  /^(model|lora|seed|path|date|pos|neg|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
 
 /** 数值字段别名：w / h 是 width / height 的简写 */
 const NUM_FIELDS: Record<string, NumField> = {
@@ -976,7 +981,7 @@ function hitDate(cond: string, it: ImageItem): boolean {
 }
 
 function hitCondition(
-  kind: 'terms' | 'model' | 'lora' | 'seed' | 'path' | 'date',
+  kind: 'terms' | 'model' | 'lora' | 'seed' | 'path' | 'date' | 'pos' | 'neg',
   value: string,
   it: ImageItem,
 ): boolean {
@@ -995,6 +1000,10 @@ function hitCondition(
       return (it.path ?? it.name).toLowerCase().includes(value)
     case 'date':
       return hitDate(value, it)
+    case 'pos':
+      return (it.params?.positive ?? []).some((s) => s.toLowerCase().includes(value))
+    case 'neg':
+      return (it.params?.negative ?? []).some((s) => s.toLowerCase().includes(value))
   }
 }
 
@@ -1038,7 +1047,7 @@ function hitNum(cond: NumCondition, it: ImageItem): boolean {
 }
 
 function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of ['terms', 'model', 'lora', 'seed', 'path', 'date'] as const) {
+  for (const kind of ['terms', 'model', 'lora', 'seed', 'path', 'date', 'pos', 'neg'] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
     }
@@ -1052,6 +1061,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
 /**
  * 解析搜索框语法（O1 增强）：
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
+ * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
  * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
@@ -1068,6 +1078,8 @@ export function parseQuery(raw: string): ParsedQuery {
     seed: [],
     path: [],
     date: [],
+    pos: [],
+    neg: [],
     num: [],
   })
   const out: ParsedQuery = { all: empty(), none: empty() }
@@ -1102,7 +1114,9 @@ export function parseQuery(raw: string): ParsedQuery {
         // seed 条件须为「可选比较符 + 数字」——`seed:>=` 这类残缺值会在 hitSeed 里
         // 经比较符回溯匹配成空目标而退化为恒真，这里直接忽略
         if (value && (field !== 'seed' || /^(>=|<=|>|<)?\d+$/.test(value))) {
-          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(value.toLowerCase())
+          bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date' | 'pos' | 'neg'].push(
+            value.toLowerCase(),
+          )
         }
       }
     } else {
