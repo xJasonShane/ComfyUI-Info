@@ -249,7 +249,7 @@ const zh = {
   'detail.noWorkflow': '（此图未内嵌 UI 工作流）',
   'detail.prettyJson': '格式化显示',
   'detail.workflowHint': '下载的 workflow.json 可直接拖入 ComfyUI 画布恢复整个工作流。',
-  'detail.kbdHint': '← / → 切换图片 · Esc 关闭',
+  'detail.kbdHint': '← / → 切换图片 · F 收藏 · Delete 删除并前进 · Esc 关闭',
   'detail.copied': '{label}已复制',
 
   /* CompareDrawer */
@@ -566,7 +566,7 @@ const en: Record<DictKey, string> = {
   'detail.prettyJson': 'Pretty-print',
   'detail.workflowHint':
     'The downloaded workflow.json can be dropped onto the ComfyUI canvas to restore the workflow.',
-  'detail.kbdHint': '← / → switch images · Esc closes',
+  'detail.kbdHint': '← / → switch · F favorite · Delete removes & advances · Esc closes',
   'detail.copied': '{label} copied',
 
   'cmp.basics': 'Basics',

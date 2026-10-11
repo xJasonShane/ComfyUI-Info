@@ -386,9 +386,39 @@ function openCompare() {
 function onKeydown(e: KeyboardEvent) {
   if (!showDetail.value || !current.value) return
   if (inEditable(e.target)) return // 焦点在输入框内时方向键属于光标，不切换图片
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-  navDetail(e.key === 'ArrowRight' ? 1 : -1)
-  e.preventDefault()
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    navDetail(e.key === 'ArrowRight' ? 1 : -1)
+    e.preventDefault()
+    return
+  }
+  // F：收藏 / 取消收藏当前图（与文件行星标按钮同一账本）
+  if (e.key.toLowerCase() === 'f') {
+    toggleFavorite(current.value)
+    e.preventDefault()
+    return
+  }
+  // Delete：移除当前图并同位置补位前进（不绑 Backspace——语义过于接近「返回」，
+  // 且移除会连带清掉存档记录，须用明确的按键防误触）
+  if (e.key === 'Delete') {
+    removeCurrentAndAdvance()
+    e.preventDefault()
+  }
+}
+
+/** 键盘删除当前详情图：按旧筛选顺序同位置补位（下一位顶上，末张退到新的末张），列表空则收抽屉 */
+function removeCurrentAndAdvance() {
+  const item = current.value
+  if (!item) return
+  const list = filteredItems.value
+  const idx = list.findIndex((i) => i.id === item.id)
+  removeItem(item)
+  selectedIds.value.delete(item.id)
+  const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1]) : undefined
+  if (next) current.value = next
+  else {
+    showDetail.value = false
+    current.value = null
+  }
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
