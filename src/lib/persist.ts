@@ -343,10 +343,15 @@ export async function loadPersisted(): Promise<PersistRecord[]> {
   return records
 }
 
-export async function putPersisted(records: PersistRecord[]): Promise<void> {
+export async function putPersisted(
+  records: PersistRecord[],
+  /** 可选取消检查：await getDb 期间批次被作废（清空列表）时放弃本次写入，防复活已清历史 */
+  cancelled?: () => boolean,
+): Promise<void> {
   if (!records.length) return
   const splits = records.map(splitPersistRecord)
   const db = await getDb()
+  if (cancelled?.()) return
   // 同一事务先写 blobs 再写记录：中断最多留下无引用的孤儿 blob，不会出现记录引用悬空
   const tx = db.transaction([STORE, BLOB_STORE], 'readwrite')
   const blobStore = tx.objectStore(BLOB_STORE)
@@ -358,9 +363,10 @@ export async function putPersisted(records: PersistRecord[]): Promise<void> {
   await settled(tx)
 }
 
-export async function deletePersisted(keys: string[]): Promise<void> {
+export async function deletePersisted(keys: string[], cancelled?: () => boolean): Promise<void> {
   if (!keys.length) return
   const db = await getDb()
+  if (cancelled?.()) return
   const tx = db.transaction(STORE, 'readwrite')
   const store = tx.objectStore(STORE)
   for (const key of keys) store.delete(key)

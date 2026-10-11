@@ -282,6 +282,29 @@ it('移除在途条目：计数保留，解析完成后自动对账', async () =
   expect(api.parsing.value).toBe(false)
 })
 
+it('flushPersist 向写库传递批次取消检查，清空列表即在途写库作废（复活竞态防护）', async () => {
+  await new Promise((r) => setTimeout(r, 510)) // 清空前序用例遗留的 500ms flush 防抖定时器
+  vi.mocked(putPersisted).mockClear()
+  vi.useFakeTimers()
+  try {
+    vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+    api.addFiles([file('a.png')])
+    await vi.advanceTimersByTimeAsync(0) // 解析完成 → 应用 → markDirty → 500ms 写库防抖
+
+    let guard: (() => boolean) | undefined
+    vi.mocked(putPersisted).mockImplementationOnce(async (_records, cancelled) => {
+      guard = cancelled
+    })
+    await vi.advanceTimersByTimeAsync(500) // flush 定时器触发，写库捕获取消检查
+    expect(typeof guard).toBe('function')
+    expect(guard!()).toBe(false) // 批次仍有效，写库放行
+    api.clearAll()
+    expect(guard!()).toBe(true) // 清空作废本轮写库，getDb 之后的写入必须放弃
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
 it('移除 / 清空的在途项解析完成后不写库存档（不「复活」到存档）', async () => {
   // 先真实等待前序用例遗留的 500ms 写库防抖定时器清空：flushTimer 是模块级单例，
   // 未清空会阻断本用例在假时钟上调度新写入；随后清掉遗留 flush 产生的调用记录
@@ -303,7 +326,9 @@ it('移除 / 清空的在途项解析完成后不写库存档（不「复活」�
     release()
     await vi.advanceTimersByTimeAsync(600) // 解析完成 + 500ms 写库防抖
     expect(putPersisted).not.toHaveBeenCalled()
-    expect(deletePersisted).toHaveBeenCalledWith([recordKey(item)])
+    expect(deletePersisted).toHaveBeenCalled()
+    // 第二个参数是 flushPersist 传入的批次取消检查函数，这里只断言键列表
+    expect(vi.mocked(deletePersisted).mock.calls[0]![0]).toEqual([recordKey(item)])
 
     // 场景二：清空列表时仍有在途解析 → 完成后不得把孤儿记录写回已清空的存档
     vi.mocked(putPersisted).mockClear()

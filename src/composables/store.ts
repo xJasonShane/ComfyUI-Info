@@ -557,16 +557,19 @@ function schedulePersist() {
 
 async function flushPersist() {
   const epoch = persistEpoch
+  // 取消检查贯穿到事务创建前：flush 在 await getDb 期间遇 clearAll 时，
+  // persistEpoch 已作废本轮，写库若继续排队会落在 clearPersisted 之后，把已清历史写回
+  const isStale = () => epoch !== persistEpoch
   const items = [...dirtyItems.values()]
   dirtyItems.clear()
   const keys = [...deletedKeys]
   deletedKeys.clear()
   try {
     // 清空列表会作废本轮写库，避免把已删除的历史写回去
-    if (epoch !== persistEpoch) return
+    if (isStale()) return
     const records = items.map(toRecord).filter((r) => r !== null)
-    if (records.length) await putPersisted(records)
-    if (keys.length) await deletePersisted(keys)
+    if (records.length) await putPersisted(records, isStale)
+    if (keys.length && !isStale()) await deletePersisted(keys, isStale)
   } catch (err) {
     // 写库失败（配额 / 环境限制）不影响功能，本轮丢弃；保留告警便于定位环境问题
     console.warn('[comfyui-info] 存档写入失败，本轮丢弃:', err)
