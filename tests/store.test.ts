@@ -1295,6 +1295,45 @@ it('date: 按本地时区日期筛选，支持年 / 月前缀与排除（FEAT-2�
   api.store.search = ''
 })
 
+it('date: 范围比较（> >= < <=，年 / 月前缀展开为区间端点）', async () => {
+  const add = (name: string, mtime: number) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'comfyui' },
+      params: undefined,
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: mtime }) }])
+  }
+  const t1 = new Date(2025, 0, 15, 10, 30).getTime() // 2025-01-15
+  const t2 = new Date(2026, 0, 31, 23, 0).getTime() // 2026-01-31
+  const t3 = new Date(2026, 4, 2, 8, 0).getTime() // 2026-05-02
+  add('a.png', t1)
+  add('b.png', t2)
+  add('c.png', t3)
+  await flush()
+  api.store.sourceFilter = 'all'
+  api.store.sortMode = 'default'
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  // 严格大于 / 小于：月前缀按整月边界展开
+  expect(names('date:>2026-01')).toEqual(['c.png'])
+  expect(names('date:<2026-01')).toEqual(['a.png'])
+  // 大于等于 / 小于等于：含边界月
+  expect(names('date:>=2026-01')).toEqual(['b.png', 'c.png'])
+  expect(names('date:<=2026-01')).toEqual(['a.png', 'b.png'])
+  // 天粒度：同日不命中严格大于
+  expect(names('date:>2026-01-31')).toEqual(['c.png'])
+  expect(names('date:<=2026-01-31')).toEqual(['a.png', 'b.png'])
+  // 年前缀范围
+  expect(names('date:<2026')).toEqual(['a.png'])
+  expect(names('date:>=2026')).toEqual(['b.png', 'c.png'])
+  // 与普通条件 AND 组合；非法日期恒不命中
+  expect(names('date:>=2025 date:<2026-02')).toEqual(['a.png', 'b.png'])
+  expect(names('date:>abc')).toEqual([])
+  api.store.search = ''
+})
+
 it('按工作流聚类排序：同工作流相邻成组，组内新→旧（F3）', async () => {
   const promptA = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5 } } })
   const promptB = JSON.stringify({ '7': { class_type: 'KSampler', inputs: { seed: 9 } } })

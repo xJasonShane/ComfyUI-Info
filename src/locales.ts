@@ -108,7 +108,8 @@ const zh = {
   'help.seedRange': '<code>seed:&gt;100</code> 种子范围（&gt; ≥ &lt; ≤）',
   'help.numRange':
     '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> 数值范围',
-  'help.date': '<code>date:2026-01-31</code> 按日期（本地时区，支持年 / 月前缀）',
+  'help.date':
+    '<code>date:2026-01-31</code> 按日期，<code>date:&gt;=2026-01</code> 范围（&gt; ≥ &lt; ≤）',
   'help.path': '<code>path:目录</code> 按相对路径',
   'help.posneg': '<code>pos:xxx</code> / <code>neg:xxx</code> 仅匹配正向 / 负向提示词',
   'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> 按采样器 / 调度器',
@@ -389,7 +390,8 @@ const en: Record<DictKey, string> = {
   'help.seedRange': '<code>seed:&gt;100</code> seed range (&gt; ≥ &lt; ≤)',
   'help.numRange':
     '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> numeric range',
-  'help.date': '<code>date:2026-01-31</code> by date (local timezone, year / month prefixes work)',
+  'help.date':
+    '<code>date:2026-01-31</code> by date, <code>date:&gt;=2026-01</code> range (&gt; ≥ &lt; ≤)',
   'help.path': '<code>path:dir</code> by relative path',
   'help.posneg':
     '<code>pos:xxx</code> / <code>neg:xxx</code> match positive / negative prompts only',

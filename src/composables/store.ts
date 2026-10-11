@@ -928,7 +928,7 @@ export interface QueryConditions {
   lora: string[]
   seed: string[]
   path: string[]
-  /** `date:YYYY-MM-DD`（支持 YYYY / YYYY-MM 前缀，本地时区按天匹配 mtime） */
+  /** `date:YYYY-MM-DD`（支持 YYYY / YYYY-MM 前缀与 > >= < <= 范围，本地时区按天匹配 mtime） */
   date: string[]
   /** `pos:xxx` 仅匹配正向提示词 */
   pos: string[]
@@ -1007,10 +1007,29 @@ function localDayKey(d: Date): string {
   ).padStart(2, '0')}`
 }
 
-/** date: 条件：按 mtime 的本地时区日期匹配；支持 YYYY / YYYY-MM / YYYY-MM-DD 前缀 */
+/** date: 条件：按 mtime 的本地时区日期匹配；支持 YYYY / YYYY-MM / YYYY-MM-DD 前缀与 > >= < <= 范围 */
 function hitDate(cond: string, it: ImageItem): boolean {
-  if (!/^\d{4}(-\d{2})?(-\d{2})?$/.test(cond)) return false
-  return localDayKey(new Date(it.mtime)).startsWith(cond)
+  const m = cond.match(/^(>=|<=|>|<)?(.+)$/)!
+  const target = m[2]!
+  if (!/^\d{4}(-\d{2})?(-\d{2})?$/.test(target)) return false
+  const day = localDayKey(new Date(it.mtime))
+  if (!m[1]) return day.startsWith(target)
+  // 范围按 ISO 零填充串的字典序比较；年 / 月前缀先展开成对应区间的起止日，
+  // 使 `date:>2026-01` 语义为「1 月之后」（而非 1 月内日期按字符串大于前缀）
+  const start =
+    target.length === 4 ? `${target}-01-01` : target.length === 7 ? `${target}-01` : target
+  const end =
+    target.length === 4 ? `${target}-12-31` : target.length === 7 ? `${target}-31` : target
+  switch (m[1]) {
+    case '>':
+      return day > end
+    case '<':
+      return day < start
+    case '>=':
+      return day >= start
+    default:
+      return day <= end
+  }
 }
 
 function hitCondition(
@@ -1155,7 +1174,8 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
  * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx`
  * - 存在性 `has:lora|vae|hires|upscale|controlnet`，可配 `-` 排除
- * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀
+ * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀，
+ *   `date:>2026-01-01` / `date:<=2026-06` 范围筛选（前缀展开为区间端点再比较）
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
  * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
