@@ -128,7 +128,11 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     <div v-if="dupe && dupe.total > 1" class="cluster-badge" :title="t('card.sameSourceTitle')">
       {{ t('card.sameSource', { x: dupe.seq, y: dupe.total }) }}
     </div>
-    <div v-else-if="cluster && cluster.total > 1" class="cluster-badge" :title="t('card.sameWorkflowTitle')">
+    <div
+      v-else-if="cluster && cluster.total > 1"
+      class="cluster-badge"
+      :title="t('card.sameWorkflowTitle')"
+    >
       {{ t('card.sameWorkflow', { x: cluster.seq, y: cluster.total }) }}
     </div>
     <div v-if="modelShort || dims" class="veil">

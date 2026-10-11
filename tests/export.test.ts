@@ -74,7 +74,11 @@ describe('buildExportCsv', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff)
     const lines = csv.slice(1).split('\r\n')
     expect(lines).toHaveLength(2)
-    expect(lines[0].startsWith('文件名,路径,大小(字节),来源,修改时间,模型,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器')).toBe(true)
+    expect(
+      lines[0].startsWith(
+        '文件名,路径,大小(字节),来源,修改时间,模型,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器',
+      ),
+    ).toBe(true)
     expect(lines[1].startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
     expect(lines[1]).toContain('"masterpiece, a cat"') // 含逗号的提示词整体加引号
     expect(lines[1]).toContain('add_detail(m:0.8 c:0.8 #aaaabbbb)')
@@ -109,7 +113,7 @@ describe('buildExportCsv', () => {
     ])
     const line = csv.slice(1).split('\r\n')[1]!
     expect(line.startsWith("'-canvas.png,")) // 文件名列同样防护
-    expect(line).toContain("'=1+1 CMD|\"\"calc\"\"\"") // 提示词列：先加 ' 防公式，再按含引号规则转义
+    expect(line).toContain('\'=1+1 CMD|""calc"""') // 提示词列：先加 ' 防公式，再按含引号规则转义
     expect(line).toContain(',1234,') // 大小为数字：不加前缀
   })
 
@@ -132,7 +136,13 @@ describe('buildExportCsv', () => {
   it('扩展参数列：Clip Skip / VAE / 放大模型 / ControlNet（FEAT-2）', () => {
     const csv = buildExportCsv([
       makeItem({
-        params: { ...params, vaes: ['vae-ft-mse'], clipSkip: 2, upscalers: ['4x-US'], controlNets: ['canny'] },
+        params: {
+          ...params,
+          vaes: ['vae-ft-mse'],
+          clipSkip: 2,
+          upscalers: ['4x-US'],
+          controlNets: ['canny'],
+        },
       }),
     ])
     const line = csv.slice(1).split('\r\n')[1]!

@@ -5,3 +5,5 @@ docs/
 tests/fixtures/
 package-lock.json
 *.md
+test-results/
+playwright-report/

@@ -35,7 +35,12 @@ export interface PersistRecord {
 }
 
 /** 存档主键 = 去重指纹（路径或文件名|大小|修改时间）：回挂匹配与去重共用同一构造 */
-export function recordKey(it: { path?: string; name: string; size: number; mtime: number }): string {
+export function recordKey(it: {
+  path?: string
+  name: string
+  size: number
+  mtime: number
+}): string {
   return `${it.path ?? it.name}|${it.size}|${it.mtime}`
 }
 
@@ -267,19 +272,22 @@ function openDb(): Promise<IDBDatabase> {
  */
 function getDb(): Promise<IDBDatabase> {
   if (!dbPromise) {
-    dbPromise = openDb().then((db) => {
-      db.onclose = () => {
+    dbPromise = openDb().then(
+      (db) => {
+        db.onclose = () => {
+          dbPromise = null
+        }
+        db.onversionchange = () => {
+          db.close()
+          dbPromise = null
+        }
+        return db
+      },
+      (err) => {
         dbPromise = null
-      }
-      db.onversionchange = () => {
-        db.close()
-        dbPromise = null
-      }
-      return db
-    }, (err) => {
-      dbPromise = null
-      throw err
-    })
+        throw err
+      },
+    )
   }
   return dbPromise
 }
@@ -453,7 +461,12 @@ const ARCHIVE_VERSION = 3
 /** 存档备份序列化：与存档记录同构（含参数与诊断信息，不含图片本体） */
 export function serializeArchive(records: PersistRecord[]): string {
   return JSON.stringify(
-    { version: ARCHIVE_VERSION, exportedAt: new Date().toISOString(), count: records.length, records },
+    {
+      version: ARCHIVE_VERSION,
+      exportedAt: new Date().toISOString(),
+      count: records.length,
+      records,
+    },
     null,
     2,
   )

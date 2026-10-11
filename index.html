@@ -11,7 +11,9 @@
       // F2：PWA 仅在可用的安全上下文注册（file:// 单文件版直接跳过，行为不变）
       if (
         'serviceWorker' in navigator &&
-        (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+        (location.protocol === 'https:' ||
+          location.hostname === 'localhost' ||
+          location.hostname === '127.0.0.1')
       ) {
         window.addEventListener('load', function () {
           navigator.serviceWorker.register('./sw.js').catch(function () {})

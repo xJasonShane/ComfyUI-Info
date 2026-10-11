@@ -39,7 +39,10 @@ export class WorkerEntry implements ParseTransport {
   private seq = 0
   private worker: Worker
 
-  constructor(workerCtor: new () => Worker, private jobTimeoutMs = JOB_TIMEOUT_MS) {
+  constructor(
+    workerCtor: new () => Worker,
+    private jobTimeoutMs = JOB_TIMEOUT_MS,
+  ) {
     this.worker = new workerCtor()
     this.worker.onmessage = (e: MessageEvent<ParseWorkerReply>) => {
       const job = this.jobs.get(e.data.id)

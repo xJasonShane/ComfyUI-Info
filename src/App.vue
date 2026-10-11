@@ -44,7 +44,17 @@ import ImageCard from './components/ImageCard.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
 import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
-import { addFiles, filteredItems, parsing, rangeIds, removeItem, removeItems, retryAllFailed, stats, store } from './composables/store'
+import {
+  addFiles,
+  filteredItems,
+  parsing,
+  rangeIds,
+  removeItem,
+  removeItems,
+  retryAllFailed,
+  stats,
+  store,
+} from './composables/store'
 import { exportItems, exportOptions } from './lib/export'
 import { copyText } from './lib/utils'
 import { locale, t } from './locales'
@@ -464,7 +474,9 @@ async function onDrop(e: DragEvent) {
 
         <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
           <span class="sel-count" v-html="t('bar.selected', { n: selectedItems.length })" />
-          <NButton size="tiny" secondary @click="selectAllFiltered">{{ t('bar.selectAllFiltered') }}</NButton>
+          <NButton size="tiny" secondary @click="selectAllFiltered">{{
+            t('bar.selectAllFiltered')
+          }}</NButton>
           <NButton
             v-if="selectedItems.length === 2"
             size="tiny"
@@ -475,9 +487,13 @@ async function onDrop(e: DragEvent) {
           >
             {{ t('bar.compare') }}
           </NButton>
-          <NButton size="tiny" secondary @click="batchCopyPrompts">{{ t('bar.copyPrompts') }}</NButton>
+          <NButton size="tiny" secondary @click="batchCopyPrompts">{{
+            t('bar.copyPrompts')
+          }}</NButton>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
-            <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">{{ t('bar.exportSelected') }}</NButton>
+            <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">{{
+              t('bar.exportSelected')
+            }}</NButton>
           </NDropdown>
           <NPopconfirm @positive-click="batchRemove">
             <template #trigger>
@@ -485,12 +501,18 @@ async function onDrop(e: DragEvent) {
             </template>
             {{ t('bar.removeConfirm', { n: selectedItems.length }) }}
           </NPopconfirm>
-          <NButton size="tiny" quaternary @click="clearSelection">{{ t('bar.clearSelection') }}</NButton>
+          <NButton size="tiny" quaternary @click="clearSelection">{{
+            t('bar.clearSelection')
+          }}</NButton>
         </div>
 
         <DetailDrawer v-model:show="showDetail" :item="current" />
 
-        <CompareDrawer v-model:show="showCompare" :a="comparePair?.[0] ?? null" :b="comparePair?.[1] ?? null" />
+        <CompareDrawer
+          v-model:show="showCompare"
+          :a="comparePair?.[0] ?? null"
+          :b="comparePair?.[1] ?? null"
+        />
 
         <div v-if="dragging" class="drop-overlay">
           <div class="inner">{{ t('drop.hint') }}</div>

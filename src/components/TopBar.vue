@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NDropdown, NInput, NPopconfirm, NPopover, NSelect, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import {
+  NButton,
+  NDropdown,
+  NInput,
+  NPopconfirm,
+  NPopover,
+  NSelect,
+  NSwitch,
+  NTooltip,
+  useMessage,
+} from 'naive-ui'
 import Icon from './Icon.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
@@ -159,7 +169,9 @@ async function onImportArchiveFile(e: Event) {
     if (n) message.success(t('msg.archiveImported', { n }))
     else message.info(t('msg.archiveAllExists'))
   } catch (err) {
-    message.error(t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }))
+    message.error(
+      t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),
+    )
   }
 }
 
@@ -215,11 +227,20 @@ const helpLines = computed(() => [
     </NTooltip>
     <NTooltip v-if="store.rescanName">
       <template #trigger>
-        <NSwitch v-model:value="store.autoRescan" size="small" :aria-label="t('topbar.autoRescanAria')" />
+        <NSwitch
+          v-model:value="store.autoRescan"
+          size="small"
+          :aria-label="t('topbar.autoRescanAria')"
+        />
       </template>
       {{ t('topbar.autoRescanTooltip', { name: store.rescanName }) }}
     </NTooltip>
-    <NDropdown v-if="store.dirBookmarks.length" trigger="click" :options="dirMenuOptions" @select="onDirMenu">
+    <NDropdown
+      v-if="store.dirBookmarks.length"
+      trigger="click"
+      :options="dirMenuOptions"
+      @select="onDirMenu"
+    >
       <NButton size="small" secondary :title="t('topbar.dirsTitle')">
         <template #icon><Icon name="folder" /></template>
         {{ t('topbar.dirs') }}
@@ -227,7 +248,12 @@ const helpLines = computed(() => [
     </NDropdown>
     <NPopconfirm v-if="store.rescanName" @positive-click="onForgetRescan">
       <template #trigger>
-        <NButton size="small" quaternary :aria-label="t('topbar.forgetTitle')" :title="t('topbar.forgetTitle')">
+        <NButton
+          size="small"
+          quaternary
+          :aria-label="t('topbar.forgetTitle')"
+          :title="t('topbar.forgetTitle')"
+        >
           <template #icon><Icon name="x" /></template>
         </NButton>
       </template>
@@ -239,7 +265,12 @@ const helpLines = computed(() => [
       :options="exportOptions"
       @select="exportAs"
     >
-      <NButton size="small" secondary :loading="exporting" :disabled="exporting || filteredItems.length === 0">
+      <NButton
+        size="small"
+        secondary
+        :loading="exporting"
+        :disabled="exporting || filteredItems.length === 0"
+      >
         <template #icon><Icon name="download" /></template>
         {{ t('topbar.export') }}
       </NButton>
@@ -312,7 +343,11 @@ const helpLines = computed(() => [
 
     <NTooltip v-if="dupeCount > 0">
       <template #trigger>
-        <NSwitch v-model:value="store.dupeOnly" size="small" :aria-label="t('topbar.dupeOnlyAria')" />
+        <NSwitch
+          v-model:value="store.dupeOnly"
+          size="small"
+          :aria-label="t('topbar.dupeOnlyAria')"
+        />
       </template>
       {{ t('topbar.dupeOnlyTooltip') }}
     </NTooltip>
@@ -344,7 +379,14 @@ const helpLines = computed(() => [
       <template #icon><Icon :name="store.dark ? 'sun' : 'moon'" /></template>
     </NButton>
 
-    <NButton size="small" quaternary circle :aria-label="t('topbar.localeAria')" :title="t('topbar.localeAria')" @click="toggleLocale">
+    <NButton
+      size="small"
+      quaternary
+      circle
+      :aria-label="t('topbar.localeAria')"
+      :title="t('topbar.localeAria')"
+      @click="toggleLocale"
+    >
       <span style="font-size: 11px; font-weight: 600">{{ locale === 'zh' ? 'EN' : '中' }}</span>
     </NButton>
 
@@ -363,6 +405,12 @@ const helpLines = computed(() => [
       @change="onPick"
     />
     <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onPick" />
-    <input ref="archiveInput" type="file" accept=".json,application/json" hidden @change="onImportArchiveFile" />
+    <input
+      ref="archiveInput"
+      type="file"
+      accept=".json,application/json"
+      hidden
+      @change="onImportArchiveFile"
+    />
   </header>
 </template>

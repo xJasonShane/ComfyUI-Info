@@ -48,7 +48,10 @@ const COMFY_PROMPT = {
   },
   '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'dreamshaper_8.safetensors' } },
   '5': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 768, batch_size: 1 } },
-  '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a cozy cabin in snowy forest', clip: ['4', 1] } },
+  '6': {
+    class_type: 'CLIPTextEncode',
+    inputs: { text: 'a cozy cabin in snowy forest', clip: ['4', 1] },
+  },
   '7': { class_type: 'CLIPTextEncode', inputs: { text: 'blurry', clip: ['4', 1] } },
 }
 
@@ -162,7 +165,10 @@ test('刷新后解析结果从 IndexedDB 以存档卡片恢复', async ({ page }
     db.close()
     return { names, count: rows.length }
   })
-  expect(idbState.count, `刷新前 IndexedDB 应已有存档记录: ${JSON.stringify(idbState)}`).toBeGreaterThan(0)
+  expect(
+    idbState.count,
+    `刷新前 IndexedDB 应已有存档记录: ${JSON.stringify(idbState)}`,
+  ).toBeGreaterThan(0)
 
   await page.reload()
   // 存档项无文件本体：以「已存档」卡片呈现，参数仍可查看

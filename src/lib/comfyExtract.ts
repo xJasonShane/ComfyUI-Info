@@ -377,7 +377,8 @@ export function extractUiWorkflowParams(text: string): ParsedParams | null {
 
     if (!bypassed && /KSampler|Sampler/i.test(cls)) {
       const fields = samplerFromWidgets(wv)
-      if (fields) drafts.push({ node, info: { nodeId: String(node.id), classType: cls, ...fields } })
+      if (fields)
+        drafts.push({ node, info: { nodeId: String(node.id), classType: cls, ...fields } })
     }
 
     if (bypassed) continue
@@ -410,7 +411,8 @@ export function extractUiWorkflowParams(text: string): ParsedParams | null {
       // stop_at_clip_layer 为负：-1 = 跳过最后 1 层（即 A1111 语境的 Clip Skip 2）
       if (stop !== undefined && stop < 0) out.clipSkip = 1 - stop
     }
-    if (/VAELoader/i.test(cls) && firstText && !out.vaes.includes(firstText)) out.vaes.push(firstText)
+    if (/VAELoader/i.test(cls) && firstText && !out.vaes.includes(firstText))
+      out.vaes.push(firstText)
     if (/UpscaleModelLoader/i.test(cls) && firstText && !out.upscalers.includes(firstText)) {
       out.upscalers.push(firstText)
     }

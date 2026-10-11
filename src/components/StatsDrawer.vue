@@ -23,7 +23,11 @@ const sections = computed<StatSection[]>(() => [
   { title: t('stats.models'), kind: 'model', list: usageStats.value.models },
   { title: t('stats.loras'), kind: 'lora', list: usageStats.value.loras },
   { title: t('stats.samplers'), kind: 'sampler', list: usageStats.value.samplers },
-  { title: t('stats.trend'), kind: 'day', list: dailyCounts.value.map((d) => ({ name: d.day, count: d.count })) },
+  {
+    title: t('stats.trend'),
+    kind: 'day',
+    list: dailyCounts.value.map((d) => ({ name: d.day, count: d.count })),
+  },
   { title: t('stats.keywords'), kind: 'keyword', list: keywordStats.value },
 ])
 const hasAny = computed(() => sections.value.some((s) => s.list.length > 0))

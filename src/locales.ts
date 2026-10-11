@@ -99,7 +99,8 @@ const zh = {
   'help.lora': '<code>lora:xxx</code> 按 LoRA 名称或哈希',
   'help.seed': '<code>seed:123</code> 按种子（支持片段）',
   'help.seedRange': '<code>seed:&gt;100</code> 种子范围（&gt; ≥ &lt; ≤）',
-  'help.numRange': '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> 数值范围',
+  'help.numRange':
+    '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> 数值范围',
   'help.date': '<code>date:2026-01-31</code> 按日期（本地时区，支持年 / 月前缀）',
   'help.path': '<code>path:目录</code> 按相对路径',
   'help.exclude': '<code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）',
@@ -174,7 +175,8 @@ const zh = {
   'detail.corruptTitle': '检测到生成元数据，但无法提取结构化参数',
   'detail.corruptUiOnly':
     '检测到 UI 工作流，但无法从中提取结构化参数；可在下方「UI 工作流」页签查看或下载',
-  'detail.corruptJson': '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查',
+  'detail.corruptJson':
+    '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查',
   'detail.corruptText': '参数文本无法解析为结构化参数，可在下方查看原文',
   'detail.noMetadata': '未检测到 ComfyUI / A1111 生成元数据',
   'detail.tabRaw': '原始参数',
@@ -327,7 +329,8 @@ const en: Record<DictKey, string> = {
   'msg.dirEmpty': 'No image files found in directory "{name}"',
   'topbar.export': 'Export',
   'topbar.archive': 'Archive',
-  'topbar.archiveTitle': 'Back up / restore the local archive (parameters & diagnostics, no images)',
+  'topbar.archiveTitle':
+    'Back up / restore the local archive (parameters & diagnostics, no images)',
   'archive.export': 'Export archive backup',
   'archive.import': 'Import archive backup',
   'msg.archiveEmpty': 'No archivable records in the current list',
@@ -341,7 +344,8 @@ const en: Record<DictKey, string> = {
   'help.lora': '<code>lora:xxx</code> by LoRA name or hash',
   'help.seed': '<code>seed:123</code> by seed (substring)',
   'help.seedRange': '<code>seed:&gt;100</code> seed range (&gt; ≥ &lt; ≤)',
-  'help.numRange': '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> numeric range',
+  'help.numRange':
+    '<code>steps:&gt;30</code> / <code>cfg:&lt;8</code> / <code>w:&gt;=1024</code> numeric range',
   'help.date': '<code>date:2026-01-31</code> by date (local timezone, year / month prefixes work)',
   'help.path': '<code>path:dir</code> by relative path',
   'help.exclude': '<code>-term</code> exclude (e.g. <code>-blurry</code>, <code>-model:xx</code>)',
@@ -417,14 +421,16 @@ const en: Record<DictKey, string> = {
     'A UI workflow was found but no structured parameters could be extracted; view or download it in the "UI workflow" tab below',
   'detail.corruptJson':
     'The embedded workflow JSON cannot be parsed (possibly truncated or corrupted); inspect the raw JSON below',
-  'detail.corruptText': 'The parameter text cannot be parsed into structured parameters; view the raw text below',
+  'detail.corruptText':
+    'The parameter text cannot be parsed into structured parameters; view the raw text below',
   'detail.noMetadata': 'No ComfyUI / A1111 generation metadata detected',
   'detail.tabRaw': 'Raw params',
   'detail.tabPrompt': 'Prompt JSON',
   'detail.tabWorkflow': 'UI workflow',
   'detail.noWorkflow': '(no embedded UI workflow)',
   'detail.prettyJson': 'Pretty-print',
-  'detail.workflowHint': 'The downloaded workflow.json can be dropped onto the ComfyUI canvas to restore the workflow.',
+  'detail.workflowHint':
+    'The downloaded workflow.json can be dropped onto the ComfyUI canvas to restore the workflow.',
   'detail.kbdHint': '← / → switch images · Esc closes',
   'detail.copied': '{label} copied',
 
@@ -453,7 +459,8 @@ const en: Record<DictKey, string> = {
   'empty.filtered': 'No images match the current filters',
   'empty.hidden':
     '<b>{n}</b> parsed images are hidden by the source / search / model filters. They may be saved in the A1111-compatible format (common in the ComfyUI ecosystem; dragging them back to ComfyUI converts them into workflows as well).',
-  'empty.adjust': 'Try adjusting the search keywords, model or source filters, or drop in more images or folders.',
+  'empty.adjust':
+    'Try adjusting the search keywords, model or source filters, or drop in more images or folders.',
   'empty.showAll': 'Show all {n}',
   'empty.dropTitle': 'Drop images here',
   'empty.intro':
@@ -504,9 +511,7 @@ function safeGetItem(key: string): string | null {
 
 function detectLocale(): Locale {
   if (typeof navigator === 'undefined') return 'zh'
-  const langs = [...(navigator.languages ?? []), navigator.language].filter(
-    (l): l is string => !!l,
-  )
+  const langs = [...(navigator.languages ?? []), navigator.language].filter((l): l is string => !!l)
   // 无语言信号（测试环境等）回退中文；有英文信号才切英文
   return langs.some((l) => /^en/i.test(l)) ? 'en' : 'zh'
 }

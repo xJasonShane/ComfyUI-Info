@@ -34,10 +34,7 @@ async function readHeadUntil(
   enough: (bytes: Uint8Array) => boolean,
 ): Promise<Uint8Array> {
   for (let stage = 0; ; stage++) {
-    const size = Math.min(
-      stage < HEAD_STAGES.length ? HEAD_STAGES[stage] : file.size,
-      file.size,
-    )
+    const size = Math.min(stage < HEAD_STAGES.length ? HEAD_STAGES[stage] : file.size, file.size)
     const bytes = await readHead(file, size)
     if (enough(bytes) || size >= file.size) return bytes
   }
@@ -274,7 +271,10 @@ export async function readImageMetadata(file: File): Promise<RawMetadata> {
   if (kind === 'jpeg' || kind === 'webp') {
     const isWebp = kind === 'webp'
     // JPEG：段区截断（未到 SOS / EOI）时逐级放大；WebP：VP8X 声明的 EXIF / XMP 未扫到时逐级放大
-    const bytes = await readHeadUntil(file, (b) => !(isWebp ? scanWebp(b) : scanJpeg(b)).needsFullScan)
+    const bytes = await readHeadUntil(
+      file,
+      (b) => !(isWebp ? scanWebp(b) : scanJpeg(b)).needsFullScan,
+    )
     const scan = isWebp ? scanWebp(bytes) : scanJpeg(bytes)
     if (scan.exifTiff) {
       const raw = extractUserCommentFromTiff(scan.exifTiff)

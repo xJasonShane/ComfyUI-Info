@@ -1,6 +1,11 @@
 import { computed, reactive, watch } from 'vue'
 import type { ImageItem, ImageSource, IncomingFile, ParsedParams, RawMetadata } from '../types'
-import { clearInternPool, hasSupportedSignature, isMetaTextFile, isSupportedImage } from '../lib/metadata'
+import {
+  clearInternPool,
+  hasSupportedSignature,
+  isMetaTextFile,
+  isSupportedImage,
+} from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import { t } from '../locales'
@@ -681,8 +686,7 @@ const byName = (a: ImageItem, b: ImageItem) => nameCollator.compare(a.name, b.na
 const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   default: (a, b) => rankBySource(a) - rankBySource(b) || byName(a, b),
   'time-desc': (a, b) => errLast(a) - errLast(b) || b.mtime - a.mtime || byName(a, b),
-  'time-asc': (a, b) =>
-    errLast(a) - errLast(b) || a.mtime - b.mtime || byName(a, b),
+  'time-asc': (a, b) => errLast(a) - errLast(b) || a.mtime - b.mtime || byName(a, b),
   // F3：同工作流聚类——组按组内最新时间排列，组内新→旧，失败项垫底
   workflow: (a, b) => {
     const ea = errLast(a)
@@ -791,7 +795,12 @@ export const keywordStats = computed<UsageStat[]>(() => {
  * 存档项走 searchTextField 按需构建（P2 惰性化，恢复期不逐条拼接长串）。
  */
 function buildSearchText(it: ImageItem, p: ParsedParams | undefined): string {
-  const parts = [it.path ?? it.name, ...(p?.positive ?? []), ...(p?.negative ?? []), ...(p?.models ?? [])]
+  const parts = [
+    it.path ?? it.name,
+    ...(p?.positive ?? []),
+    ...(p?.negative ?? []),
+    ...(p?.models ?? []),
+  ]
   for (const l of p?.loras ?? []) {
     parts.push(l.name)
     if (l.hash) parts.push(l.hash)
@@ -1145,7 +1154,9 @@ export const workflowClusters = computed(() => {
     .sort((a, b) => b.latest - a.latest || b.members.length - a.members.length)
   const out = new Map<string, { group: number; seq: number; total: number }>()
   ordered.forEach(({ members }, gi) => {
-    const sorted = [...members].sort((a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name))
+    const sorted = [...members].sort(
+      (a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name),
+    )
     sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
   })
   return out
@@ -1176,7 +1187,9 @@ export const sameSourceGroups = computed(() => {
     .map((members) => ({ members, latest: Math.max(...members.map((m) => m.mtime)) }))
     .sort((a, b) => b.latest - a.latest)
     .forEach(({ members }, gi) => {
-      const sorted = [...members].sort((a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name))
+      const sorted = [...members].sort(
+        (a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name),
+      )
       sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
     })
   return out

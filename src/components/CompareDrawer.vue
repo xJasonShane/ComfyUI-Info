@@ -54,8 +54,7 @@ function loraRows(pa?: ParsedParams, pb?: ParsedParams): DiffRow[] {
   for (const l of [...(pa?.loras ?? []), ...(pb?.loras ?? [])]) {
     if (!names.includes(l.name)) names.push(l.name)
   }
-  const find = (p: ParsedParams | undefined, name: string) =>
-    p?.loras.find((l) => l.name === name)
+  const find = (p: ParsedParams | undefined, name: string) => p?.loras.find((l) => l.name === name)
   return names.map((name) => {
     const la = find(pa, name)
     const lb = find(pb, name)
@@ -85,9 +84,21 @@ const sections = computed<DiffSection[]>(() => {
       title: t('cmp.basics'),
       rows: [
         mk(t('cmp.file'), a.path ?? a.name, b.path ?? b.name),
-        mk(t('detail.model'), pa?.models.length ? pa.models.join(' + ') : null, pb?.models.length ? pb.models.join(' + ') : null),
-        mk(t('detail.vae'), pa?.vaes.length ? pa.vaes.join(' + ') : null, pb?.vaes.length ? pb.vaes.join(' + ') : null),
-        mk(t('detail.clipSkip'), pa?.clipSkip != null ? String(pa.clipSkip) : null, pb?.clipSkip != null ? String(pb.clipSkip) : null),
+        mk(
+          t('detail.model'),
+          pa?.models.length ? pa.models.join(' + ') : null,
+          pb?.models.length ? pb.models.join(' + ') : null,
+        ),
+        mk(
+          t('detail.vae'),
+          pa?.vaes.length ? pa.vaes.join(' + ') : null,
+          pb?.vaes.length ? pb.vaes.join(' + ') : null,
+        ),
+        mk(
+          t('detail.clipSkip'),
+          pa?.clipSkip != null ? String(pa.clipSkip) : null,
+          pb?.clipSkip != null ? String(pb.clipSkip) : null,
+        ),
         mk(t('detail.size'), sizeText(pa), sizeText(pb)),
         mk(
           t('detail.upscaler'),
@@ -118,10 +129,22 @@ const sections = computed<DiffSection[]>(() => {
       rows.push(
         mk(`${prefix}${t('detail.sampler')}`, sa?.sampler ?? null, sb?.sampler ?? null),
         mk(`${prefix}${t('detail.scheduler')}`, sa?.scheduler ?? null, sb?.scheduler ?? null),
-        mk(`${prefix}${t('detail.steps')}`, sa?.steps != null ? String(sa.steps) : null, sb?.steps != null ? String(sb.steps) : null),
-        mk(`${prefix}${t('detail.cfg')}`, sa?.cfg != null ? String(sa.cfg) : null, sb?.cfg != null ? String(sb.cfg) : null),
+        mk(
+          `${prefix}${t('detail.steps')}`,
+          sa?.steps != null ? String(sa.steps) : null,
+          sb?.steps != null ? String(sb.steps) : null,
+        ),
+        mk(
+          `${prefix}${t('detail.cfg')}`,
+          sa?.cfg != null ? String(sa.cfg) : null,
+          sb?.cfg != null ? String(sb.cfg) : null,
+        ),
         mk(`${prefix}${t('detail.seed')}`, sa?.seed ?? null, sb?.seed ?? null),
-        mk(`${prefix}${t('detail.denoise')}`, sa?.denoise != null ? String(sa.denoise) : null, sb?.denoise != null ? String(sb.denoise) : null),
+        mk(
+          `${prefix}${t('detail.denoise')}`,
+          sa?.denoise != null ? String(sa.denoise) : null,
+          sb?.denoise != null ? String(sb.denoise) : null,
+        ),
       )
     }
     sections.push({ title: t('cmp.samplerParams'), rows })

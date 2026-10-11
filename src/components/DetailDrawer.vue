@@ -112,7 +112,8 @@ const generalRows = computed<[string, string][]>(() => {
   }
   if (params.upscalers.length) rows.push([t('detail.upscaler'), params.upscalers.join(' + ')])
   if (params.controlNets.length) rows.push([t('detail.controlnet'), params.controlNets.join(' + ')])
-  if (params.nodeCount) rows.push([t('detail.nodeCount'), t('detail.nodes', { n: params.nodeCount })])
+  if (params.nodeCount)
+    rows.push([t('detail.nodeCount'), t('detail.nodes', { n: params.nodeCount })])
   return rows
 })
 
@@ -194,7 +195,9 @@ function downloadJson(text: string | undefined, suffix: string) {
         />
         <div v-else class="detail-noimg">
           <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
-          <span>{{ item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded') }}</span>
+          <span>{{
+            item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded')
+          }}</span>
           <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
         </div>
       </div>
@@ -213,7 +216,13 @@ function downloadJson(text: string | undefined, suffix: string) {
           <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
           <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
-          <NButton size="tiny" quaternary circle :aria-label="t('detail.close')" @click="show = false">
+          <NButton
+            size="tiny"
+            quaternary
+            circle
+            :aria-label="t('detail.close')"
+            @click="show = false"
+          >
             <template #icon><Icon name="x" :size="13" /></template>
           </NButton>
         </div>
@@ -226,7 +235,12 @@ function downloadJson(text: string | undefined, suffix: string) {
                 <dt>{{ k }}</dt>
                 <dd>
                   <span class="kv-val">{{ v }}</span>
-                  <button class="kv-copy" type="button" :title="t('detail.copyField', { name: k })" @click="copy(v, k)">
+                  <button
+                    class="kv-copy"
+                    type="button"
+                    :title="t('detail.copyField', { name: k })"
+                    @click="copy(v, k)"
+                  >
                     <Icon name="copy" :size="11" :stroke="2.2" />
                   </button>
                 </dd>
@@ -238,9 +252,9 @@ function downloadJson(text: string | undefined, suffix: string) {
             <div class="section-title">
               <span
                 >{{ t('detail.samplerParams')
-                }}<template v-if="p.samplers.length > 1"
-                  >{{ t('detail.stages', { n: p.samplers.length }) }}</template
-                ></span
+                }}<template v-if="p.samplers.length > 1">{{
+                  t('detail.stages', { n: p.samplers.length })
+                }}</template></span
               >
             </div>
             <dl v-if="p.samplers.length === 1" class="kv">
@@ -248,7 +262,12 @@ function downloadJson(text: string | undefined, suffix: string) {
                 <dt>{{ k }}</dt>
                 <dd>
                   <span class="kv-val">{{ v }}</span>
-                  <button class="kv-copy" type="button" :title="t('detail.copyField', { name: k })" @click="copy(v, k)">
+                  <button
+                    class="kv-copy"
+                    type="button"
+                    :title="t('detail.copyField', { name: k })"
+                    @click="copy(v, k)"
+                  >
                     <Icon name="copy" :size="11" :stroke="2.2" />
                   </button>
                 </dd>
@@ -266,7 +285,8 @@ function downloadJson(text: string | undefined, suffix: string) {
             <div v-for="l in p.loras" :key="l.name" class="stage-row">
               <span class="tag">{{ t('detail.loraTag') }}</span>
               <span class="txt">
-                {{ l.name }}{{
+                {{ l.name
+                }}{{
                   t('detail.loraStrength', {
                     m: l.strengthModel ?? '-',
                     c: l.strengthClip ?? '-',
@@ -319,7 +339,9 @@ function downloadJson(text: string | undefined, suffix: string) {
         <div v-else-if="item.status !== 'done'" class="notice">
           {{ t('detail.parsingNow') }}
           <br />
-          <span style="font-size: 12px; color: var(--text-faint)">{{ t('detail.parsingHint') }}</span>
+          <span style="font-size: 12px; color: var(--text-faint)">{{
+            t('detail.parsingHint')
+          }}</span>
         </div>
         <div v-else-if="corruptRawText" class="notice">
           <span class="notice-title">{{ t('detail.corruptTitle') }}</span>
@@ -337,7 +359,11 @@ function downloadJson(text: string | undefined, suffix: string) {
             <NTabPane v-if="item.raw.parameters" name="raw" :tab="t('detail.tabRaw')">
               <pre class="json-pre">{{ item.raw.parameters }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px">
-                <NButton size="tiny" secondary @click="copy(item.raw.parameters, t('detail.tabRaw'))">
+                <NButton
+                  size="tiny"
+                  secondary
+                  @click="copy(item.raw.parameters, t('detail.tabRaw'))"
+                >
                   <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
               </div>
@@ -345,11 +371,20 @@ function downloadJson(text: string | undefined, suffix: string) {
             <NTabPane v-if="item.raw.prompt" name="prompt" :tab="t('detail.tabPrompt')">
               <pre class="json-pre">{{ jsonText }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
-                <NButton size="tiny" secondary @click="copy(item.raw.prompt, t('detail.tabPrompt'))">
+                <NButton
+                  size="tiny"
+                  secondary
+                  @click="copy(item.raw.prompt, t('detail.tabPrompt'))"
+                >
                   <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
-                <NButton size="tiny" secondary @click="downloadJson(item.raw.prompt, 'prompt.json')">
-                  <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
+                <NButton
+                  size="tiny"
+                  secondary
+                  @click="downloadJson(item.raw.prompt, 'prompt.json')"
+                >
+                  <template #icon><Icon name="download" :size="13" /></template
+                  >{{ t('common.download') }}
                 </NButton>
                 <label class="pretty-toggle">
                   <NSwitch v-model:value="prettyJson" size="small" />
@@ -357,10 +392,18 @@ function downloadJson(text: string | undefined, suffix: string) {
                 </label>
               </div>
             </NTabPane>
-            <NTabPane v-if="item.raw.source !== 'a1111'" name="workflow" :tab="t('detail.tabWorkflow')">
+            <NTabPane
+              v-if="item.raw.source !== 'a1111'"
+              name="workflow"
+              :tab="t('detail.tabWorkflow')"
+            >
               <pre class="json-pre">{{ jsonText }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center">
-                <NButton size="tiny" secondary @click="copy(item.raw.workflow, t('detail.tabWorkflow'))">
+                <NButton
+                  size="tiny"
+                  secondary
+                  @click="copy(item.raw.workflow, t('detail.tabWorkflow'))"
+                >
                   <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
                 <NButton
@@ -369,7 +412,8 @@ function downloadJson(text: string | undefined, suffix: string) {
                   :disabled="!item.raw.workflow"
                   @click="downloadJson(item.raw.workflow, 'workflow.json')"
                 >
-                  <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
+                  <template #icon><Icon name="download" :size="13" /></template
+                  >{{ t('common.download') }}
                 </NButton>
                 <label class="pretty-toggle">
                   <NSwitch v-model:value="prettyJson" size="small" />

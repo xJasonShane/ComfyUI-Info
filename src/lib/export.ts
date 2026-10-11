@@ -106,7 +106,8 @@ export async function exportItems(
     return
   }
   const stamp = new Date().toISOString().slice(0, 10)
-  if (format === 'csv') downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+  if (format === 'csv')
+    downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
   else if (format === 'zip') {
     const zip = buildWorkflowZip(items)
     if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)

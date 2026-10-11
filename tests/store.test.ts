@@ -374,7 +374,9 @@ it('解析中的项不计入来源统计，也不冒充「无元数据」', asyn
 
 it('工作流 JSON / 参数文本文件直接入列解析，无预览 URL（F1）', async () => {
   vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
-  api.addFiles([{ file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) }])
+  api.addFiles([
+    { file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) },
+  ])
   expect(api.store.items.length).toBe(1)
   expect(api.store.items[0].metaOnly).toBe(true)
   expect(api.store.items[0].url).toBe('')
@@ -383,7 +385,9 @@ it('工作流 JSON / 参数文本文件直接入列解析，无预览 URL（F1�
   await flush()
   expect(api.store.items.every((i) => i.status === 'done')).toBe(true)
   // 指纹去重对参数文件同样生效
-  api.addFiles([{ file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) }])
+  api.addFiles([
+    { file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) },
+  ])
   expect(api.store.items.length).toBe(2)
 })
 
@@ -784,7 +788,9 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     none: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2025-12'], num: [] },
   })
   // 数值范围条件（FEAT-3）：w/h 是别名，无操作符为精确相等，非法值忽略
-  expect(api.parseQuery('steps:>30 w:>=1024 cfg:7.5 h:<768 batch:2 clip:>1 steps:abc steps:')).toEqual({
+  expect(
+    api.parseQuery('steps:>30 w:>=1024 cfg:7.5 h:<768 batch:2 clip:>1 steps:abc steps:'),
+  ).toEqual({
     all: {
       terms: [],
       model: [],
@@ -850,8 +856,14 @@ it('数值范围搜索：steps / cfg / 尺寸 / 批量 / Clip Skip（FEAT-3）',
     })
     api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }) }])
   }
-  add('a.png', 'cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 5, Size: 512x768, Clip skip: 2, VAE: vae-ft-mse')
-  add('b.png', 'dog\nSteps: 30, Sampler: DPM++ 2M, CFG scale: 5.5, Seed: 6, Size: 1024x1024, Batch size: 2')
+  add(
+    'a.png',
+    'cat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 5, Size: 512x768, Clip skip: 2, VAE: vae-ft-mse',
+  )
+  add(
+    'b.png',
+    'dog\nSteps: 30, Sampler: DPM++ 2M, CFG scale: 5.5, Seed: 6, Size: 1024x1024, Batch size: 2',
+  )
   await flush()
   api.store.sourceFilter = 'all'
 
@@ -971,8 +983,12 @@ it('聚类指纹缓存随解析结果失效：结果应用前后分组正确更�
 
 it('同源出图检测：同工作流同种子分组，只看重复筛选（FEAT-4）', async () => {
   const { extractComfyParams } = await import('../src/lib/comfyExtract')
-  const promptA = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20 } } })
-  const promptB = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 9, steps: 20 } } })
+  const promptA = JSON.stringify({
+    '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20 } },
+  })
+  const promptB = JSON.stringify({
+    '3': { class_type: 'KSampler', inputs: { seed: 9, steps: 20 } },
+  })
   vi.mocked(parser.parseImage).mockImplementation((f: File) => {
     const prompt = f.name.startsWith('a') ? promptA : promptB
     return Promise.resolve({
@@ -1128,15 +1144,32 @@ describe('usageStats', () => {
 
   it('按已解析项聚合模型 / LoRA / 采样器频次（次数降序，同次数按名排序）', () => {
     api.store.items.push(
-      mk('1', ['b.safetensors'], [{ name: 'l1' }], [
-        { nodeId: '3', classType: 'KSampler', sampler: 'euler' },
-      ]),
-      mk('2', ['a.safetensors'], [{ name: 'l1' }, { name: 'l2' }], [
-        { nodeId: '3', classType: 'KSampler', sampler: 'dpmpp_2m' },
-        { nodeId: '9', classType: 'KSampler', sampler: 'euler' },
-      ]),
+      mk(
+        '1',
+        ['b.safetensors'],
+        [{ name: 'l1' }],
+        [{ nodeId: '3', classType: 'KSampler', sampler: 'euler' }],
+      ),
+      mk(
+        '2',
+        ['a.safetensors'],
+        [{ name: 'l1' }, { name: 'l2' }],
+        [
+          { nodeId: '3', classType: 'KSampler', sampler: 'dpmpp_2m' },
+          { nodeId: '9', classType: 'KSampler', sampler: 'euler' },
+        ],
+      ),
       // 无参数项（解析中 / 无元数据）不参与统计
-      { id: '3', url: '', name: '3.png', size: 1, mtime: 1, status: 'done', source: 'none', raw: { source: 'none' } },
+      {
+        id: '3',
+        url: '',
+        name: '3.png',
+        size: 1,
+        mtime: 1,
+        status: 'done',
+        source: 'none',
+        raw: { source: 'none' },
+      },
     )
     const s = api.usageStats.value
     expect(s.models).toEqual([

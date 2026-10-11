@@ -335,11 +335,29 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
     last_node_id: 6,
     last_link_id: 6,
     nodes: [
-      { id: 1, type: 'CheckpointLoaderSimple', mode: 0, inputs: [], widgets_values: ['v1-5-pruned-emaonly.safetensors'] },
-      { id: 2, type: 'CLIPTextEncode', mode: 0, inputs: [], widgets_values: ['a cozy cabin, warm light'] },
+      {
+        id: 1,
+        type: 'CheckpointLoaderSimple',
+        mode: 0,
+        inputs: [],
+        widgets_values: ['v1-5-pruned-emaonly.safetensors'],
+      },
+      {
+        id: 2,
+        type: 'CLIPTextEncode',
+        mode: 0,
+        inputs: [],
+        widgets_values: ['a cozy cabin, warm light'],
+      },
       { id: 3, type: 'CLIPTextEncode', mode: 0, inputs: [], widgets_values: ['blurry'] },
       { id: 4, type: 'EmptyLatentImage', mode: 0, inputs: [], widgets_values: [768, 512, 2] },
-      { id: 5, type: 'LoraLoader', mode: 0, inputs: [], widgets_values: ['add_detail.safetensors', 0.8, 0.9] },
+      {
+        id: 5,
+        type: 'LoraLoader',
+        mode: 0,
+        inputs: [],
+        widgets_values: ['add_detail.safetensors', 0.8, 0.9],
+      },
       {
         id: 6,
         type: 'KSampler',
@@ -365,7 +383,9 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
     const p = extractUiWorkflowParams(JSON.stringify(uiWorkflow))!
     expect(p.nodeCount).toBe(6)
     expect(p.models).toEqual(['v1-5-pruned-emaonly.safetensors'])
-    expect(p.loras).toEqual([{ name: 'add_detail.safetensors', strengthModel: 0.8, strengthClip: 0.9 }])
+    expect(p.loras).toEqual([
+      { name: 'add_detail.safetensors', strengthModel: 0.8, strengthClip: 0.9 },
+    ])
     expect(p.width).toBe(768)
     expect(p.height).toBe(512)
     expect(p.batch).toBe(2)
@@ -392,7 +412,16 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
           id: 9,
           type: 'KSamplerAdvanced',
           inputs: [],
-          widgets_values: ['enable', 10978932088412290000, 'fixed', 25, 7, 'dpmpp_2m', 'karras', 0.65],
+          widgets_values: [
+            'enable',
+            10978932088412290000,
+            'fixed',
+            25,
+            7,
+            'dpmpp_2m',
+            'karras',
+            0.65,
+          ],
         },
       ],
     }
@@ -411,8 +440,20 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
   it('bypass（mode=4）的采样器与加载节点不参与提取', () => {
     const wf = {
       nodes: [
-        { id: 1, type: 'CheckpointLoaderSimple', mode: 4, inputs: [], widgets_values: ['a.safetensors'] },
-        { id: 2, type: 'KSampler', mode: 4, inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] },
+        {
+          id: 1,
+          type: 'CheckpointLoaderSimple',
+          mode: 4,
+          inputs: [],
+          widgets_values: ['a.safetensors'],
+        },
+        {
+          id: 2,
+          type: 'KSampler',
+          mode: 4,
+          inputs: [],
+          widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1],
+        },
       ],
     }
     expect(extractUiWorkflowParams(JSON.stringify(wf))).toBeNull()
@@ -427,10 +468,17 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
   it('extractParams 路由：API prompt 损坏时回退 UI 工作流提取', () => {
     const ui = JSON.stringify({
       nodes: [
-        { id: 1, type: 'KSampler', inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] },
+        {
+          id: 1,
+          type: 'KSampler',
+          inputs: [],
+          widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1],
+        },
       ],
     })
-    expect(extractParams({ source: 'comfyui', prompt: '{"broken', workflow: ui })?.samplers).toHaveLength(1)
+    expect(
+      extractParams({ source: 'comfyui', prompt: '{"broken', workflow: ui })?.samplers,
+    ).toHaveLength(1)
   })
 })
 
@@ -444,7 +492,14 @@ describe('readTextMetadata（F1：工作流 JSON / 参数文本直接解析）',
 
   it('UI 格式 JSON → ComfyUI workflow，且经 extractParams 走 O2 兜底提取', async () => {
     const ui = JSON.stringify({
-      nodes: [{ id: 1, type: 'KSampler', inputs: [], widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1] }],
+      nodes: [
+        {
+          id: 1,
+          type: 'KSampler',
+          inputs: [],
+          widgets_values: [5, 'fixed', 20, 8, 'euler', 'normal', 1],
+        },
+      ],
     })
     const meta = await readTextMetadata(new File([ui], 'wf.json'))
     expect(meta.source).toBe('comfyui')
@@ -737,7 +792,10 @@ describe('extractComfyParams', () => {
           latent_image: ['5', 0],
         },
       },
-      '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'dreamshaper_8.safetensors' } },
+      '4': {
+        class_type: 'CheckpointLoaderSimple',
+        inputs: { ckpt_name: 'dreamshaper_8.safetensors' },
+      },
       '5': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 768, batch_size: 1 } },
       '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a cat', clip: ['4', 1] } },
       '7': { class_type: 'CLIPTextEncode', inputs: { text: 'low quality', clip: ['4', 1] } },
@@ -949,14 +1007,11 @@ describe('ParsePool（传输池）', () => {
   it('构造任一传输抛错时返回 null，已构造的传输被终止', async () => {
     const first = makeFakeTransport()
     let calls = 0
-    const pool = new ParsePool(
-      () => {
-        calls++
-        if (calls === 2) throw new Error('构造失败')
-        return first.transport
-      },
-      2,
-    )
+    const pool = new ParsePool(() => {
+      calls++
+      if (calls === 2) throw new Error('构造失败')
+      return first.transport
+    }, 2)
     expect(await pool.create()).toBeNull()
     expect(first.transport.terminated).toBe(true)
   })
