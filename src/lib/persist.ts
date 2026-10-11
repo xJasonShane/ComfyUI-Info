@@ -48,7 +48,7 @@ let archivedSeq = 0
 
 /** 列表项 → 存档记录；解析中的项不入库（等出结果时再写） */
 export function toRecord(item: ImageItem): PersistRecord | null {
-  if (item.status === 'pending' || item.status === 'parsing') return null
+  if (item.status === 'pending') return null
   // item 是 reactive 深代理：直接引用 item.raw / item.params 会把 Proxy 传给 put，
   // 结构化克隆抛 DataCloneError 导致写入永久失败——toRaw 解出原始可克隆对象
   return {

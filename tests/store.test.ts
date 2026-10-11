@@ -700,7 +700,7 @@ it('toRecord / fromRecord：列表项与存档记录往返', async () => {
   expect(restored.status).toBe('done')
   expect(restored.params?.models).toEqual(['m1'])
 
-  expect(toRecord({ ...item, status: 'parsing' })).toBeNull() // 解析中的项不入库
+  expect(toRecord({ ...item, status: 'pending' })).toBeNull() // 解析中的项不入库
 })
 
 it('无扩展名文件经嗅探确认后异步入列', async () => {

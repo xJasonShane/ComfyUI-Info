@@ -70,7 +70,7 @@ export interface ImageItem {
   size: number
   /** 文件修改时间（毫秒）：新添加取自 file.lastModified，存档项来自持久化记录 */
   mtime: number
-  status: 'pending' | 'parsing' | 'done' | 'error'
+  status: 'pending' | 'done' | 'error'
   source: ImageSource
   params?: ParsedParams
   raw: RawMetadata

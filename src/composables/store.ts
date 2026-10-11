@@ -1063,7 +1063,7 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter === 'error') return false
       // 解析中的项来源未定，只在「全部图片」下展示——
       // 避免以占位 source:'none' 冒充「无元数据」、解析完成后又突然消失
-      if (it.status === 'pending' || it.status === 'parsing') {
+      if (it.status === 'pending') {
         return state.sourceFilter === 'all'
       }
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
