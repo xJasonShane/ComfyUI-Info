@@ -2,6 +2,7 @@
  * 将图片列表的解析结果导出为 JSON / CSV，用于数据集整理与批量分析。
  * CSV 带 UTF-8 BOM 并使用 CRLF 行尾，Excel 直接打开中文不乱码。
  */
+import { computed } from 'vue'
 import type { ImageItem, LoraInfo, SamplerInfo } from '../types'
 import { downloadBinary, downloadText } from './utils'
 import { t } from '../locales'
@@ -80,12 +81,12 @@ interface ExportMessage {
   success: (content: string) => unknown
 }
 
-/** 导出下拉选项：顶栏「导出当前筛选」与批量条「导出选中」共用同一份 */
-export const exportOptions = [
-  { label: '导出 JSON', key: 'json' },
-  { label: '导出 CSV (Excel)', key: 'csv' },
-  { label: '导出工作流 (ZIP)', key: 'zip' },
-]
+/** 导出下拉选项（响应式，随界面语言切换重渲染）：顶栏「导出当前筛选」与批量条「导出选中」共用同一份 */
+export const exportOptions = computed(() => [
+  { label: t('export.json'), key: 'json' },
+  { label: t('export.csv'), key: 'csv' },
+  { label: t('export.zip'), key: 'zip' },
+])
 
 /**
  * 导出统一入口（原 TopBar / App 两份相同实现合并）：
@@ -101,7 +102,7 @@ export async function exportItems(
   await new Promise((r) => setTimeout(r, 30))
   const items = candidates.filter((i) => i.status === 'done' || i.status === 'error')
   if (!items.length) {
-    message.warning('所选图片中还没有可导出的结果')
+    message.warning(t('msg.noExportable'))
     return
   }
   const stamp = new Date().toISOString().slice(0, 10)
@@ -110,7 +111,7 @@ export async function exportItems(
     const zip = buildWorkflowZip(items)
     if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
   } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
-  message.success(`已导出 ${items.length} 项`)
+  message.success(t('common.exportedItems', { n: items.length }))
 }
 
 export interface StatsSection {

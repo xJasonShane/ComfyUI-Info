@@ -115,7 +115,7 @@ const exporting = ref(false)
 async function exportAs(key: string | number) {
   // 只导出已出结果的项；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
   if (parsing.value) {
-    message.warning('扫描仍在进行，请等扫描完成后再导出')
+    message.warning(t('common.exportWhileParsing'))
     return
   }
   exporting.value = true

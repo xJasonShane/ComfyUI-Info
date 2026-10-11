@@ -209,7 +209,7 @@ function downloadJson(text: string | undefined, suffix: string) {
                 <dt>{{ k }}</dt>
                 <dd>
                   <span class="kv-val">{{ v }}</span>
-                  <button class="kv-copy" type="button" :title="`复制${k}`" @click="copy(v, k)">
+                  <button class="kv-copy" type="button" :title="t('detail.copyField', { name: k })" @click="copy(v, k)">
                     <Icon name="copy" :size="11" :stroke="2.2" />
                   </button>
                 </dd>
@@ -231,7 +231,7 @@ function downloadJson(text: string | undefined, suffix: string) {
                 <dt>{{ k }}</dt>
                 <dd>
                   <span class="kv-val">{{ v }}</span>
-                  <button class="kv-copy" type="button" :title="`复制${k}`" @click="copy(v, k)">
+                  <button class="kv-copy" type="button" :title="t('detail.copyField', { name: k })" @click="copy(v, k)">
                     <Icon name="copy" :size="11" :stroke="2.2" />
                   </button>
                 </dd>

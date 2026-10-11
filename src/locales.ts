@@ -21,6 +21,11 @@ const zh = {
   'common.exportedItems': '已导出 {n} 项',
   'common.unknownError': '未知错误',
 
+  /* 导出下拉选项 */
+  'export.json': '导出 JSON',
+  'export.csv': '导出 CSV (Excel)',
+  'export.zip': '导出工作流 (ZIP)',
+
   /* 来源与排序 */
   'src.comfyui': 'ComfyUI 原图',
   'src.a1111': 'A1111 / WebUI',
@@ -132,6 +137,7 @@ const zh = {
 
   /* DetailDrawer */
   'detail.close': '关闭详情',
+  'detail.copyField': '复制{name}',
   'detail.zoomIn': '点击放大',
   'detail.zoomClose': '关闭放大',
   'detail.metaFileNoPreview': '参数文件（无预览图）',
@@ -260,6 +266,10 @@ const en: Record<DictKey, string> = {
   'common.exportedItems': 'Exported {n} items',
   'common.unknownError': 'Unknown error',
 
+  'export.json': 'Export JSON',
+  'export.csv': 'Export CSV (Excel)',
+  'export.zip': 'Export workflows (ZIP)',
+
   'src.comfyui': 'ComfyUI originals',
   'src.a1111': 'A1111 / WebUI',
   'src.none': 'No metadata',
@@ -367,6 +377,7 @@ const en: Record<DictKey, string> = {
   'card.sameWorkflowTitle': 'Position within the same workflow',
 
   'detail.close': 'Close details',
+  'detail.copyField': 'Copy {name}',
   'detail.zoomIn': 'Click to zoom',
   'detail.zoomClose': 'Close zoom',
   'detail.metaFileNoPreview': 'Params file (no preview)',
