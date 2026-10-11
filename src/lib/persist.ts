@@ -458,14 +458,19 @@ export async function clearDirBookmarks(): Promise<void> {
 
 const ARCHIVE_VERSION = 3
 
-/** 存档备份序列化：与存档记录同构（含参数与诊断信息，不含图片本体） */
-export function serializeArchive(records: PersistRecord[]): string {
+/**
+ * 存档备份序列化：与存档记录同构（含参数与诊断信息，不含图片本体）。
+ * favorites 为收藏标记的指纹键列表（收藏按指纹跨会话记忆，与记录主键同一构造），
+ * 随备份走实现跨设备迁移——不带收藏的旧版备份 / 旧版应用双向兼容（可选字段）。
+ */
+export function serializeArchive(records: PersistRecord[], favorites?: string[]): string {
   return JSON.stringify(
     {
       version: ARCHIVE_VERSION,
       exportedAt: new Date().toISOString(),
       count: records.length,
       records,
+      ...(favorites?.length ? { favorites } : {}),
     },
     null,
     2,
@@ -473,16 +478,19 @@ export function serializeArchive(records: PersistRecord[]): string {
 }
 
 /** 解析存档备份：剔除无法识别的条目；整体结构不对时抛错由调用方提示 */
-export function parseArchive(text: string): PersistRecord[] {
+export function parseArchive(text: string): { records: PersistRecord[]; favorites: string[] } {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     throw new Error('不是有效的 JSON 文件')
   }
-  const o = parsed as { records?: unknown }
+  const o = parsed as { records?: unknown; favorites?: unknown }
   if (!o || !Array.isArray(o.records)) throw new Error('缺少 records 数组，不是存档备份文件')
-  return o.records.filter(isValidRecord)
+  const favorites = Array.isArray(o.favorites)
+    ? o.favorites.filter((k): k is string => typeof k === 'string')
+    : []
+  return { records: o.records.filter(isValidRecord), favorites }
 }
 
 /** 导入存档：与库存同指纹（key）的记录跳过，返回实际写入的新记录 */

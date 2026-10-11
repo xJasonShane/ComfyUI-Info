@@ -684,11 +684,19 @@ it('存档备份：序列化与解析往返，非法结构抛错（FEAT-6）', a
     savedAt: 0,
   }
   const text = serializeArchive([rec])
-  expect(parseArchive(text)).toEqual([rec])
+  expect(parseArchive(text)).toEqual({ records: [rec], favorites: [] })
+  // 收藏标记随备份走：往返保真，无收藏时不写 favorites 字段（旧版应用双向兼容）
+  expect(parseArchive(serializeArchive([rec], ['a.png|1|1', 'v2/b.png|2|3']))).toEqual({
+    records: [rec],
+    favorites: ['a.png|1|1', 'v2/b.png|2|3'],
+  })
+  expect(JSON.parse(serializeArchive([rec]))).not.toHaveProperty('favorites')
   expect(() => parseArchive('{"items":[]}')).toThrow()
   expect(() => parseArchive('not json')).toThrow()
-  // 无法识别的条目剔除，不中断导入
-  expect(parseArchive(JSON.stringify({ records: [rec, { junk: true }] }))).toEqual([rec])
+  // 无法识别的条目剔除，不中断导入；收藏里的非字符串项忽略
+  expect(
+    parseArchive(JSON.stringify({ records: [rec, { junk: true }], favorites: ['k|1|2', 3] })),
+  ).toEqual({ records: [rec], favorites: ['k|1|2'] })
 })
 
 it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）', async () => {
@@ -717,7 +725,7 @@ it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）'
     savedAt: 0,
   }
   vi.mocked(importPersisted).mockResolvedValueOnce([rec])
-  const n = await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))
+  const { n } = await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))
   expect(n).toBe(1)
   expect(api.store.items.length).toBe(1)
   expect(api.store.items[0].detached).toBe(true)
@@ -729,8 +737,39 @@ it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）'
 
   // 库中已存在的指纹全部跳过
   vi.mocked(importPersisted).mockResolvedValueOnce([])
-  expect(await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))).toBe(0)
+  expect((await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))).n).toBe(0)
   expect(api.store.items.length).toBe(1)
+})
+
+it('存档导入：备份携带的收藏标记并入本机账本（跨设备迁移）', async () => {
+  const { importPersisted } = await import('../src/lib/persist')
+  const rec: PersistRecord = {
+    key: 'v2/c.png|1|7',
+    name: 'c.png',
+    path: 'v2/c.png',
+    size: 1,
+    mtime: 7,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui' },
+    savedAt: 0,
+  }
+  vi.mocked(importPersisted).mockResolvedValueOnce([rec])
+  const { favs } = await api.importArchive(
+    JSON.stringify({ version: 3, records: [rec], favorites: [rec.key, 'gone|9|9'] }),
+  )
+  // 备份内的收藏（含无记录的孤儿指纹）并入账本并落盘，恢复的存档卡片即刻带星标
+  expect(favs).toBe(2)
+  expect(api.favoriteFlags.value.get(api.store.items[0]!.id)).toBe(true)
+  expect(api.favCount.value).toBe(1)
+  expect(JSON.parse(localStorage.getItem('cii:favs')!).sort()).toEqual(['gone|9|9', rec.key])
+  // 幂等：重复导入同指纹收藏不再累计
+  vi.mocked(importPersisted).mockResolvedValueOnce([])
+  const again = await api.importArchive(
+    JSON.stringify({ version: 3, records: [rec], favorites: [rec.key] }),
+  )
+  expect(again.favs).toBe(0)
+  expect(JSON.parse(localStorage.getItem('cii:favs')!)).toHaveLength(2)
 })
 
 it('toRecord / fromRecord：列表项与存档记录往返', async () => {

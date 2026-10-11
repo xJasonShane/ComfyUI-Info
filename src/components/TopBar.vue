@@ -173,9 +173,10 @@ async function onImportArchiveFile(e: Event) {
   input.value = ''
   if (!f) return
   try {
-    const n = await importArchive(await f.text())
+    const { n, favs } = await importArchive(await f.text())
     if (n) message.success(t('msg.archiveImported', { n }))
     else message.info(t('msg.archiveAllExists'))
+    if (favs) message.success(t('msg.archiveFavsMerged', { n: favs }))
   } catch (err) {
     message.error(
       t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),

@@ -677,26 +677,40 @@ async function restoreArchivedInChunks(records: PersistRecord[]) {
 
 /* ---------- 存档备份（FEAT-6：防清库 / 跨设备迁移） ---------- */
 
-/** 当前列表全部可存档项 → 备份文本（含参数与诊断信息，不含图片本体） */
+/** 当前列表全部可存档项 → 备份文本（含参数与诊断信息 + 收藏标记，不含图片本体） */
 export function buildArchiveBackup(): { text: string; count: number } {
   const records = state.items.map(toRecord).filter((r) => r !== null)
-  return { text: serializeArchive(records), count: records.length }
+  return { text: serializeArchive(records, [...favKeys]), count: records.length }
 }
 
 /**
- * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数；
+ * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数与
+ * 合并的收藏标记数（备份里的收藏按指纹并入本机账本，存档卡片即带星标）；
  * 持久化不可用时仅恢复到本会话内存。备份结构非法时抛错由调用方提示。
  */
-export async function importArchive(text: string): Promise<number> {
-  const records = parseArchive(text)
+export async function importArchive(text: string): Promise<{ n: number; favs: number }> {
+  const { records, favorites } = parseArchive(text)
   const fresh = records.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
   if (persistAvailable) {
     const written = await importPersisted(fresh)
     restoreArchived(written)
-    return written.length
+    return { n: written.length, favs: mergeArchivedFavorites(favorites) }
   }
   restoreArchived(fresh)
-  return fresh.length
+  return { n: fresh.length, favs: mergeArchivedFavorites(favorites) }
+}
+
+/** 把备份携带的收藏指纹并入本机账本（幂等：已存在的跳过），返回实际新增数 */
+function mergeArchivedFavorites(favorites: string[]): number {
+  let added = 0
+  for (const key of favorites) {
+    if (!favKeys.has(key)) {
+      favKeys.add(key)
+      added++
+    }
+  }
+  if (added) persistFavorites()
+  return added
 }
 void hydrate()
 
