@@ -49,6 +49,8 @@ const icons: Record<string, string> = {
     '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
   history:
     '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  dices:
+    '<rect width="12" height="12" x="3" y="3" rx="2" ry="2"/><path d="M7 7h.01M11 11h.01M7 11h.01M11 7h.01"/><rect width="12" height="12" x="9" y="9" rx="2" ry="2"/><path d="M13 13h.01M17 17h.01M13 17h.01M17 13h.01"/>',
 }
 </script>
 

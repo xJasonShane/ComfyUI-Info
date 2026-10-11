@@ -47,7 +47,7 @@ import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
 import { downloadText } from '../lib/utils'
 import { locale, t, toggleLocale } from '../locales'
-import { statsVisible } from '../composables/ui'
+import { randomPickRequest, statsVisible } from '../composables/ui'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
@@ -512,6 +512,22 @@ function savePreset() {
         <NSwitch v-model:value="store.favOnly" size="small" :aria-label="t('topbar.favOnlyAria')" />
       </template>
       {{ t('topbar.favOnlyTooltip', { n: favCount }) }}
+    </NTooltip>
+
+    <NTooltip v-if="filteredItems.length > 0">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('topbar.randomPick')"
+          :title="t('topbar.randomPickTitle', { n: filteredItems.length })"
+          @click="randomPickRequest++"
+        >
+          <template #icon><Icon name="dices" :size="15" /></template>
+        </NButton>
+      </template>
+      {{ t('topbar.randomPickTitle', { n: filteredItems.length }) }}
     </NTooltip>
 
     <NTooltip v-if="store.items.length > 0">

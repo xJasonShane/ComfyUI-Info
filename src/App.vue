@@ -61,7 +61,7 @@ import {
 } from './composables/store'
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
 import { copyText, humanBytes } from './lib/utils'
-import { statsVisible } from './composables/ui'
+import { statsVisible, randomPickRequest } from './composables/ui'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
 
@@ -222,6 +222,13 @@ function open(item: ImageItem) {
   current.value = item
   showDetail.value = true
 }
+
+/** 随机抽一张：从当前筛选结果等概率抽选并打开详情（筛选为空时按钮不出现，这里兜底不动） */
+watch(randomPickRequest, () => {
+  const list = filteredItems.value
+  if (!list.length) return
+  open(list[Math.floor(Math.random() * list.length)]!)
+})
 
 /** 沿当前筛选顺序切换详情图片（抽屉按钮与键盘 ← / → 共用）；越界不动 */
 function navDetail(dir: 1 | -1) {
