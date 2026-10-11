@@ -4,7 +4,7 @@ import { NButton, NDrawer, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
-import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
+import { baseName, copyText, downloadBinary, downloadText, humanBytes } from '../lib/utils'
 import { buildParamsSummary } from '../lib/export'
 import { favoriteFlags, retryItem, ensureItemUrl, toggleFavorite } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
@@ -200,6 +200,50 @@ function downloadJson(text: string | undefined, suffix: string) {
   if (!props.item || !text) return
   downloadText(`${baseName(props.item.name)}.${suffix}`, text)
 }
+
+/* ---------- 详情页图片操作：复制图片到剪贴板 / 下载原图 ---------- */
+function downloadImage() {
+  const it = props.item
+  if (!it?.file) return
+  downloadBinary(it.name, it.file)
+}
+
+/** 任意格式图片 → PNG Blob：剪贴板图片只接受 image/png，JPEG / WebP 需经画布转码 */
+async function imagePngBlob(file: File): Promise<Blob> {
+  const bmp = await createImageBitmap(file)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = bmp.width
+    canvas.height = bmp.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 2d context unavailable')
+    ctx.drawImage(bmp, 0, 0)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) throw new Error('canvas toBlob failed')
+    return blob
+  } finally {
+    bmp.close()
+  }
+}
+
+async function copyImage() {
+  const it = props.item
+  if (!it?.file) return
+  try {
+    // Safari 需在用户手势内传入 Promise 形态的 ClipboardItem（延迟渲染）；Chromium 97+ 同样支持
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': imagePngBlob(it.file) })])
+    message.success(t('detail.imageCopied'))
+  } catch {
+    // 旧浏览器不支持 Promise 形态：先拿到 blob 再写入一次
+    try {
+      const blob = await imagePngBlob(it.file)
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      message.success(t('detail.imageCopied'))
+    } catch {
+      message.error(t('detail.imageCopyFailed'))
+    }
+  }
+}
 </script>
 
 <template>
@@ -213,6 +257,26 @@ function downloadJson(text: string | undefined, suffix: string) {
           :title="t('detail.zoomIn')"
           @click="zoomed = true"
         />
+        <div v-if="item.url && item.file" class="img-actions">
+          <NButton
+            size="tiny"
+            secondary
+            :title="t('detail.copyImage')"
+            :aria-label="t('detail.copyImage')"
+            @click="copyImage"
+          >
+            <template #icon><Icon name="copy" :size="13" /></template>
+          </NButton>
+          <NButton
+            size="tiny"
+            secondary
+            :title="t('detail.downloadImage')"
+            :aria-label="t('detail.downloadImage')"
+            @click="downloadImage"
+          >
+            <template #icon><Icon name="download" :size="13" /></template>
+          </NButton>
+        </div>
         <div v-else class="detail-noimg">
           <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
           <span>{{

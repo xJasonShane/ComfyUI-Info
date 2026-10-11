@@ -751,6 +751,7 @@ body {
 }
 
 .detail-view {
+  position: relative;
   flex: 1.5;
   min-width: 0;
   display: flex;
@@ -791,6 +792,16 @@ body {
 .detail-view .detail-noimg .tip {
   font-size: 11.5px;
   opacity: 0.85;
+}
+
+/* 大图右上角悬浮操作（复制 / 下载原图），避开居中的图片本体 */
+.img-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 1;
 }
 
 .detail-panel {
