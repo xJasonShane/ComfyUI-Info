@@ -1335,6 +1335,23 @@ export function toggleFavorite(item: ImageItem) {
   persistFavorites()
 }
 
+/**
+ * 批量收藏 / 取消收藏选中项（幂等：已处于目标状态的项跳过，指纹账本只写一次）。
+ * 与单张收藏同账本：按 recordKey 跨会话记忆，清空列表 / 移除条目不动账。
+ */
+export function setItemsFavorite(items: ImageItem[], faved: boolean) {
+  let changed = false
+  for (const it of items) {
+    const key = recordKey(it)
+    if (faved ? !favKeys.has(key) : favKeys.has(key)) {
+      if (faved) favKeys.add(key)
+      else favKeys.delete(key)
+      changed = true
+    }
+  }
+  if (changed) persistFavorites()
+}
+
 export function toggleDark() {
   state.dark = !state.dark
   // 显式偏好只在用户切换时落盘；系统跟随（见 schemeQuery 监听）不写入，

@@ -47,12 +47,14 @@ import EmptyState from './components/EmptyState.vue'
 import Icon from './components/Icon.vue'
 import {
   addFiles,
+  favoriteFlags,
   filteredItems,
   parsing,
   rangeIds,
   removeItem,
   removeItems,
   retryAllFailed,
+  setItemsFavorite,
   stats,
   store,
   toggleFavorite,
@@ -299,6 +301,17 @@ const canCompare = computed(
     selectedItems.value.length === 2 &&
     selectedItems.value.every((i) => i.status === 'done' && i.params),
 )
+
+/* ---------- 批量收藏：选中全部已收藏时切换为「取消收藏选中」 ---------- */
+const allSelectedFaved = computed(
+  () =>
+    selectedItems.value.length > 0 &&
+    selectedItems.value.every((i) => favoriteFlags.value.get(i.id) ?? false),
+)
+
+function batchSetFavorite() {
+  setItemsFavorite(selectedItems.value, !allSelectedFaved.value)
+}
 
 function openCompare() {
   const [a, b] = selectedItems.value
@@ -549,6 +562,9 @@ async function onDrop(e: DragEvent) {
           </NButton>
           <NButton size="tiny" secondary @click="batchCopyPrompts">{{
             t('bar.copyPrompts')
+          }}</NButton>
+          <NButton size="tiny" secondary @click="batchSetFavorite">{{
+            allSelectedFaved ? t('bar.unfavSelected') : t('bar.favSelected')
           }}</NButton>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
             <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">{{

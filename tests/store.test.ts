@@ -526,6 +526,31 @@ it('收藏：星标切换、只看收藏筛选、跨会话记忆与清空保留'
   expect(JSON.parse(localStorage.getItem('cii:favs')!)).toEqual([])
 })
 
+it('批量收藏：幂等设置目标状态，账本只写一次', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  api.addFiles([
+    { file: new File(['x'], 'a.png', { lastModified: 1000 }) },
+    { file: new File(['x'], 'b.png', { lastModified: 2000 }) },
+  ])
+  await flush()
+  const [a, b] = api.store.items
+  api.toggleFavorite(a!)
+
+  // 已收藏的 a 跳过，只补 b；取消时同理，已取消的不再动账
+  api.setItemsFavorite([a!, b!], true)
+  expect(api.favoriteFlags.value.get(a!.id)).toBe(true)
+  expect(api.favoriteFlags.value.get(b!.id)).toBe(true)
+  expect(api.favCount.value).toBe(2)
+  expect(JSON.parse(localStorage.getItem('cii:favs')!).sort()).toEqual([
+    'a.png|1|1000',
+    'b.png|1|2000',
+  ])
+
+  api.setItemsFavorite([a!, b!], false)
+  expect(api.favCount.value).toBe(0)
+  expect(JSON.parse(localStorage.getItem('cii:favs')!)).toEqual([])
+})
+
 it('rangeIds 区间选择：锚点到目标的有序区间，锚点失效退化为仅目标', () => {
   const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
   expect(api.rangeIds(list, 'a', 'c')).toEqual(['a', 'b', 'c'])
