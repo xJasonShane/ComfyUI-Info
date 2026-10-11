@@ -666,7 +666,9 @@ function safeGetItem(key: string): string | null {
 }
 
 function detectLocale(): Locale {
-  if (typeof navigator === 'undefined') return 'zh'
+  // 用 window 而非 navigator 判断浏览器环境：Node 21+ 也有全局 navigator（语言取自宿主系统），
+  // 会让 Node 下运行的测试误判语言；浏览器中 window 必然存在
+  if (typeof window === 'undefined') return 'zh'
   const langs = [...(navigator.languages ?? []), navigator.language].filter((l): l is string => !!l)
   // 无语言信号（测试环境等）回退中文；有英文信号才切英文
   return langs.some((l) => /^en/i.test(l)) ? 'en' : 'zh'

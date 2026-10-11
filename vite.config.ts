@@ -8,4 +8,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 4096,
   },
+  test: {
+    setupFiles: ['./tests/setup.ts'],
+  },
 })
