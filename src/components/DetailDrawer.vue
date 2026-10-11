@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NDrawer, NDropdown, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
+import { NAutoComplete, NButton, NDrawer, NDropdown, NTabPane, NTabs, NSwitch, useMessage } from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadBinary, downloadText, humanBytes } from '../lib/utils'
 import { buildParamsSummary } from '../lib/export'
 import {
+  allTagNames,
   favoriteFlags,
   filteredItems,
   retryItem,
   ensureItemUrl,
   store,
+  tagLists,
   toggleFavorite,
+  toggleItemTag,
 } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
 import { dateLocale, t } from '../locales'
@@ -387,6 +390,33 @@ function applyRowFilter(row: InfoRow) {
 /** LoRA 行的一键筛选：定向 `lora:"…"`（含空格名称整体成词） */
 function filterLora(name: string) {
   applySearch(`lora:"${name}"`)
+}
+
+/* ---------- 自定义标签：详情页增删（按指纹跨会话记忆），点击标签名即筛选 ---------- */
+const currentTags = computed(() => (props.item ? (tagLists.value.get(props.item.id) ?? []) : []))
+const tagInput = ref('')
+
+/** 输入建议：全库已有标签按使用频次排，排除当前条目已带的 */
+const tagSuggestions = computed(() =>
+  allTagNames.value
+    .filter((t) => !currentTags.value.includes(t))
+    .slice(0, 8)
+    .map((t) => ({ label: t, value: t })),
+)
+
+function addTag(raw?: string) {
+  const tag = (raw ?? tagInput.value).trim()
+  if (!tag || !props.item) return
+  if (!currentTags.value.includes(tag)) toggleItemTag(props.item, tag)
+  tagInput.value = ''
+}
+
+function removeTag(tag: string) {
+  if (props.item) toggleItemTag(props.item, tag)
+}
+
+function filterTag(tag: string) {
+  applySearch(`tag:"${tag}"`)
 }
 
 function stageText(s: SamplerInfo): string {
@@ -825,6 +855,41 @@ async function copyImage() {
             <ul v-if="item.raw.hints?.length" class="hints">
               <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
             </ul>
+          </div>
+
+          <div v-if="item.status === 'done' || item.status === 'error'" class="section">
+            <div class="section-title">{{ t('detail.tags') }}</div>
+            <div class="tag-editor">
+              <div v-for="tag in currentTags" :key="tag" class="tag-chip">
+                <button
+                  type="button"
+                  class="tag-name"
+                  :title="t('detail.tagFilter')"
+                  @click="filterTag(tag)"
+                >
+                  {{ tag }}
+                </button>
+                <button
+                  type="button"
+                  class="tag-del"
+                  :title="t('detail.tagRemove')"
+                  :aria-label="t('detail.tagRemove')"
+                  @click="removeTag(tag)"
+                >
+                  <Icon name="x" :size="10" :stroke="2.4" />
+                </button>
+              </div>
+              <NAutoComplete
+                v-model:value="tagInput"
+                size="small"
+                :options="tagSuggestions"
+                :placeholder="t('detail.tagAdd')"
+                :get-show="() => tagSuggestions.length > 0"
+                blur-after-select
+                @select="addTag"
+                @keyup.enter="addTag()"
+              />
+            </div>
           </div>
 
           <div v-if="showJsonTabs" class="section">

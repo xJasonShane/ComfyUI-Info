@@ -719,27 +719,32 @@ async function restoreArchivedInChunks(records: PersistRecord[]) {
 
 /* ---------- 存档备份（FEAT-6：防清库 / 跨设备迁移） ---------- */
 
-/** 当前列表全部可存档项 → 备份文本（含参数与诊断信息 + 收藏标记，不含图片本体） */
+/** 当前列表全部可存档项 → 备份文本（含参数、诊断信息、收藏标记与标签，不含图片本体） */
 export function buildArchiveBackup(): { text: string; count: number } {
   const records = state.items.map(toRecord).filter((r) => r !== null)
-  return { text: serializeArchive(records, [...favKeys]), count: records.length }
+  return { text: serializeArchive(records, [...favKeys], { ...itemTags }), count: records.length }
 }
 
 /**
  * 导入存档备份：与库存 / 存档同指纹的记录跳过，返回实际恢复的记录数与
- * 合并的收藏标记数（备份里的收藏按指纹并入本机账本，存档卡片即带星标）；
- * 持久化不可用时仅恢复到本会话内存。备份结构非法时抛错由调用方提示。
+ * 合并的收藏标记数、新增标签的指纹数（备份里的收藏 / 标签按指纹并入本机账本，
+ * 存档卡片即带星标与标签）；持久化不可用时仅恢复到本会话内存。
+ * 备份结构非法时抛错由调用方提示。
  */
-export async function importArchive(text: string): Promise<{ n: number; favs: number }> {
-  const { records, favorites } = parseArchive(text)
+export async function importArchive(text: string): Promise<{ n: number; favs: number; tags: number }> {
+  const { records, favorites, tags } = parseArchive(text)
   const fresh = records.filter((r) => !seenKeys.has(r.key) && !detachedByKey.has(r.key))
   if (persistAvailable) {
     const written = await importPersisted(fresh)
     restoreArchived(written)
-    return { n: written.length, favs: mergeArchivedFavorites(favorites) }
+    return {
+      n: written.length,
+      favs: mergeArchivedFavorites(favorites),
+      tags: mergeArchivedTags(tags),
+    }
   }
   restoreArchived(fresh)
-  return { n: fresh.length, favs: mergeArchivedFavorites(favorites) }
+  return { n: fresh.length, favs: mergeArchivedFavorites(favorites), tags: mergeArchivedTags(tags) }
 }
 
 /** 把备份携带的收藏指纹并入本机账本（幂等：已存在的跳过），返回实际新增数 */
@@ -752,6 +757,22 @@ function mergeArchivedFavorites(favorites: string[]): number {
     }
   }
   if (added) persistFavorites()
+  return added
+}
+
+/** 把备份携带的标签映射并入本机账本（幂等：同指纹同标签跳过），返回新增指纹数 */
+function mergeArchivedTags(tags: Record<string, string[]>): number {
+  let added = 0
+  for (const [key, names] of Object.entries(tags)) {
+    if (!names.length) continue
+    const existing = itemTags[key] ?? []
+    const merged = [...new Set([...existing, ...names])]
+    if (merged.length !== existing.length) {
+      itemTags[key] = merged
+      added++
+    }
+  }
+  if (added) persistTags()
   return added
 }
 void hydrate()
@@ -967,7 +988,7 @@ function searchTextField(it: ImageItem): string {
 export type NumField = 'steps' | 'cfg' | 'width' | 'height' | 'batch' | 'clip'
 
 /** `has:` 存在性条件：图片具备对应生成要素（可配 `-` 排除「有某要素」的图） */
-export type HasField = 'lora' | 'vae' | 'hires' | 'upscale' | 'controlnet'
+export type HasField = 'lora' | 'vae' | 'hires' | 'upscale' | 'controlnet' | 'tag'
 
 const HAS_FIELDS: Record<string, HasField> = {
   lora: 'lora',
@@ -975,6 +996,7 @@ const HAS_FIELDS: Record<string, HasField> = {
   hires: 'hires',
   upscale: 'upscale',
   controlnet: 'controlnet',
+  tag: 'tag',
 }
 
 /** 数值范围条件（FEAT-3）：op 缺省为精确相等 */
@@ -1003,6 +1025,8 @@ export interface QueryConditions {
   vae: string[]
   upscale: string[]
   controlnet: string[]
+  /** `tag:xxx` 自定义标签定向（标签按去重指纹记忆） */
+  tag: string[]
   /** `has:lora|vae|hires|upscale|controlnet` 存在性条件 */
   has: HasField[]
   num: NumCondition[]
@@ -1016,7 +1040,7 @@ export interface ParsedQuery {
 }
 
 const QUERY_FIELD_RE =
-  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|controlnet|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+  /^(model|lora|seed|path|date|pos|neg|sampler|scheduler|vae|upscale|controlnet|tag|has|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
 
 /** 数值字段别名：w / h 是 width / height 的简写 */
 const NUM_FIELDS: Record<string, NumField> = {
@@ -1109,7 +1133,8 @@ function hitCondition(
     | 'scheduler'
     | 'vae'
     | 'upscale'
-    | 'controlnet',
+    | 'controlnet'
+    | 'tag',
   value: string,
   it: ImageItem,
 ): boolean {
@@ -1146,6 +1171,8 @@ function hitCondition(
       return (it.params?.upscalers ?? []).some((v) => v.toLowerCase().includes(value))
     case 'controlnet':
       return (it.params?.controlNets ?? []).some((v) => v.toLowerCase().includes(value))
+    case 'tag':
+      return hitTagKey(recordKey(it), value)
   }
 }
 
@@ -1164,6 +1191,8 @@ function hitHas(field: HasField, it: ImageItem): boolean {
       return p.upscalers.length > 0
     case 'controlnet':
       return p.controlNets.length > 0
+    case 'tag':
+      return hitTagKey(recordKey(it), null)
   }
 }
 
@@ -1221,6 +1250,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
     'vae',
     'upscale',
     'controlnet',
+    'tag',
   ] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
@@ -1240,6 +1270,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
  * - 提示词定向 `pos:xxx` / `neg:xxx` 仅匹配正向 / 负向提示词（裸关键词搜全域）
  * - 采样与资产定向 `sampler:xxx` / `scheduler:xxx` / `vae:xxx` / `upscale:xxx` / `controlnet:xxx`
+ * - 自定义标签定向 `tag:xxx`（has:tag 看有标签的图，可配 `-` 排除）
  * - 存在性 `has:lora|vae|hires|upscale|controlnet`，可配 `-` 排除
  * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀，
  *   `date:>2026-01-01` / `date:<=2026-06` 范围筛选（前缀展开为区间端点再比较）
@@ -1265,6 +1296,7 @@ export function parseQuery(raw: string): ParsedQuery {
     vae: [],
     upscale: [],
     controlnet: [],
+    tag: [],
     has: [],
     num: [],
   })
@@ -1319,6 +1351,7 @@ export function parseQuery(raw: string): ParsedQuery {
                 | 'vae'
                 | 'upscale'
                 | 'controlnet'
+                | 'tag'
             ].push(value.toLowerCase())
           }
         }
@@ -1556,6 +1589,86 @@ export function setItemsFavorite(items: ImageItem[], faved: boolean) {
     }
   }
   if (changed) persistFavorites()
+}
+
+/* ---------- 自定义标签：按去重指纹记忆，与收藏同一套用户策展数据语义 ---------- */
+// 清空列表 / 移除条目不动账，同指纹文件重新拖入或存档恢复后自动生效
+const TAGS_KEY = 'cii:tags'
+
+function loadTags(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(TAGS_KEY)
+    if (!raw) return {}
+    const o: unknown = JSON.parse(raw)
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return {}
+    const out: Record<string, string[]> = {}
+    for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        const names = v.filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+        if (names.length) out[k] = [...new Set(names)]
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+const itemTags = reactive(loadTags())
+
+function persistTags() {
+  try {
+    localStorage.setItem(TAGS_KEY, JSON.stringify(itemTags))
+  } catch {
+    // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+  }
+}
+
+/** 标签表（itemId → 标签名列表）：computed 一次算全量，卡片与详情抽屉共用 */
+export const tagLists = computed(() => {
+  const m = new Map<string, string[]>()
+  for (const it of state.items) {
+    const tags = itemTags[recordKey(it)]
+    if (tags?.length) m.set(it.id, tags)
+  }
+  return m
+})
+
+/** 全库出现过的标签名（按使用频次降序）：详情页添加标签的候选建议 */
+export const allTagNames = computed(() => {
+  const freq = new Map<string, number>()
+  for (const tags of Object.values(itemTags)) {
+    for (const t of tags) freq.set(t, (freq.get(t) ?? 0) + 1)
+  }
+  return Array.from(freq, ([name]) => name).sort(
+    (a, b) => freq.get(b)! - freq.get(a)! || nameCollator.compare(a, b),
+  )
+})
+
+/** 切换单个标签：加 / 移除并落盘，返回切换后是否带上该标签 */
+export function toggleItemTag(item: ImageItem, tag: string): boolean {
+  const key = recordKey(item)
+  const list = itemTags[key] ?? []
+  const i = list.indexOf(tag)
+  if (i >= 0) {
+    list.splice(i, 1)
+    if (list.length) itemTags[key] = list
+    else delete itemTags[key]
+    persistTags()
+    return false
+  }
+  list.push(tag)
+  itemTags[key] = list
+  persistTags()
+  return true
+}
+
+/** 当前条目是否带某标签（has:tag 与 tag: 匹配共用） */
+function hitTagKey(key: string, tag: string | null): boolean {
+  const tags = itemTags[key]
+  if (!tags?.length) return false
+  if (tag === null) return true
+  return tags.some((t) => t.toLowerCase().includes(tag))
 }
 
 export function toggleDark() {

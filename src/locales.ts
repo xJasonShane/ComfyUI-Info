@@ -106,6 +106,7 @@ const zh = {
   'msg.archiveExported': '已导出 {n} 条存档记录（不含图片本体）',
   'msg.archiveImported': '已导入 {n} 条存档记录',
   'msg.archiveFavsMerged': '已合并 {n} 条收藏标记（按指纹匹配，重新拖入同指纹文件即生效）',
+  'msg.archiveTagsMerged': '已并入 {n} 条备份携带的标签（按指纹匹配，重新拖入同指纹文件即生效）',
   'msg.archiveAllExists': '备份中的记录均已存在，未新增',
   'msg.archiveImportFailed': '导入失败：{msg}',
   'topbar.searchPlaceholder': '搜索提示词 / 模型 / 种子（悬停看语法）',
@@ -129,7 +130,8 @@ const zh = {
   'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> 按采样器 / 调度器',
   'help.vae': '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> 按 VAE / 放大 / ControlNet 模型',
   'help.has':
-    '<code>has:lora</code> 只看带某要素的图（lora / vae / hires / upscale / controlnet，可配 -）',
+    '<code>has:lora</code> 只看带某要素的图（lora / vae / hires / upscale / controlnet / tag，可配 -）',
+  'help.tag': '<code>tag:xxx</code> 按自定义标签筛选（标签在详情页添加）',
   'help.exclude': '<code>-关键词</code> 排除（如 <code>-blurry</code>、<code>-model:xx</code>）',
   'help.quoted':
     '<code>"model:a b"</code> 或 <code>model:"a b"</code> 引号包裹可含空格，可与 <code>-</code> 连用',
@@ -188,6 +190,10 @@ const zh = {
   'detail.next': '下一张',
   'detail.copyField': '复制{name}',
   'detail.copyPath': '复制文件路径',
+  'detail.tags': '标签',
+  'detail.tagAdd': '添加标签，回车确认',
+  'detail.tagFilter': '筛选带此标签的图片',
+  'detail.tagRemove': '移除标签',
   'detail.compareTitle': '与相邻图片对比',
   'detail.comparePrev': '与上一张对比',
   'detail.compareNext': '与下一张对比',
@@ -421,6 +427,8 @@ const en: Record<DictKey, string> = {
   'msg.archiveImported': 'Imported {n} archive records',
   'msg.archiveFavsMerged':
     'Merged {n} favorite marks (matched by fingerprint; re-drop the original file to show the star)',
+  'msg.archiveTagsMerged':
+    'Merged tags carried by {n} fingerprint records (re-drop the original file to show them)',
   'msg.archiveAllExists': 'All records in the backup already exist; nothing added',
   'msg.archiveImportFailed': 'Import failed: {msg}',
   'topbar.searchPlaceholder': 'Search prompts / model / seed (hover for syntax)',
@@ -445,7 +453,8 @@ const en: Record<DictKey, string> = {
   'help.sampler': '<code>sampler:xxx</code> / <code>scheduler:xxx</code> by sampler / scheduler',
   'help.vae': '<code>vae:</code> / <code>upscale:</code> / <code>controlnet:</code> by VAE / upscale / ControlNet model',
   'help.has':
-    '<code>has:lora</code> images having an element (lora / vae / hires / upscale / controlnet, negatable)',
+    '<code>has:lora</code> images having an element (lora / vae / hires / upscale / controlnet / tag, negatable)',
+  'help.tag': '<code>tag:xxx</code> filter by custom tags (add tags in the detail drawer)',
   'help.exclude': '<code>-term</code> exclude (e.g. <code>-blurry</code>, <code>-model:xx</code>)',
   'help.quoted':
     '<code>"model:a b"</code> / <code>model:"a b"</code> quotes allow spaces, combinable with <code>-</code>',
@@ -503,6 +512,10 @@ const en: Record<DictKey, string> = {
   'detail.next': 'Next image',
   'detail.copyField': 'Copy {name}',
   'detail.copyPath': 'Copy file path',
+  'detail.tags': 'Tags',
+  'detail.tagAdd': 'Add a tag, Enter to confirm',
+  'detail.tagFilter': 'Filter images with this tag',
+  'detail.tagRemove': 'Remove tag',
   'detail.compareTitle': 'Compare with neighbor',
   'detail.comparePrev': 'Compare with previous',
   'detail.compareNext': 'Compare with next',

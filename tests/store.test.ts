@@ -716,19 +716,29 @@ it('存档备份：序列化与解析往返，非法结构抛错（FEAT-6）', a
     savedAt: 0,
   }
   const text = serializeArchive([rec])
-  expect(parseArchive(text)).toEqual({ records: [rec], favorites: [] })
+  expect(parseArchive(text)).toEqual({ records: [rec], favorites: [], tags: {} })
   // 收藏标记随备份走：往返保真，无收藏时不写 favorites 字段（旧版应用双向兼容）
   expect(parseArchive(serializeArchive([rec], ['a.png|1|1', 'v2/b.png|2|3']))).toEqual({
     records: [rec],
     favorites: ['a.png|1|1', 'v2/b.png|2|3'],
+    tags: {},
   })
   expect(JSON.parse(serializeArchive([rec]))).not.toHaveProperty('favorites')
+  expect(JSON.parse(serializeArchive([rec]))).not.toHaveProperty('tags')
+  // 标签随备份走：往返保真，非法标签值剔除
+  expect(parseArchive(serializeArchive([rec], [], { 'a.png|1|1': ['素材', '素材', ''] }))).toEqual({
+    records: [rec],
+    favorites: [],
+    tags: { 'a.png|1|1': ['素材'] },
+  })
   expect(() => parseArchive('{"items":[]}')).toThrow()
   expect(() => parseArchive('not json')).toThrow()
   // 无法识别的条目剔除，不中断导入；收藏里的非字符串项忽略
   expect(
-    parseArchive(JSON.stringify({ records: [rec, { junk: true }], favorites: ['k|1|2', 3] })),
-  ).toEqual({ records: [rec], favorites: ['k|1|2'] })
+    parseArchive(
+      JSON.stringify({ records: [rec, { junk: true }], favorites: ['k|1|2', 3], tags: { k: 'junk' } }),
+    ),
+  ).toEqual({ records: [rec], favorites: ['k|1|2'], tags: {} })
 })
 
 it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）', async () => {
@@ -918,6 +928,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
     vae: [],
     upscale: [],
     controlnet: [],
+    tag: [],
     has: [],
   }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
@@ -936,6 +947,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
     none: empty,
@@ -959,6 +971,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
   })
@@ -979,6 +992,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
     none: empty,
@@ -1001,6 +1015,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
     none: {
@@ -1018,6 +1033,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
   })
@@ -1038,6 +1054,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
     none: {
@@ -1055,6 +1072,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
   })
@@ -1088,6 +1106,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: [],
     },
     none: empty,
@@ -1113,6 +1132,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: ['ft-mse'],
       upscale: ['4x'],
       controlnet: [],
+      tag: [],
       has: ['lora'],
     },
     none: {
@@ -1130,6 +1150,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       vae: [],
       upscale: [],
       controlnet: [],
+      tag: [],
       has: ['hires'],
     },
   })
@@ -1796,4 +1817,61 @@ it('自动重扫间隔可调：改间隔即按新周期触发并落盘', async (
   } finally {
     vi.useRealTimers()
   }
+})
+
+describe('自定义标签', () => {
+  it('详情标签增删按指纹记忆，tag: 定向与 has:tag 存在性搜索命中', async () => {
+    vi.mocked(parser.parseImage).mockResolvedValue({
+      raw: { source: 'comfyui' },
+      params: {
+        positive: [],
+        negative: [],
+        models: [],
+        loras: [],
+        samplers: [],
+        vaes: [],
+        upscalers: [],
+        controlNets: [],
+        nodeCount: 0,
+      },
+    })
+    api.addFiles([file('a.png'), file('b.png')])
+    await flush()
+    const a = api.store.items[0]!
+    expect(api.toggleItemTag(a, '精选')).toBe(true)
+    expect(api.tagLists.value.get(a.id)).toEqual(['精选'])
+
+    api.store.sourceFilter = 'all'
+    api.store.search = 'tag:精选'
+    expect(api.filteredItems.value.map((i) => i.name)).toEqual(['a.png'])
+    api.store.search = 'has:tag'
+    expect(api.filteredItems.value.map((i) => i.name)).toEqual(['a.png'])
+    api.store.search = '-has:tag'
+    expect(api.filteredItems.value.map((i) => i.name)).toEqual(['b.png'])
+
+    // 同名标签不重复；删除后条目回到无标签
+    expect(api.toggleItemTag(a, '精选')).toBe(false)
+    expect(api.tagLists.value.get(a.id)).toBeUndefined()
+    api.store.search = ''
+  })
+
+  it('存档备份携带标签：导入按指纹幂等合并', async () => {
+    vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+    api.addFiles([file('a.png')])
+    await flush()
+    const a = api.store.items[0]!
+    api.toggleItemTag(a, '素材')
+
+    const { text } = api.buildArchiveBackup()
+    // 移除标签后导入备份：标签按指纹恢复
+    api.toggleItemTag(a, '素材')
+    expect(api.tagLists.value.get(a.id)).toBeUndefined()
+
+    const { favs, tags } = await api.importArchive(text)
+    expect(tags).toBe(1)
+    expect(api.tagLists.value.get(a.id)).toEqual(['素材'])
+    // 幂等：重复导入不再新增
+    expect((await api.importArchive(text)).tags).toBe(0)
+    expect(favs).toBe(0)
+  })
 })

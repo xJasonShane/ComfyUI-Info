@@ -261,6 +261,58 @@ body {
   transform: scale(1.04);
 }
 
+/* 详情页标签编辑：chips 点击筛选、x 移除，输入框带全库标签建议 */
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.tag-chip .tag-name {
+  border: none;
+  background: none;
+  padding: 3px 4px 3px 10px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-chip .tag-name:hover {
+  color: var(--accent);
+}
+
+.tag-chip .tag-del {
+  border: none;
+  background: none;
+  padding: 3px 8px 3px 2px;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tag-chip .tag-del:hover {
+  color: var(--danger);
+}
+
+.tag-editor .n-auto-complete {
+  flex: 1;
+  min-width: 150px;
+}
+
 /* 安全模式：缩略图模糊防走光，悬停临时揭示（放大遮住模糊边缘溢出） */
 .card.safe img {
   filter: blur(22px);

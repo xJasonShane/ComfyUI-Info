@@ -187,10 +187,11 @@ async function onImportArchiveFile(e: Event) {
   input.value = ''
   if (!f) return
   try {
-    const { n, favs } = await importArchive(await f.text())
+    const { n, favs, tags } = await importArchive(await f.text())
     if (n) message.success(t('msg.archiveImported', { n }))
     else message.info(t('msg.archiveAllExists'))
     if (favs) message.success(t('msg.archiveFavsMerged', { n: favs }))
+    if (tags) message.success(t('msg.archiveTagsMerged', { n: tags }))
   } catch (err) {
     message.error(
       t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),
@@ -210,6 +211,7 @@ const helpLines = computed(() => [
   t('help.posneg'),
   t('help.sampler'),
   t('help.vae'),
+  t('help.tag'),
   t('help.has'),
   t('help.exclude'),
   t('help.quoted'),
