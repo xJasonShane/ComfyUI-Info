@@ -46,15 +46,17 @@ const maxCount = (list: UsageStat[]): number => list[0]?.count ?? 1
 
 /**
  * 点击统计项 → 应用对应筛选并关闭抽屉。模型走 modelFilter 精确筛选；
- * 目录写入 `path:"…"`（引号形式支持含空格的目录名）；
+ * 目录写入 `path:"…"`、LoRA / 采样器写入 `lora:"…"` / `sampler:"…"`
+ * （定向字段 + 引号：含空格的名称整体成词，不与提示词等其他搜索域串词）；
  * 分辨率拆成 `w:W h:H` 两个数值条件（parseQuery 无操作符为精确相等）；
- * LoRA / 采样器 / 高频词写入搜索框：含空格的名称会被 parseQuery 拆成多词 AND，
- * 而搜索串（searchText）包含完整名称，逐词命中等价于整名命中。
- * 日期行写入 `date:` 条件（本地时区按天匹配 mtime，见 store 的 hitDate）。
+ * 高频词保持裸关键词（其语义就是「提示词里出现过」）；日期行写入 `date:`
+ * 条件（本地时区按天匹配 mtime，见 store 的 hitDate）。
  */
 function pick(kind: StatSection['kind'], name: string) {
   if (kind === 'model') store.modelFilter = name
   else if (kind === 'dir') store.search = `path:"${name}"`
+  else if (kind === 'lora') store.search = `lora:"${name}"`
+  else if (kind === 'sampler') store.search = `sampler:"${name}"`
   else if (kind === 'res') {
     const [w, h] = name.split('×')
     store.search = `w:${w} h:${h}`
