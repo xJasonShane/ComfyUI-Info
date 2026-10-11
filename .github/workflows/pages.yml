@@ -1,22 +1,55 @@
 name: Deploy to GitHub Pages
 
+# 自动部署：main 的 CI（lint / 格式 / 单测 / 构建 / e2e）全部通过后，复用其构建产物发布，
+# 部署本身不再重复构建。手动触发（workflow_dispatch）保留完整门禁自行构建，用于
+# CI 未覆盖的场景（如首次启用 Pages）。
+
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
-# Pages 部署所需的最低权限；并发组避免连续推送时的重复部署
+# Pages 部署所需的最低权限；actions:read 供跨 workflow 下载 CI 产物；
+# 并发组避免连续推送时的重复部署
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: github-pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  # CI 成功后复用其 dist 产物发布；仅接受 main 本仓库的 CI（fork PR 不部署）
+  deploy-from-ci:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # 手动部署：完整门禁后自行构建
+  deploy-manual:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -29,6 +62,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

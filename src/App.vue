@@ -239,14 +239,30 @@ function navDetail(dir: 1 | -1) {
   if (idx < 0 || next < 0 || next >= list.length) return
   current.value = list[next]
 }
+/** 移除后清场：URL 已随 removeItem 回收，仍打开的抽屉只会渲染裂图残影 */
+function closeDetailIfRemoved(gone: ReadonlySet<ImageItem>) {
+  if (current.value && gone.has(current.value)) {
+    showDetail.value = false
+    current.value = null
+  }
+}
+
+/** 对比 A / B 任一被移除时收起对比抽屉（单张键盘删除不撤详情，仅此抽屉需要） */
+function closeCompareIfRemoved(gone: ReadonlySet<ImageItem>) {
+  const pair = comparePair.value
+  if (pair && (gone.has(pair[0]!) || gone.has(pair[1]!))) {
+    showCompare.value = false
+    comparePair.value = null
+  }
+}
+
 // 单张移除；若移除的正是抽屉里打开的这张，一并收起
 function onRemove(item: ImageItem) {
   removeItem(item)
   selectedIds.value.delete(item.id)
-  if (current.value === item) {
-    showDetail.value = false
-    current.value = null
-  }
+  const gone = new Set([item])
+  closeDetailIfRemoved(gone)
+  closeCompareIfRemoved(gone)
 }
 
 /**
@@ -307,8 +323,13 @@ function clearSelection() {
 }
 
 function batchRemove() {
-  removeItems(selectedItems.value)
+  const removed = [...selectedItems.value]
+  removeItems(removed)
   clearSelection()
+  // 正打开的详情 / 对比图在被移除集合里时收起抽屉，避免裂图残影
+  const gone = new Set(removed)
+  closeDetailIfRemoved(gone)
+  closeCompareIfRemoved(gone)
 }
 
 async function batchCopyPrompts() {
@@ -419,6 +440,7 @@ function removeCurrentAndAdvance() {
     showDetail.value = false
     current.value = null
   }
+  closeCompareIfRemoved(new Set([item]))
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))

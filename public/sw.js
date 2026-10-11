@@ -5,7 +5,7 @@
  * 离线 / 网络失败回退缓存快照；其余同源 GET（图标等基本不变的静态资源）走 cache-first。
  * 仅在 https / localhost 环境注册（index.html 内守卫），file:// 单文件版不受影响。
  */
-const CACHE = 'comfyui-info-v2'
+const CACHE = 'comfyui-info-v3'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -48,6 +48,8 @@ self.addEventListener('fetch', (event) => {
       (hit) =>
         hit ||
         fetch(req).then((res) => {
+          // 404 / 5xx 不入缓存：cache-first 会把坏响应固化到下次 bump 版本才清掉
+          if (!res.ok) return res
           const copy = res.clone()
           caches.open(CACHE).then((c) => c.put(req, copy))
           return res

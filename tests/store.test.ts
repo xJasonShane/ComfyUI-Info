@@ -1879,3 +1879,137 @@ describe('自定义标签', () => {
     expect(favs).toBe(0)
   })
 })
+
+/* ---------- P0 缺陷修复回归（I1 / I2 / I4 / I3 + 种子前导零） ---------- */
+
+it('自动重扫运行中改间隔立即按新周期生效（I1 回归）', async () => {
+  const fsMod = await import('../src/lib/fs')
+  vi.useFakeTimers()
+  try {
+    let scans = 0
+    vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async () => {
+      scans++
+      return 0
+    })
+    await api.setRescanHandle({ name: 'out' } as unknown as FileSystemDirectoryHandle)
+    api.store.autoRescanInterval = 10
+    api.store.autoRescan = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(scans).toBe(1)
+    // 旧实现在定时器已运行时沿用旧 10s 周期，改 5s 后 5s 处不会触发
+    api.store.autoRescanInterval = 5
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(scans).toBe(2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(scans).toBe(3)
+  } finally {
+    vi.useRealTimers()
+    api.store.autoRescan = false
+  }
+})
+
+it('存档恢复去重：同一指纹不因两条恢复路径到达而建两张卡（I2 回归）', () => {
+  const rec: PersistRecord = {
+    key: 'v9/a.png|1|1000',
+    name: 'a.png',
+    path: 'v9/a.png',
+    size: 1,
+    mtime: 1000,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui' },
+    savedAt: 0,
+  }
+  api.restoreArchived([rec])
+  expect(api.store.items.length).toBe(1)
+  // hydrate 分批恢复未完成时导入备份，同一记录会再次到达（如启动快照晚于导入落库）
+  api.restoreArchived([{ ...rec }])
+  expect(api.store.items.length).toBe(1)
+})
+
+it('清空列表后，在途重扫枚举的后续批次不再入列（I4 回归）', async () => {
+  const fsMod = await import('../src/lib/fs')
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async (_handle, onBatch) => {
+    onBatch([{ file: new File(['x'], 'a.png', { lastModified: 1 }) }])
+    await gate // 模拟枚举仍在进行：第二批待清空后才送达
+    onBatch([{ file: new File(['x'], 'b.png', { lastModified: 2 }) }])
+    return 2
+  })
+  await api.setRescanHandle({ name: 'out' } as unknown as FileSystemDirectoryHandle)
+  const scanning = api.rescanDirectory()
+  await flush()
+  expect(api.store.items.length).toBe(1)
+
+  api.clearAll()
+  expect(api.store.items.length).toBe(0)
+  release()
+  await scanning
+  // seenKeys 已清空，若后续批次仍入列会把刚清掉的文件当新文件找回
+  expect(api.store.items.length).toBe(0)
+})
+
+it('清空列表关闭自动重扫：下一拍不得把全部文件当新文件拉回（I4 语义）', async () => {
+  const fsMod = await import('../src/lib/fs')
+  vi.useFakeTimers()
+  try {
+    vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async () => 0)
+    await api.setRescanHandle({ name: 'out' } as unknown as FileSystemDirectoryHandle)
+    api.store.autoRescan = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.store.autoRescan).toBe(true)
+
+    api.clearAll()
+    expect(api.store.autoRescan).toBe(false)
+    const scans = vi.mocked(fsMod.collectDirectoryFiles).mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    // 定时器已停：清空后不再周期性把目录内容全部重新导入
+    expect(vi.mocked(fsMod.collectDirectoryFiles).mock.calls.length).toBe(scans)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('同工作流超大组（20 万张）聚类不因 Math.max 展开越界崩溃（I3 回归）', () => {
+  const items: ImageItem[] = []
+  for (let i = 0; i < 200_000; i++) {
+    items.push({
+      id: `big-${i}`,
+      url: '',
+      name: `f${i}.png`,
+      path: `d/f${i}.png`,
+      size: 1,
+      mtime: i,
+      status: 'done',
+      source: 'comfyui',
+      raw: { source: 'comfyui', prompt: 'same-workflow' },
+    })
+  }
+  for (const it of items) api.store.items.push(it)
+  const cluster = api.workflowClusters.value.get('big-0')
+  expect(cluster).toEqual({ group: 0, seq: 200_000, total: 200_000 })
+})
+
+it('seed 范围比较兼容前导零写法（按数值位数而非原始位数）', async () => {
+  const add = (name: string, parameters: string, path: string) => {
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: 1 }), path }])
+  }
+  add('a.png', 'cat\nSteps: 20, Seed: 10', 'v1/a.png')
+  add('b.png', 'dog\nSteps: 30, Seed: 8', 'v2/b.png')
+  await flush()
+  api.store.sourceFilter = 'all'
+  api.store.sortMode = 'default'
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  // 10 > 9：旧实现按原始位数比较会把 "10" 判小于 "009"
+  expect(names('seed:>009')).toEqual(['a.png'])
+  expect(names('seed:>7')).toEqual(['a.png', 'b.png'])
+  api.store.search = ''
+})

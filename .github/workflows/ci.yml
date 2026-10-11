@@ -16,8 +16,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run test
       - run: npm run build
+      - name: Upload dist for Pages deploy (main only)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -26,4 +34,6 @@ jobs:
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
       - name: e2e smoke tests
+        env:
+          E2E_SKIP_BUILD: 1 # 上一步已构建（产物同时供 Pages 复用），webServer 直接 preview
         run: npm run test:e2e

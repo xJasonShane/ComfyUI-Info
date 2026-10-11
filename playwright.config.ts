@@ -11,10 +11,13 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     locale: 'zh-CN',
-    trace: 'off',
+    trace: 'retain-on-failure', // 失败保留 trace，CI 红了可下载排查
   },
   webServer: {
-    command: 'npm run build && npm run preview -- --port 4173 --strictPort',
+    // CI 已单独构建（E2E_SKIP_BUILD=1）时直接 preview，避免同一流水线构建两次
+    command: process.env.E2E_SKIP_BUILD
+      ? 'npm run preview -- --port 4173 --strictPort'
+      : 'npm run build && npm run preview -- --port 4173 --strictPort',
     url: 'http://localhost:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

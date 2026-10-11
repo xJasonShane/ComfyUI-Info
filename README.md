@@ -45,7 +45,7 @@ GitHub Pages 在线版（与本地单文件版功能一致，数据同样只存�
 
 在线版是 PWA：可通过浏览器「安装应用」添加到桌面，以独立窗口使用；Service Worker 做离线缓存，断网后依然能打开（解析数据照常只存浏览器本地）。
 
-推送 main 后自动构建部署（`.github/workflows/pages.yml`，含 lint + 单测门禁），也可在仓库 Actions 页手动触发（workflow_dispatch）。首次启用需在仓库 **Settings → Pages → Build and deployment** 把 Source 设为 **GitHub Actions**。
+推送 main 后自动部署：CI（lint + 格式检查 + 单测 + 构建 + e2e）全部通过后，`.github/workflows/pages.yml` 复用其构建产物发布；也可在仓库 Actions 页手动触发 Deploy 工作流（完整门禁后自行构建）。首次启用需在仓库 **Settings → Pages → Build and deployment** 把 Source 设为 **GitHub Actions**。
 
 ## 使用
 
@@ -60,7 +60,7 @@ npm run lint      # ESLint 检查
 npm run format    # Prettier 格式化（format:check 只校验不写入）
 ```
 
-GitHub Actions 在 push / PR 时自动执行 lint + 单测 + 构建。
+GitHub Actions 在 push / PR 时自动执行 lint + 格式检查 + 单测 + 构建 + e2e（Playwright 失败保留 trace 便于排查）。
 
 `npm run build` 产出的是**单文件** `dist/index.html`（约 630 KB），直接双击即可在浏览器中离线使用，无需任何服务器。
 

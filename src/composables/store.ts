@@ -165,7 +165,13 @@ if (!storedTheme && schemeQuery) {
 
 watch(
   () => state.sortMode,
-  (m) => localStorage.setItem('cii:sort', m),
+  (m) => {
+    try {
+      localStorage.setItem('cii:sort', m)
+    } catch {
+      // 配额 / 环境限制时忽略：仅影响下次刷新的还原（与其余偏好写入同一防御）
+    }
+  },
 )
 
 watch(
@@ -449,6 +455,10 @@ export function clearAll() {
   detachedByKey.clear()
   queue.length = 0
   inflight.clear()
+  scanEpoch++ // 在途目录枚举的后续批次按代际丢弃，不得把清掉的文件找回
+  // 自动重扫开着的话，下一拍会把目录里所有文件当新文件全部拉回，「清空」形同虚设——
+  // 清空即停止监视（偏好开关同步熄灭，重新记住目录 / 手动开启可恢复）
+  state.autoRescan = false
   // 丢弃未应用的解析结果并取消节拍定时器：孤儿结果在应用时也会被 liveIds 拦截，这里直接清干净
   if (applyTimer !== null) {
     clearTimeout(applyTimer)
@@ -530,10 +540,15 @@ export function clearAllDirBookmarks() {
  */
 export async function rescanDirectory(): Promise<number | null> {
   if (!rescanHandle) return null
+  // 代际号在入口捕获（含权限等待之前）：清空列表前发起的整轮扫描都属旧代际
+  const epoch = scanEpoch
   if (!(await ensureReadPermission(rescanHandle))) return null
   let added = 0
   try {
     await collectDirectoryFiles(rescanHandle, (files) => {
+      // 代际检查：clearAll 后在途枚举的后续批次不再入列——seenKeys 已清空，
+      // 继续入列会把刚清掉的文件全部当新文件重新解析（「清空后自己回来」）
+      if (epoch !== scanEpoch) return
       added += addFiles(files)
     })
   } catch {
@@ -547,15 +562,19 @@ export async function rescanDirectory(): Promise<number | null> {
 /* ---------- 目录监视自动重扫（FEAT-1：边出图边看） ---------- */
 let autoRescanTimer: ReturnType<typeof setInterval> | null = null
 let autoTickBusy = false
+// 目录枚举代际：clearAll 递增，作废在途枚举的后续批次（见 rescanDirectory）
+let scanEpoch = 0
 
-/** 按偏好与句柄的有无启停周期定时器；偏好切换 / 句柄变化时调用 */
+/** 按偏好与句柄的有无启停周期定时器；偏好切换 / 句柄变化时调用。先清后建：
+ * 定时器已在运行时改间隔也要按新值重建，否则永远沿用旧间隔（I1） */
 function syncAutoRescanTimer() {
   const shouldRun = state.autoRescan && rescanHandle !== null
-  if (shouldRun && autoRescanTimer === null) {
-    autoRescanTimer = setInterval(() => void autoRescanTick(), state.autoRescanInterval * 1000)
-  } else if (!shouldRun && autoRescanTimer !== null) {
+  if (autoRescanTimer !== null) {
     clearInterval(autoRescanTimer)
     autoRescanTimer = null
+  }
+  if (shouldRun) {
+    autoRescanTimer = setInterval(() => void autoRescanTick(), state.autoRescanInterval * 1000)
   }
 }
 
@@ -617,6 +636,9 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 export function restoreArchived(records: PersistRecord[]) {
   for (const rec of records) {
     if (seenKeys.has(rec.key)) continue
+    // 同指纹存档卡已在列：hydrate 分批恢复未完成时导入备份，同一记录会从两条路径到达，
+    // 存档项从不写入 seenKeys（为了允许回挂），这里以 detachedByKey 兜底防重复卡片
+    if (detachedByKey.has(rec.key)) continue
     const item = reactive<ImageItem>(fromRecord(rec))
     detachedByKey.set(rec.key, item)
     liveIds.add(item.id)
@@ -658,8 +680,17 @@ async function flushPersist() {
     if (records.length) await putPersisted(records, isStale)
     if (keys.length && !isStale()) await deletePersisted(keys, isStale)
   } catch (err) {
-    // 写库失败（配额 / 环境限制）不影响功能，本轮丢弃；保留告警便于定位环境问题
-    console.warn('[comfyui-info] 存档写入失败，本轮丢弃:', err)
+    // 瞬态写库失败（标签页隐藏期 IO 错误等）：未作废且仍存活的项塞回暂存区，
+    // 随下一次 markDirty 触发的 flush 一并重试；失败不主动重排，持久失败（配额）不空转
+    if (!isStale()) {
+      for (const it of items) {
+        if (liveIds.has(it.id)) dirtyItems.set(recordKey(it), it)
+      }
+      // 删除标记不覆盖写库期间被重新 markDirty 的指纹（后者已从 deletedKeys 摘除）
+      for (const k of keys) if (!dirtyItems.has(k)) deletedKeys.add(k)
+    }
+    console.warn('[comfyui-info] 存档写入失败，暂存区保留待重试:', err)
+    return
   }
   if (dirtyItems.size || deletedKeys.size) schedulePersist() // 写库期间又有变更
 }
@@ -1065,10 +1096,13 @@ function parseNumCondition(field: NumField, raw: string): NumCondition | null {
   return { field, op: m[1] as NumCondition['op'], value }
 }
 
-/** O1：64 位种子不能安全转 Number，范围比较用「位数 + 字典序」比较非负整数字符串 */
+/** O1：64 位种子不能安全转 Number，范围比较用「位数 + 字典序」比较非负整数字符串；
+ * 先去前导零再比位数——入口校验放行 "007" 这类写法，须按数值位数比较才成立 */
 function compareSeed(a: string, b: string): number {
-  if (a.length !== b.length) return a.length - b.length
-  return a < b ? -1 : a > b ? 1 : 0
+  const x = a.replace(/^0+(?=\d)/, '')
+  const y = b.replace(/^0+(?=\d)/, '')
+  if (x.length !== y.length) return x.length - y.length
+  return x < y ? -1 : x > y ? 1 : 0
 }
 
 function hitSeed(cond: string, it: ImageItem): boolean {
@@ -1459,6 +1493,14 @@ function workflowKey(it: ImageItem): string {
  * F3：同工作流聚类信息（itemId → { group: 组序, seq/total: 组内序号 }）。
  * 组按组内最新时间新→旧排组序，组内同规则编号；卡片在聚类模式下展示「第 x/y 张」。
  */
+/** 组内最新 mtime：循环求 max——同一工作流的组可达数万张，Math.max(...spread)
+ * 超引擎参数上限会抛 RangeError 打断渲染（I3） */
+function latestMtime(members: ImageItem[]): number {
+  let max = 0
+  for (const m of members) if (m.mtime > max) max = m.mtime
+  return max
+}
+
 export const workflowClusters = computed(() => {
   const groups = new Map<string, ImageItem[]>()
   for (const it of state.items) {
@@ -1470,7 +1512,7 @@ export const workflowClusters = computed(() => {
   const ordered = [...groups.values()]
     .map((members) => ({
       members,
-      latest: Math.max(...members.map((m) => m.mtime)),
+      latest: latestMtime(members),
     }))
     .sort((a, b) => b.latest - a.latest || b.members.length - a.members.length)
   const out = new Map<string, { group: number; seq: number; total: number }>()
@@ -1505,7 +1547,7 @@ export const sameSourceGroups = computed(() => {
   }
   const out = new Map<string, { group: number; seq: number; total: number }>()
   ;[...groups.values()]
-    .map((members) => ({ members, latest: Math.max(...members.map((m) => m.mtime)) }))
+    .map((members) => ({ members, latest: latestMtime(members) }))
     .sort((a, b) => b.latest - a.latest)
     .forEach(({ members }, gi) => {
       const sorted = [...members].sort(

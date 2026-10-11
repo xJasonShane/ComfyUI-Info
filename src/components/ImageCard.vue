@@ -133,6 +133,7 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
       :title="selected ? t('card.unselect') : t('card.select')"
       :aria-pressed="!!selected"
       :aria-label="t('card.selectAria')"
+      @keydown.stop
       @click.stop.prevent="$emit('select-toggle')"
     />
     <button
@@ -143,6 +144,7 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
       :title="faved ? t('card.unfav') : t('card.fav')"
       :aria-pressed="!!faved"
       :aria-label="t('card.favAria')"
+      @keydown.stop
       @click.stop.prevent="$emit('toggle-fav')"
     >
       <Icon :name="faved ? 'star-filled' : 'star'" :size="13" />
@@ -152,6 +154,7 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
       type="button"
       :title="t('card.removeTitle')"
       :aria-label="t('card.removeAria')"
+      @keydown.stop
       @click.stop="$emit('remove')"
     >
       <Icon name="x" :size="12" :stroke="2.4" />
