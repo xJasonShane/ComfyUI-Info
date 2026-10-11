@@ -18,3 +18,12 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+      - name: e2e smoke tests
+        run: npm run test:e2e

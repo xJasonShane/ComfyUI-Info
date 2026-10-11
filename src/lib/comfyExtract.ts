@@ -66,46 +66,76 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     nodeCount: Object.keys(map).length,
   }
 
-  // 沿连线向上找文本输入（CLIPTextEncode 及各种提示词组合节点）
+  // 沿连线向上找文本输入（CLIPTextEncode 及各种提示词组合节点）。
+  // 回溯结果以「节点 × depth」为键记忆化（depth 上限 8，每节点至多 9 键）：
+  // 菱形拓扑与多阶段采样器共享上游时不再重复展开同一子图；同键输入不变，结果确定性相同
+  const textMemo = new Map<string, string | null>()
   const resolveNodeText = (id: unknown, depth = 0): string | null => {
-    const node = map[String(id)]
+    const key = String(id)
+    const node = map[key]
     if (!node || depth > 8) return null
+    const memoKey = `${key}@${depth}`
+    if (textMemo.has(memoKey)) return textMemo.get(memoKey)!
     // 字符串原语节点（PrimitiveString / PrimitiveStringMultiline 等）把文本存在 `string` 输入槽
     const direct = asText(node.inputs?.text) ?? asText(node.inputs?.string)
-    if (direct) return direct
+    if (direct) {
+      textMemo.set(memoKey, direct)
+      return direct
+    }
     for (const v of Object.values(node.inputs || {})) {
       if (isLink(v)) {
         const found = resolveNodeText(v[0], depth + 1)
-        if (found) return found
+        if (found) {
+          textMemo.set(memoKey, found)
+          return found
+        }
       }
     }
+    textMemo.set(memoKey, null)
     return null
   }
 
   // 沿连线向上找选择值：KSamplerSelect / SchedulerSelect 等选择节点把 sampler_name /
-  // scheduler 以连线传入采样器，采样器输入槽里只能读到 link 数组
+  // scheduler 以连线传入采样器，采样器输入槽里只能读到 link 数组。
+  // 记忆化键需带上 slots——同一节点会分别以 sampler_name / scheduler 槽位查询
+  const choiceMemo = new Map<string, string | null>()
   const resolveNodeChoice = (id: unknown, slots: string[], depth = 0): string | null => {
-    const node = map[String(id)]
+    const key = String(id)
+    const node = map[key]
     if (!node || depth > 8) return null
+    const memoKey = `${key}@${depth}@${slots.join('|')}`
+    if (choiceMemo.has(memoKey)) return choiceMemo.get(memoKey)!
     const inputs = (node.inputs || {}) as NodeInputs
     for (const slot of slots) {
       const direct = asText(inputs[slot])
-      if (direct) return direct
+      if (direct) {
+        choiceMemo.set(memoKey, direct)
+        return direct
+      }
     }
     for (const v of Object.values(inputs)) {
       if (isLink(v)) {
         const found = resolveNodeChoice(v[0], slots, depth + 1)
-        if (found) return found
+        if (found) {
+          choiceMemo.set(memoKey, found)
+          return found
+        }
       }
     }
+    choiceMemo.set(memoKey, null)
     return null
   }
 
   // 沿 latent 链向上找出图信息：宽高取链上最近显式声明的节点（最终输出由末端缩放节点决定），
-  // batch_size 独立就近补齐（LatentUpscale 等节点不声明批量，批量保留自上游 EmptyLatentImage）
+  // batch_size 独立就近补齐（LatentUpscale 等节点不声明批量，批量保留自上游 EmptyLatentImage）。
+  // 回溯结果同样以「节点 × depth」记忆化，返回对象只读共享
+  const latentMemo = new Map<string, LatentInfo | null>()
   const resolveLatent = (id: unknown, depth = 0): LatentInfo | null => {
-    const node = map[String(id)]
+    const key = String(id)
+    const node = map[key]
     if (!node || depth > 8) return null
+    const memoKey = `${key}@${depth}`
+    if (latentMemo.has(memoKey)) return latentMemo.get(memoKey)!
     const inputs = (node.inputs || {}) as NodeInputs
     const info: LatentInfo = {}
     const w = asNum(inputs.width)
@@ -116,7 +146,10 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     }
     const batch = asNum(inputs.batch_size)
     if (batch !== undefined) info.batch = batch
-    if (info.width !== undefined && info.batch !== undefined) return info
+    if (info.width !== undefined && info.batch !== undefined) {
+      latentMemo.set(memoKey, info)
+      return info
+    }
     for (const v of Object.values(inputs)) {
       if (!isLink(v)) continue
       const up = resolveLatent(v[0], depth + 1)
@@ -126,9 +159,14 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
         info.height = up.height
       }
       if (info.batch === undefined && up.batch !== undefined) info.batch = up.batch
-      if (info.width !== undefined && info.batch !== undefined) return info
+      if (info.width !== undefined && info.batch !== undefined) {
+        latentMemo.set(memoKey, info)
+        return info
+      }
     }
-    return info.width !== undefined || info.batch !== undefined ? info : null
+    const result = info.width !== undefined || info.batch !== undefined ? info : null
+    latentMemo.set(memoKey, result)
+    return result
   }
 
   for (const [id, node] of Object.entries(map)) {

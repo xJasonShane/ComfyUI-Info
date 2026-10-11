@@ -3,6 +3,7 @@
  * CSV 带 UTF-8 BOM 并使用 CRLF 行尾，Excel 直接打开中文不乱码。
  */
 import type { ImageItem, LoraInfo, SamplerInfo } from '../types'
+import { downloadBinary, downloadText } from './utils'
 
 /**
  * CSV 公式注入防护：以 = + - @ Tab 开头的文本单元格会被 Excel / WPS 当公式执行
@@ -66,6 +67,45 @@ export function buildExportJson(items: ImageItem[]): string {
     null,
     2,
   )
+}
+
+/** naive-ui MessageApi 的最小结构：lib 层不依赖 UI 库类型 */
+interface ExportMessage {
+  warning: (content: string) => unknown
+  success: (content: string) => unknown
+}
+
+/** 导出下拉选项：顶栏「导出当前筛选」与批量条「导出选中」共用同一份 */
+export const exportOptions = [
+  { label: '导出 JSON', key: 'json' },
+  { label: '导出 CSV (Excel)', key: 'csv' },
+  { label: '导出工作流 (ZIP)', key: 'zip' },
+]
+
+/**
+ * 导出统一入口（原 TopBar / App 两份相同实现合并）：
+ * 只导出已出结果的项（done / error），无可导出项时以消息告知而不是静默无反应；
+ * 先等一拍让按钮 loading 渲染出来，再执行同步的打包计算（loading 开关由调用方管理）。
+ */
+export async function exportItems(
+  candidates: ImageItem[],
+  format: string | number,
+  filenameBase: string,
+  message: ExportMessage,
+): Promise<void> {
+  await new Promise((r) => setTimeout(r, 30))
+  const items = candidates.filter((i) => i.status === 'done' || i.status === 'error')
+  if (!items.length) {
+    message.warning('所选图片中还没有可导出的结果')
+    return
+  }
+  const stamp = new Date().toISOString().slice(0, 10)
+  if (format === 'csv') downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
+  else if (format === 'zip') {
+    const zip = buildWorkflowZip(items)
+    if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
+  } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
+  message.success(`已导出 ${items.length} 项`)
 }
 
 export function buildExportCsv(items: ImageItem[]): string {
@@ -156,7 +196,7 @@ interface ZipEntry {
   data: Uint8Array
 }
 
-function buildZip(entries: ZipEntry[]): Uint8Array {
+function buildZip(entries: ZipEntry[]): Blob {
   const encoder = new TextEncoder()
   const { time, date } = dosDateTime(new Date())
   const localParts: Uint8Array[] = []
@@ -204,13 +244,11 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
   ev.setUint16(10, entries.length, true)
   ev.setUint32(12, centralSize, true)
   ev.setUint32(16, offset, true)
-  const out = new Uint8Array(offset + centralSize + 22)
-  let pos = 0
-  for (const part of [...localParts, ...centralParts, eocd]) {
-    out.set(part, pos)
-    pos += part.length
-  }
-  return out
+  // Blob 分片组装：数据由浏览器按分片持有，免去最终一次性等大拷贝
+  // （万级工作流导出的内存峰值近似减半，后续写入下载也不再多复制一份）
+  return new Blob([...localParts, ...centralParts, eocd] as BlobPart[], {
+    type: 'application/zip',
+  })
 }
 
 /**
@@ -219,21 +257,32 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
  * 附 manifest.json（与 JSON 导出同构）。条目名为空时返回 null。
  * 路径即去重键，天然无重名；Windows 非法字符统一替换为下划线。
  */
-export function buildWorkflowZip(items: ImageItem[]): Uint8Array | null {
+export function buildWorkflowZip(items: ImageItem[]): Blob | null {
   if (!items.length) return null
   const encoder = new TextEncoder()
+  // 同内容只编码一次：同工作流批量出图的 prompt / workflow JSON 内容逐条重复，
+  // 按内容缓存编码结果，万级列表导出不再为每条重复编码整份 JSON
+  const encodeCache = new Map<string, Uint8Array>()
+  const encode = (s: string): Uint8Array => {
+    let bytes = encodeCache.get(s)
+    if (!bytes) {
+      bytes = encoder.encode(s)
+      encodeCache.set(s, bytes)
+    }
+    return bytes
+  }
   const entries: ZipEntry[] = []
   const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
   for (const it of items) {
     const stem = safe((it.path ?? it.name).replace(/\.[^./\\]+$/, ''))
     if (it.raw.prompt) {
-      entries.push({ name: `${stem}.prompt.json`, data: encoder.encode(it.raw.prompt) })
+      entries.push({ name: `${stem}.prompt.json`, data: encode(it.raw.prompt) })
     }
     if (it.raw.workflow) {
-      entries.push({ name: `${stem}.workflow.json`, data: encoder.encode(it.raw.workflow) })
+      entries.push({ name: `${stem}.workflow.json`, data: encode(it.raw.workflow) })
     }
     if (it.source === 'a1111' && it.raw.parameters) {
-      entries.push({ name: `${stem}.parameters.txt`, data: encoder.encode(it.raw.parameters) })
+      entries.push({ name: `${stem}.parameters.txt`, data: encode(it.raw.parameters) })
     }
   }
   entries.push({ name: 'manifest.json', data: encoder.encode(buildExportJson(items)) })

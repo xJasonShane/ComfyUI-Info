@@ -43,8 +43,8 @@ import DetailDrawer from './components/DetailDrawer.vue'
 import CompareDrawer from './components/CompareDrawer.vue'
 import EmptyState from './components/EmptyState.vue'
 import { addFiles, filteredItems, parsing, rangeIds, removeItem, removeItems, retryAllFailed, stats, store } from './composables/store'
-import { buildExportCsv, buildExportJson, buildWorkflowZip } from './lib/export'
-import { copyText, downloadBinary, downloadText } from './lib/utils'
+import { exportItems, exportOptions } from './lib/export'
+import { copyText } from './lib/utils'
 import type { ImageItem, IncomingFile } from './types'
 
 /* ---------- 主题 ---------- */
@@ -230,12 +230,6 @@ async function batchCopyPrompts() {
   else appMessage().error('复制失败，请手动选择文本复制')
 }
 
-const exportOptions = [
-  { label: '导出 JSON', key: 'json' },
-  { label: '导出 CSV (Excel)', key: 'csv' },
-  { label: '导出工作流 (ZIP)', key: 'zip' },
-]
-
 const exporting = ref(false)
 
 async function batchExport(key: string | number) {
@@ -243,22 +237,9 @@ async function batchExport(key: string | number) {
     appMessage().warning('扫描仍在进行，请等扫描完成后再导出')
     return
   }
-  const items = selectedItems.value.filter((i) => i.status === 'done' || i.status === 'error')
-  if (!items.length) {
-    appMessage().warning('所选图片中还没有可导出的结果')
-    return
-  }
   exporting.value = true
   try {
-    // 先让按钮 loading 渲染出来，再执行同步的打包计算
-    await new Promise((r) => setTimeout(r, 30))
-    const stamp = new Date().toISOString().slice(0, 10)
-    if (key === 'csv') downloadText(`comfyui-info-selected-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-    else if (key === 'zip') {
-      const zip = buildWorkflowZip(items)
-      if (zip) downloadBinary(`comfyui-info-selected-${stamp}.zip`, zip)
-    } else downloadText(`comfyui-info-selected-${stamp}.json`, buildExportJson(items))
-    appMessage().success(`已导出 ${items.length} 项`)
+    await exportItems(selectedItems.value, key, 'comfyui-info-selected', appMessage())
   } finally {
     exporting.value = false
   }

@@ -1,24 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { NButton, NDrawer, NTabPane, NTabs, useMessage } from 'naive-ui'
 import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
 import { retryItem, ensureItemUrl } from '../composables/store'
+import { useDrawerWidth } from '../composables/ui'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
 const message = useMessage()
 
-const narrowQuery = window.matchMedia('(max-width: 959.98px)')
-const isNarrow = ref(narrowQuery.matches)
-const onNarrowChange = (e: MediaQueryListEvent) => {
-  isNarrow.value = e.matches
-}
-onMounted(() => narrowQuery.addEventListener('change', onNarrowChange))
-onBeforeUnmount(() => narrowQuery.removeEventListener('change', onNarrowChange))
-const drawerWidth = computed(() => (isNarrow.value ? '100%' : 940))
+const drawerWidth = useDrawerWidth(940)
 
 const p = computed(() => props.item?.params)
 

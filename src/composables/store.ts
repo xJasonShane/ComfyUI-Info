@@ -33,12 +33,16 @@ interface StoreState {
   batchDone: number
   /** 记住的扫描目录名（句柄本体不进响应式状态，避免被代理后无法结构化克隆回写） */
   rescanName: string | null
+  /** 目录监视自动重扫：开启后周期增量重扫记住的目录（边出图边看，偏好记忆） */
+  autoRescan: boolean
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
 
 /* ---------- 筛选 / 搜索状态持久化（U2）：刷新后还原上次的使用状态 ---------- */
 const FILTERS_KEY = 'cii:filters'
+/** 目录监视自动重扫的偏好键 */
+const AUTO_RESCAN_KEY = 'cii:auto-rescan'
 const SOURCE_FILTERS: SourceFilter[] = ['all', 'comfyui', 'a1111', 'none', 'error']
 
 function loadStoredFilters(): {
@@ -74,6 +78,7 @@ const state = reactive<StoreState>({
   batchTotal: 0,
   batchDone: 0,
   rescanName: null,
+  autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
 })
 
 watch(
@@ -372,6 +377,7 @@ let rescanHandle: FileSystemDirectoryHandle | null = null
 export async function setRescanHandle(handle: FileSystemDirectoryHandle) {
   rescanHandle = handle
   state.rescanName = handle.name
+  syncAutoRescanTimer()
   try {
     // 句柄持久化不可用的浏览器（不支持结构化克隆）仅本次会话有效
     if (persistAvailable) await saveHandle(handle)
@@ -383,6 +389,7 @@ export async function setRescanHandle(handle: FileSystemDirectoryHandle) {
 export function forgetRescanHandle() {
   rescanHandle = null
   state.rescanName = null
+  syncAutoRescanTimer() // 自动重扫随句柄消失停表；偏好保留，下次记住目录时自动恢复
   if (persistAvailable) void clearHandle().catch(() => {})
 }
 
@@ -399,6 +406,50 @@ export async function rescanDirectory(): Promise<number | null> {
   })
   return added
 }
+
+/* ---------- 目录监视自动重扫（FEAT-1：边出图边看） ---------- */
+const AUTO_RESCAN_INTERVAL_MS = 10_000
+let autoRescanTimer: ReturnType<typeof setInterval> | null = null
+let autoTickBusy = false
+
+/** 按偏好与句柄的有无启停周期定时器；偏好切换 / 句柄变化时调用 */
+function syncAutoRescanTimer() {
+  const shouldRun = state.autoRescan && rescanHandle !== null
+  if (shouldRun && autoRescanTimer === null) {
+    autoRescanTimer = setInterval(() => void autoRescanTick(), AUTO_RESCAN_INTERVAL_MS)
+  } else if (!shouldRun && autoRescanTimer !== null) {
+    clearInterval(autoRescanTimer)
+    autoRescanTimer = null
+  }
+}
+
+/**
+ * 单次自动重扫：上一轮解析未完（或上一拍扫描未返回）时跳过，等下一拍；
+ * 权限未授予时静默重试——授权需用户手势，手动点「重扫」授权后自动监视随之恢复；
+ * 目录句柄已不存在时自动关闭并停表。
+ */
+async function autoRescanTick() {
+  if (autoTickBusy || !state.autoRescan || parsing.value) return
+  autoTickBusy = true
+  try {
+    const added = await rescanDirectory()
+    if (added === null && rescanHandle === null) state.autoRescan = false
+  } finally {
+    autoTickBusy = false
+  }
+}
+
+watch(
+  () => state.autoRescan,
+  (on) => {
+    try {
+      localStorage.setItem(AUTO_RESCAN_KEY, on ? '1' : '0')
+    } catch {
+      // 配额 / 环境限制时忽略：仅影响下次刷新的还原
+    }
+    syncAutoRescanTimer()
+  },
+)
 
 /* ---------- 会话持久化（探测失败时静默降级为纯内存） ---------- */
 let persistAvailable = false
@@ -471,6 +522,7 @@ async function hydrate() {
     if (handle) {
       rescanHandle = handle
       state.rescanName = handle.name
+      syncAutoRescanTimer() // 偏好为开时恢复自动监视（权限需重新授权时各拍静默重试）
     }
   } catch (err) {
     // 恢复失败等同不可用：静默降级纯内存，但保留一条告警便于排查环境问题

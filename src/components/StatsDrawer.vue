@@ -1,20 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { NButton, NDrawer } from 'naive-ui'
 import { store, usageStats } from '../composables/store'
 import type { UsageStat } from '../composables/store'
 import Icon from './Icon.vue'
+import { useDrawerWidth } from '../composables/ui'
 
 const show = defineModel<boolean>('show', { default: false })
 
-const narrowQuery = window.matchMedia('(max-width: 959.98px)')
-const isNarrow = ref(narrowQuery.matches)
-const onNarrowChange = (e: MediaQueryListEvent) => {
-  isNarrow.value = e.matches
-}
-onMounted(() => narrowQuery.addEventListener('change', onNarrowChange))
-onBeforeUnmount(() => narrowQuery.removeEventListener('change', onNarrowChange))
-const drawerWidth = computed(() => (isNarrow.value ? '100%' : 560))
+const drawerWidth = useDrawerWidth(560)
 
 interface StatSection {
   title: string

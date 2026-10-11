@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NDropdown, NInput, NPopconfirm, NPopover, NSelect, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NDropdown, NInput, NPopconfirm, NPopover, NSelect, NSwitch, NTooltip, useMessage } from 'naive-ui'
 import Icon from './Icon.vue'
 import StatsDrawer from './StatsDrawer.vue'
 import {
@@ -18,9 +18,8 @@ import {
   store,
   toggleDark,
 } from '../composables/store'
-import { buildExportCsv, buildExportJson, buildWorkflowZip } from '../lib/export'
+import { exportItems, exportOptions } from '../lib/export'
 import { collectDirectoryFiles, pickDirectory, supportsDirectoryPicker } from '../lib/fs'
-import { downloadBinary, downloadText } from '../lib/utils'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const dirInput = ref<HTMLInputElement | null>(null)
@@ -81,33 +80,17 @@ function onForgetRescan() {
   message.success('已不再记住该目录')
 }
 
-const exportOptions = [
-  { label: '导出 JSON', key: 'json' },
-  { label: '导出 CSV (Excel)', key: 'csv' },
-  { label: '导出工作流 (ZIP)', key: 'zip' },
-]
-
 const exporting = ref(false)
 
 async function exportAs(key: string | number) {
-  // 只导出已出结果的项（done / error）；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
+  // 只导出已出结果的项；扫描中导出的筛选结果必然缺图，明确告知而不是静默无反应
   if (parsing.value) {
     message.warning('扫描仍在进行，请等扫描完成后再导出')
     return
   }
-  const items = filteredItems.value.filter((i) => i.status === 'done' || i.status === 'error')
-  if (!items.length) return
   exporting.value = true
   try {
-    // 先让按钮 loading 渲染出来，再执行同步的打包计算
-    await new Promise((r) => setTimeout(r, 30))
-    const stamp = new Date().toISOString().slice(0, 10)
-    if (key === 'csv') downloadText(`comfyui-info-${stamp}.csv`, buildExportCsv(items), 'text/csv')
-    else if (key === 'zip') {
-      const zip = buildWorkflowZip(items)
-      if (zip) downloadBinary(`comfyui-info-workflows-${stamp}.zip`, zip)
-    } else downloadText(`comfyui-info-${stamp}.json`, buildExportJson(items))
-    message.success(`已导出 ${items.length} 项`)
+    await exportItems(filteredItems.value, key, 'comfyui-info', message)
   } finally {
     exporting.value = false
   }
@@ -152,6 +135,12 @@ async function exportAs(key: string | number) {
         </NButton>
       </template>
       重新扫描记住的目录「{{ store.rescanName }}」，只添加新文件，已有图片按指纹回挂去重
+    </NTooltip>
+    <NTooltip v-if="store.rescanName">
+      <template #trigger>
+        <NSwitch v-model:value="store.autoRescan" size="small" aria-label="自动重扫开关" />
+      </template>
+      自动重扫：每 10 秒增量扫描「{{ store.rescanName }}」，只添加新文件（边出图边看）
     </NTooltip>
     <NPopconfirm v-if="store.rescanName" @positive-click="onForgetRescan">
       <template #trigger>

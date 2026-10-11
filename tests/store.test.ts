@@ -29,6 +29,15 @@ vi.mock('../src/lib/persist', async (importOriginal) => {
     clearHandle: vi.fn(async () => {}),
   }
 })
+// 目录扫描 mock：自动重扫用例需要可控的枚举与权限，其余用例不触碰目录扫描
+vi.mock('../src/lib/fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/fs')>()
+  return {
+    ...actual,
+    collectDirectoryFiles: vi.fn(async () => 0),
+    ensureReadPermission: vi.fn(async () => true),
+  }
+})
 
 let api: typeof import('../src/composables/store')
 let parser: typeof import('../src/lib/parser')
@@ -57,6 +66,7 @@ beforeEach(() => {
   api.store.search = ''
   api.store.sourceFilter = 'comfyui'
   api.store.modelFilter = null
+  api.store.autoRescan = false
   vi.mocked(parser.parseImage).mockReset()
 })
 
@@ -516,6 +526,55 @@ it('无扩展名文件经嗅探确认后异步入列', async () => {
   expect(api.store.items.length).toBe(0) // 同步阶段不加入
   await new Promise((r) => setTimeout(r, 5))
   expect(api.store.items.length).toBe(1) // 嗅探通过后入列（hasSupportedSignature mock 为 true）
+})
+
+it('自动重扫：周期增量触发、解析中跳过、句柄丢失后停表（FEAT-1）', async () => {
+  const fsMod = await import('../src/lib/fs')
+  vi.useFakeTimers()
+  try {
+    let scans = 0
+    vi.mocked(fsMod.collectDirectoryFiles).mockImplementation(async (_handle, onBatch) => {
+      scans++
+      // 首轮扫描“发现”一个新文件，验证周期触发走完整的增量入列链路
+      if (scans === 1) onBatch([{ file: new File(['x'], 'new-1.png', { lastModified: 7 }) }])
+      return 1
+    })
+
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    vi.mocked(parser.parseImage).mockImplementation(() =>
+      gate.then(() => ({ raw: { source: 'none' } })),
+    )
+
+    await api.setRescanHandle({ name: 'out' } as unknown as FileSystemDirectoryHandle)
+    api.store.autoRescan = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(scans).toBe(1)
+    expect(api.store.items.length).toBe(1)
+    expect(api.parsing.value).toBe(true) // 新文件解析中
+
+    // 下一拍：解析未完成，跳过不并发重扫
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(scans).toBe(1)
+
+    release()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.parsing.value).toBe(false)
+
+    // 解析完成后的下一拍恢复扫描（本轮无新文件）
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(scans).toBe(2)
+
+    // 句柄被忘记：定时器停表不再扫描；偏好保留，下次记住目录时自动恢复
+    api.forgetRescanHandle()
+    const stopped = scans
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(scans).toBe(stopped)
+    expect(api.store.autoRescan).toBe(true)
+  } finally {
+    vi.useRealTimers()
+    api.store.autoRescan = false
+  }
 })
 
 it('parseQuery 拆分字段限定与普通关键词', () => {

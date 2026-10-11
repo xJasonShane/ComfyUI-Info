@@ -125,14 +125,16 @@ describe('buildExportCsv', () => {
 })
 
 describe('buildWorkflowZip', () => {
-  it('store 模式 ZIP：本地头、条目数据与 EOCD 可直接解出', () => {
-    const zip = buildWorkflowZip([
+  it('store 模式 ZIP：本地头、条目数据与 EOCD 可直接解出', async () => {
+    const blob = buildWorkflowZip([
       makeItem({
         params,
         raw: { source: 'comfyui', prompt: '{"a":1}', workflow: '{"b":2}' },
         path: 'sets/v1/a.png',
       }),
     ])!
+    expect(blob.type).toBe('application/zip')
+    const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
     expect(dv.getUint32(0, true)).toBe(0x04034b50) // local file header
     const nameLen = dv.getUint16(26, true)
@@ -147,14 +149,38 @@ describe('buildWorkflowZip', () => {
     expect(dv.getUint16(eocd + 10, true)).toBe(3) // prompt + workflow + manifest
   })
 
-  it('A1111 项打包为 parameters.txt，条目含 manifest；空列表返回 null', () => {
-    const zip = buildWorkflowZip([
+  it('A1111 项打包为 parameters.txt，条目含 manifest；空列表返回 null', async () => {
+    const blob = buildWorkflowZip([
       makeItem({ source: 'a1111', raw: { source: 'a1111', parameters: 'Steps: 20' } }),
     ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
     const text = new TextDecoder().decode(zip)
     expect(text).toContain('a.parameters.txt')
     expect(text).toContain('Steps: 20')
     expect(text).toContain('manifest.json')
     expect(buildWorkflowZip([])).toBeNull()
   })
+
+  it('同工作流批量出图：相同内容的条目数据逐字节一致（编码缓存不串内容）', async () => {
+    const blob = buildWorkflowZip([
+      makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'a.png' }),
+      makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'b.png' }),
+      makeItem({ raw: { source: 'comfyui', prompt: '{"other":2}' }, name: 'c.png' }),
+    ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const text = new TextDecoder().decode(zip)
+    expect(text).toContain('a.prompt.json')
+    expect(text).toContain('b.prompt.json')
+    expect(text).toContain('c.prompt.json')
+    // 三份 prompt 条目 + manifest：数据区各条目内容与来源串一致
+    expect(text).toContain('{"a":1}')
+    expect(text).toContain('{"other":2}')
+    expect(dv_entryCount(zip)).toBe(4) // 3 × prompt.json + manifest.json
+  })
 })
+
+/** 读 EOCD 的条目总数（测试辅助） */
+function dv_entryCount(zip: Uint8Array): number {
+  const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+  return dv.getUint16(zip.length - 22 + 10, true)
+}

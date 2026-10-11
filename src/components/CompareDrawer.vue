@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { NDrawer } from 'naive-ui'
 import type { ImageItem, LoraInfo, ParsedParams } from '../types'
+import { useDrawerWidth } from '../composables/ui'
 
 const props = defineProps<{ a: ImageItem | null; b: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
@@ -19,14 +20,7 @@ interface DiffSection {
   rows: DiffRow[]
 }
 
-const narrowQuery = window.matchMedia('(max-width: 959.98px)')
-const isNarrow = ref(narrowQuery.matches)
-const onNarrowChange = (e: MediaQueryListEvent) => {
-  isNarrow.value = e.matches
-}
-onMounted(() => narrowQuery.addEventListener('change', onNarrowChange))
-onBeforeUnmount(() => narrowQuery.removeEventListener('change', onNarrowChange))
-const drawerWidth = computed(() => (isNarrow.value ? '100%' : 940))
+const drawerWidth = useDrawerWidth(940)
 
 function textList(list: string[] | undefined): string | null {
   const s = (list ?? []).join('\n').trim()
