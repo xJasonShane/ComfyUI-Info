@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildExportCsv,
   buildExportJson,
+  buildImagesZip,
   buildParamsSummary,
   buildWorkflowZip,
 } from '../src/lib/export'
@@ -193,7 +194,7 @@ describe('buildParamsSummary', () => {
 
 describe('buildWorkflowZip', () => {
   it('store 模式 ZIP：本地头、条目数据与 EOCD 可直接解出', async () => {
-    const blob = buildWorkflowZip([
+    const blob = await buildWorkflowZip([
       makeItem({
         params,
         raw: { source: 'comfyui', prompt: '{"a":1}', workflow: '{"b":2}' },
@@ -217,7 +218,7 @@ describe('buildWorkflowZip', () => {
   })
 
   it('A1111 项打包为 parameters.txt，条目含 manifest；空列表返回 null', async () => {
-    const blob = buildWorkflowZip([
+    const blob = await buildWorkflowZip([
       makeItem({ source: 'a1111', raw: { source: 'a1111', parameters: 'Steps: 20' } }),
     ])!
     const zip = new Uint8Array(await blob.arrayBuffer())
@@ -225,11 +226,11 @@ describe('buildWorkflowZip', () => {
     expect(text).toContain('a.parameters.txt')
     expect(text).toContain('Steps: 20')
     expect(text).toContain('manifest.json')
-    expect(buildWorkflowZip([])).toBeNull()
+    expect(await buildWorkflowZip([])).toBeNull()
   })
 
   it('同工作流批量出图：相同内容的条目数据逐字节一致（编码缓存不串内容）', async () => {
-    const blob = buildWorkflowZip([
+    const blob = await buildWorkflowZip([
       makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'a.png' }),
       makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'b.png' }),
       makeItem({ raw: { source: 'comfyui', prompt: '{"other":2}' }, name: 'c.png' }),
@@ -243,6 +244,50 @@ describe('buildWorkflowZip', () => {
     expect(text).toContain('{"a":1}')
     expect(text).toContain('{"other":2}')
     expect(dv_entryCount(zip)).toBe(4) // 3 × prompt.json + manifest.json
+  })
+})
+
+describe('buildImagesZip', () => {
+  it('按相对路径打包原图字节，跳过存档 / 参数文件项，空列表返回 null', async () => {
+    const blob = await buildImagesZip([
+      makeItem({ path: 'sets/v1/a.png', file: new File([new Uint8Array([1, 2, 3])], 'a.png') }),
+      makeItem({ name: 'b.png', file: new File([new Uint8Array([4])], 'b.png'), path: undefined }),
+      // 存档项（无文件）与参数文件（无图片本体）都不打包
+      makeItem({ name: 'c.png', file: undefined, detached: true }),
+      makeItem({ name: 'p.json', metaOnly: true, file: new File(['{}'], 'p.json') }),
+    ])!
+    expect(blob.type).toBe('application/zip')
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+    expect(dv.getUint32(0, true)).toBe(0x04034b50)
+    const nameLen = dv.getUint16(26, true)
+    const size = dv.getUint32(18, true)
+    expect(new TextDecoder().decode(zip.subarray(30, 30 + nameLen))).toBe('sets/v1/a.png')
+    expect(size).toBe(3)
+    expect(dv_entryCount(zip)).toBe(2)
+    expect(await buildImagesZip([makeItem({ file: undefined, detached: true })])).toBeNull()
+  })
+
+  it('无路径同名文件（不同指纹项）条目名追加序号，ZIP 内不重名', async () => {
+    const blob = await buildImagesZip([
+      makeItem({ name: 'a.png', file: new File([new Uint8Array([1])], 'a.png'), size: 1 }),
+      makeItem({ name: 'a.png', file: new File([new Uint8Array([2])], 'a.png'), size: 2 }),
+    ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const text = new TextDecoder().decode(zip)
+    expect(text).toContain('a.png')
+    expect(text).toContain('a (2).png')
+    expect(dv_entryCount(zip)).toBe(2)
+  })
+
+  it('Blob 条目的 CRC 与文件内容一致（解包工具可校验）', async () => {
+    // CRC32("hello") = 0x3610a686
+    const blob = await buildImagesZip([
+      makeItem({ name: 'a.png', file: new File(['hello'], 'a.png') }),
+    ])!
+    const zip = new Uint8Array(await blob.arrayBuffer())
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+    expect(dv.getUint32(14, true)).toBe(0x3610a686 >>> 0)
   })
 })
 

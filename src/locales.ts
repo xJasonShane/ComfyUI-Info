@@ -24,6 +24,7 @@ const zh = {
   'export.json': '导出 JSON',
   'export.csv': '导出 CSV (Excel)',
   'export.zip': '导出工作流 (ZIP)',
+  'export.imagesZip': '导出原图 (ZIP)',
 
   /* 来源与排序 */
   'src.comfyui': 'ComfyUI 原图',
@@ -60,6 +61,7 @@ const zh = {
   'msg.copiedPrompts': '已复制 {n} 张图片的正向提示词',
   'msg.noParsedPrompts': '所选图片中还没有已解析出提示词的项',
   'msg.noExportable': '所选图片中还没有可导出的结果',
+  'msg.noImageFiles': '所选图片中没有可打包的原图（存档项需重新拖入原文件）',
   'msg.pasted': '已粘贴添加 {n} 项',
 
   /* 拖拽覆盖层 */
@@ -297,6 +299,7 @@ const en: Record<DictKey, string> = {
   'export.json': 'Export JSON',
   'export.csv': 'Export CSV (Excel)',
   'export.zip': 'Export workflows (ZIP)',
+  'export.imagesZip': 'Export originals (ZIP)',
 
   'src.comfyui': 'ComfyUI originals',
   'src.a1111': 'A1111 / WebUI',
@@ -330,6 +333,8 @@ const en: Record<DictKey, string> = {
   'msg.copiedPrompts': 'Copied positive prompts of {n} images',
   'msg.noParsedPrompts': 'No selected images have parsed prompts yet',
   'msg.noExportable': 'No exportable results in the selection',
+  'msg.noImageFiles':
+    'No original images to pack in the selection (archived entries need their files re-added)',
   'msg.pasted': 'Added {n} items from clipboard',
 
   'drop.hint': 'Drop to add images / folders / workflow files',

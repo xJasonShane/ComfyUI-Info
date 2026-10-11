@@ -87,6 +87,7 @@ export const exportOptions = computed(() => [
   { label: t('export.json'), key: 'json' },
   { label: t('export.csv'), key: 'csv' },
   { label: t('export.zip'), key: 'zip' },
+  { label: t('export.imagesZip'), key: 'images' },
 ])
 
 /**
@@ -110,8 +111,19 @@ export async function exportItems(
   if (format === 'csv')
     downloadText(`${filenameBase}-${stamp}.csv`, buildExportCsv(items), 'text/csv')
   else if (format === 'zip') {
-    const zip = buildWorkflowZip(items)
+    const zip = await buildWorkflowZip(items)
     if (zip) downloadBinary(`${filenameBase}-workflows-${stamp}.zip`, zip)
+  } else if (format === 'images') {
+    // 原图打包只算实文件项（存档项无原图本体，参数文件无图片）；全被跳过时明确告知
+    const packable = items.filter((i) => i.file && !i.metaOnly)
+    const zip = packable.length ? await buildImagesZip(packable) : null
+    if (!zip) {
+      message.warning(t('msg.noImageFiles'))
+      return
+    }
+    downloadBinary(`${filenameBase}-images-${stamp}.zip`, zip)
+    message.success(t('common.exportedItems', { n: packable.length }))
+    return
   } else downloadText(`${filenameBase}-${stamp}.json`, buildExportJson(items))
   message.success(t('common.exportedItems', { n: items.length }))
 }
@@ -276,18 +288,31 @@ function dosDateTime(d: Date): { time: number; date: number } {
 
 interface ZipEntry {
   name: string
-  data: Uint8Array
+  /**
+   * 条目数据：Uint8Array 直接参与打包；Blob（原图 File）由浏览器按引用持有，
+   * 打包过程不把整份文件读进内存——此时的 size / crc 由调用方流式预计算后提供
+   */
+  data: Uint8Array | Blob
+  /** data 为 Blob 时必填：字节长度（写入本地头与中央目录） */
+  size?: number
+  /** data 为 Blob 时必填：内容的 CRC32（分块流式算得） */
+  crc?: number
 }
 
-function buildZip(entries: ZipEntry[]): Blob {
+async function buildZip(entries: ZipEntry[]): Promise<Blob> {
   const encoder = new TextEncoder()
   const { time, date } = dosDateTime(new Date())
-  const localParts: Uint8Array[] = []
+  const localParts: BlobPart[] = []
   const centralParts: Uint8Array[] = []
   let offset = 0
   for (const entry of entries) {
     const name = encoder.encode(entry.name)
-    const crc = crc32(entry.data)
+    const isBlob = typeof entry.data === 'object' && !(entry.data instanceof Uint8Array)
+    if (isBlob && (entry.size === undefined || entry.crc === undefined)) {
+      throw new Error('Blob zip entry needs precomputed size and crc')
+    }
+    const size = isBlob ? entry.size! : (entry.data as Uint8Array).length
+    const crc = isBlob ? entry.crc! : crc32(entry.data as Uint8Array)
     const local = new Uint8Array(30 + name.length)
     const lv = new DataView(local.buffer)
     lv.setUint32(0, 0x04034b50, true)
@@ -296,11 +321,11 @@ function buildZip(entries: ZipEntry[]): Blob {
     lv.setUint16(10, time, true)
     lv.setUint16(12, date, true)
     lv.setUint32(14, crc, true)
-    lv.setUint32(18, entry.data.length, true)
-    lv.setUint32(22, entry.data.length, true)
+    lv.setUint32(18, size, true)
+    lv.setUint32(22, size, true)
     lv.setUint16(26, name.length, true)
     local.set(name, 30)
-    localParts.push(local, entry.data)
+    localParts.push(local, entry.data as BlobPart)
 
     const central = new Uint8Array(46 + name.length)
     const cv = new DataView(central.buffer)
@@ -311,13 +336,13 @@ function buildZip(entries: ZipEntry[]): Blob {
     cv.setUint16(12, time, true)
     cv.setUint16(14, date, true)
     cv.setUint32(16, crc, true)
-    cv.setUint32(20, entry.data.length, true)
-    cv.setUint32(24, entry.data.length, true)
+    cv.setUint32(20, size, true)
+    cv.setUint32(24, size, true)
     cv.setUint16(28, name.length, true)
     cv.setUint32(42, offset, true) // local header 偏移
     central.set(name, 46)
     centralParts.push(central)
-    offset += local.length + entry.data.length
+    offset += local.length + size
   }
   const centralSize = centralParts.reduce((n, c) => n + c.length, 0)
   const eocd = new Uint8Array(22)
@@ -340,7 +365,7 @@ function buildZip(entries: ZipEntry[]): Blob {
  * 附 manifest.json（与 JSON 导出同构）。条目名为空时返回 null。
  * 路径即去重键，天然无重名；Windows 非法字符统一替换为下划线。
  */
-export function buildWorkflowZip(items: ImageItem[]): Blob | null {
+export async function buildWorkflowZip(items: ImageItem[]): Promise<Blob | null> {
   if (!items.length) return null
   const encoder = new TextEncoder()
   // 同内容只编码一次：同工作流批量出图的 prompt / workflow JSON 内容逐条重复，
@@ -369,5 +394,48 @@ export function buildWorkflowZip(items: ImageItem[]): Blob | null {
     }
   }
   entries.push({ name: 'manifest.json', data: encoder.encode(buildExportJson(items)) })
+  return buildZip(entries)
+}
+
+/** 分块流式计算 Blob 内容的 CRC32：大原图不整载进内存，峰值只有一个分块 */
+async function streamCrc32(blob: Blob): Promise<number> {
+  let c = 0xffffffff
+  const reader = blob.stream().getReader()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (let i = 0; i < value.length; i++) c = CRC_TABLE[(c ^ value[i]!) & 0xff]! ^ (c >>> 8)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return (c ^ 0xffffffff) >>> 0
+}
+
+/**
+ * 把选中 / 筛选结果的原图打包为 ZIP：条目按相对路径存放（与工作流打包同一套
+ * 目录结构），便于数据集搬运。条目数据直接引用原 File（Blob part），打包全程
+ * 不把任何一份图片整载进内存。存档项 / 参数文件没有原图本体，由调用方先行过滤。
+ * 条目名为空返回 null；recordKey 允许同名不同内容（无路径的单选添加），
+ * ZIP 内条目名必须唯一，冲突时追加「 (n)」序号。
+ */
+export async function buildImagesZip(items: ImageItem[]): Promise<Blob | null> {
+  const files = items.filter((it) => it.file && !it.metaOnly)
+  if (!files.length) return null
+  const safe = (s: string) => s.replace(/[:*?"<>|\\]/g, '_')
+  const used = new Set<string>()
+  const entries: ZipEntry[] = []
+  for (const it of files) {
+    const rawName = safe(it.path ?? it.name)
+    let name = rawName
+    for (let n = 2; used.has(name); n++) {
+      const dot = rawName.lastIndexOf('.')
+      name = dot > 0 ? `${rawName.slice(0, dot)} (${n})${rawName.slice(dot)}` : `${rawName} (${n})`
+    }
+    used.add(name)
+    const file = it.file!
+    entries.push({ name, data: file, size: file.size, crc: await streamCrc32(file) })
+  }
   return buildZip(entries)
 }
