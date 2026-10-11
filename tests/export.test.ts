@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildExportCsv, buildExportJson, buildWorkflowZip } from '../src/lib/export'
+import {
+  buildExportCsv,
+  buildExportJson,
+  buildParamsSummary,
+  buildWorkflowZip,
+} from '../src/lib/export'
 import type { ImageItem, ParsedParams } from '../src/types'
 
 function makeItem(over: Partial<ImageItem>): ImageItem {
@@ -149,6 +154,40 @@ describe('buildExportCsv', () => {
     const line = csv.slice(1).split('\r\n')[1]!
     expect(line).toContain(',dreamshaper_8.safetensors,abc123def,add_detail(m:0.8 c:0.8 #aaaabbbb)')
     expect(line).toContain(',2,vae-ft-mse,4x-US,canny,DPM++ 2M Karras')
+  })
+})
+
+describe('buildParamsSummary', () => {
+  it('A1111 风格摘要：正向 + LoRA 标签 + Negative prompt 行 + 尾部键值与多阶段摘要', () => {
+    const text = buildParamsSummary(params)
+    expect(text.startsWith('masterpiece, a cat\n<lora:add_detail:0.8>')).toBe(true)
+    expect(text).toContain('Negative prompt: blurry')
+    expect(text).toContain(
+      'Steps: 20, Sampler: DPM++ 2M Karras, Schedule type: karras, CFG scale: 7, Seed: 42',
+    )
+    expect(text).toContain('Size: 1024x1536, Batch size: 2, Model: dreamshaper_8.safetensors')
+    expect(text).toContain('Clip skip: 2, VAE: vae-ft-mse')
+    // 二阶段不并入主键值，以单行摘要附后
+    expect(text).toContain('Stage #hires Hires fix: steps=12, denoise=0.7')
+  })
+
+  it('双强度 LoRA 标签、无强度标签与 Model hash', () => {
+    const text = buildParamsSummary({
+      ...params,
+      modelHash: 'abc123def',
+      loras: [
+        { name: 'a', strengthModel: 0.7, strengthClip: 0.9 },
+        { name: 'b', strengthModel: 0.8, strengthClip: 0.8 },
+        { name: 'c' },
+      ],
+      samplers: [],
+      vaes: [],
+      batch: 1,
+      clipSkip: undefined,
+    })
+    expect(text).toContain('<lora:a:0.7:0.9>, <lora:b:0.8>, <lora:c>')
+    expect(text).toContain('Model hash: abc123def')
+    expect(text).not.toContain('Steps:') // 无采样阶段时不虚构键值
   })
 })
 

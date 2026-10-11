@@ -5,6 +5,7 @@ import type { ImageItem } from '../types'
 import type { SamplerInfo } from '../types'
 import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
+import { buildParamsSummary } from '../lib/export'
 import { favoriteFlags, retryItem, ensureItemUrl, toggleFavorite } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
 import { dateLocale, t } from '../locales'
@@ -188,6 +189,13 @@ async function copy(value: string | undefined, label: string) {
   else message.error(t('common.copyFailed'))
 }
 
+/** 一键复制 A1111 风格参数摘要（可贴回 WebUI 复现或留作记录） */
+function copySummary() {
+  const params = p.value
+  if (!params) return
+  void copy(buildParamsSummary(params), t('detail.copySummary'))
+}
+
 function downloadJson(text: string | undefined, suffix: string) {
   if (!props.item || !text) return
   downloadText(`${baseName(props.item.name)}.${suffix}`, text)
@@ -252,7 +260,13 @@ function downloadJson(text: string | undefined, suffix: string) {
 
         <template v-if="p">
           <div class="section">
-            <div class="section-title">{{ t('detail.genParams') }}</div>
+            <div class="section-title">
+              <span>{{ t('detail.genParams') }}</span>
+              <NButton size="tiny" quaternary @click="copySummary">
+                <template #icon><Icon name="copy" :size="13" /></template>
+                {{ t('detail.copySummary') }}
+              </NButton>
+            </div>
             <dl class="kv">
               <template v-for="([k, v], i) in generalRows" :key="i">
                 <dt>{{ k }}</dt>

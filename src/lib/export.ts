@@ -3,7 +3,7 @@
  * CSV 带 UTF-8 BOM 并使用 CRLF 行尾，Excel 直接打开中文不乱码。
  */
 import { computed } from 'vue'
-import type { ImageItem, LoraInfo, SamplerInfo } from '../types'
+import type { ImageItem, LoraInfo, ParsedParams, SamplerInfo } from '../types'
 import { downloadBinary, downloadText } from './utils'
 import { t } from '../locales'
 
@@ -126,6 +126,59 @@ export function buildStatsCsv(sections: StatsSection[]): string {
   const header = [t('csv.category'), t('csv.name'), t('csv.count')]
   const lines = sections.flatMap((sec) => sec.rows.map((r) => csvRow([sec.title, r.name, r.count])))
   return '\uFEFF' + [csvRow(header), ...lines].join('\r\n')
+}
+
+/** LoRA → A1111 标签：<lora:name>、<lora:name:0.8>（双强度相同）或 <lora:name:m:c> */
+function loraTag(l: LoraInfo): string {
+  const { strengthModel: m, strengthClip: c } = l
+  if (m === undefined && c === undefined) return `<lora:${l.name}>`
+  if (c === undefined || c === m) return `<lora:${l.name}:${m}>`
+  return `<lora:${l.name}:${m ?? 1}:${c}>`
+}
+
+/**
+ * A1111 风格参数摘要：正向（多行，附 LoRA 标签）+ Negative prompt 行 + 尾部键值对，
+ * 可直接贴回 A1111 / WebUI 或留作记录。多阶段采样时首阶段为主参数，
+ * 其余阶段以单行摘要附在末尾。
+ */
+export function buildParamsSummary(p: ParsedParams): string {
+  const lines: string[] = []
+  const positive = [...p.positive]
+  if (p.loras.length) positive.push(p.loras.map(loraTag).join(', '))
+  lines.push(positive.filter((s) => s.trim() !== '').join('\n'))
+  if (p.negative.length) lines.push(`Negative prompt: ${p.negative.join('\n')}`)
+
+  const s = p.samplers[0]
+  const kv: string[] = []
+  if (s?.steps !== undefined) kv.push(`Steps: ${s.steps}`)
+  if (s?.sampler) kv.push(`Sampler: ${s.sampler}`)
+  if (s?.scheduler) kv.push(`Schedule type: ${s.scheduler}`)
+  if (s?.cfg !== undefined) kv.push(`CFG scale: ${s.cfg}`)
+  if (s?.seed) kv.push(`Seed: ${s.seed}`)
+  if (p.width !== undefined && p.height !== undefined) kv.push(`Size: ${p.width}x${p.height}`)
+  if (p.batch !== undefined && p.batch > 1) kv.push(`Batch size: ${p.batch}`)
+  if (p.models.length) kv.push(`Model: ${p.models.join(' + ')}`)
+  if (p.modelHash) kv.push(`Model hash: ${p.modelHash}`)
+  if (p.clipSkip !== undefined) kv.push(`Clip skip: ${p.clipSkip}`)
+  if (p.vaes.length) kv.push(`VAE: ${p.vaes.join(' + ')}`)
+  if (p.upscalers.length) kv.push(`Upscaler: ${p.upscalers.join(' + ')}`)
+  if (p.controlNets.length) kv.push(`ControlNet: ${p.controlNets.join(' + ')}`)
+  if (s?.denoise !== undefined) kv.push(`Denoising strength: ${s.denoise}`)
+  if (kv.length) lines.push(kv.join(', '))
+
+  for (const extra of p.samplers.slice(1)) {
+    const parts = [
+      extra.steps !== undefined ? `steps=${extra.steps}` : '',
+      extra.cfg !== undefined ? `cfg=${extra.cfg}` : '',
+      extra.seed ? `seed=${extra.seed}` : '',
+      extra.denoise !== undefined ? `denoise=${extra.denoise}` : '',
+      extra.sampler ? `sampler=${extra.sampler}` : '',
+    ].filter(Boolean)
+    lines.push(
+      `Stage #${extra.nodeId} ${extra.classType}${parts.length ? `: ${parts.join(', ')}` : ''}`,
+    )
+  }
+  return lines.filter((l) => l !== '').join('\n')
 }
 
 export function buildExportCsv(items: ImageItem[]): string {
