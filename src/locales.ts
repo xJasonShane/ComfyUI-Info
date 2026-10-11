@@ -41,6 +41,7 @@ const zh = {
 
   /* 状态行（App） */
   'stat.loaded': '已加载',
+  'stat.totalBytesTitle': '已加载文件的总大小（不含图片数据占用的解码内存）',
   'stat.parsing': '扫描中…',
   'stat.filtered': '筛选命中 {n} 张',
   'stat.errorTitle': '点击查看解析失败的图片',
@@ -338,6 +339,7 @@ const en: Record<DictKey, string> = {
   'sort.workflow': 'By workflow',
 
   'stat.loaded': 'Loaded',
+  'stat.totalBytesTitle': 'Total size of loaded files (excludes decoded image memory)',
   'stat.parsing': 'Scanning…',
   'stat.filtered': '{n} match filters',
   'stat.errorTitle': 'Click to view images that failed to parse',

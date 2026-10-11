@@ -60,7 +60,7 @@ import {
   toggleFavorite,
 } from './composables/store'
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
-import { copyText } from './lib/utils'
+import { copyText, humanBytes } from './lib/utils'
 import { statsVisible } from './composables/ui'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
@@ -178,6 +178,9 @@ const hiddenCount = computed(() => {
   const shown = new Set(filteredItems.value)
   return store.items.filter((i) => i.status === 'done' && !shown.has(i)).length
 })
+
+// 已加载文件的总大小：状态行直观展示本批数据体量（万级扫描时对照内存 / 磁盘心里有数）
+const totalBytes = computed(() => store.items.reduce((n, i) => n + i.size, 0))
 
 // 任一筛选偏离默认且确实藏了图时，状态行显示命中数（搜索 / 筛选是否生效一目了然）
 const filtersActive = computed(
@@ -506,7 +509,8 @@ async function onDrop(e: DragEvent) {
 
         <div v-if="store.items.length" class="statline">
           <span
-            >{{ t('stat.loaded') }} <b>{{ store.items.length }}</b></span
+            >{{ t('stat.loaded') }} <b>{{ store.items.length }}</b>
+            <span :title="t('stat.totalBytesTitle')">· {{ humanBytes(totalBytes) }}</span></span
           >
           <span
             ><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b>
