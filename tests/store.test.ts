@@ -766,16 +766,21 @@ it('重扫目录枚举失败（目录被删 / 拔盘）返回 null，不抛未�
 })
 
 it('parseQuery 拆分字段限定与普通关键词', () => {
-  const empty = { terms: [], model: [], lora: [], seed: [], path: [], num: [] }
+  const empty = { terms: [], model: [], lora: [], seed: [], path: [], date: [], num: [] }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({
-    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [], num: [] },
+    all: { terms: ['cat'], model: ['majic'], lora: [], seed: ['123'], path: [], date: [], num: [] },
     none: empty,
   })
   expect(api.parseQuery('   ')).toEqual({ all: empty, none: empty })
   // 引号 + 否定组合：修复前分词正则先于 `-` 剥离执行，会在空格处被拆坏
   expect(api.parseQuery('-"model:a b"')).toEqual({
     all: empty,
-    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [], num: [] },
+    none: { terms: [], model: ['a b'], lora: [], seed: [], path: [], date: [], num: [] },
+  })
+  // date 字段：非法格式照常入桶，由 hitDate 匹配时判否
+  expect(api.parseQuery('date:2026-01-31 -date:2025-12')).toEqual({
+    all: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2026-01-31'], num: [] },
+    none: { terms: [], model: [], lora: [], seed: [], path: [], date: ['2025-12'], num: [] },
   })
   // 数值范围条件（FEAT-3）：w/h 是别名，无操作符为精确相等，非法值忽略
   expect(api.parseQuery('steps:>30 w:>=1024 cfg:7.5 h:<768 batch:2 clip:>1 steps:abc steps:')).toEqual({
@@ -785,6 +790,7 @@ it('parseQuery 拆分字段限定与普通关键词', () => {
       lora: [],
       seed: [],
       path: [],
+      date: [],
       num: [
         { field: 'steps', op: '>', value: 30 },
         { field: 'width', op: '>=', value: 1024 },
@@ -863,6 +869,44 @@ it('数值范围搜索：steps / cfg / 尺寸 / 批量 / Clip Skip（FEAT-3）',
   expect(names('steps:>25 cfg:<6 -batch:>=2')).toEqual([])
   // VAE 名称走普通关键词搜索域
   expect(names('vae-ft-mse')).toEqual(['a.png'])
+  api.store.search = ''
+})
+
+it('date: 按本地时区日期筛选，支持年 / 月前缀与排除（FEAT-2）', async () => {
+  const add = (name: string, mtime: number) => {
+    const parameters = 'cat\nSteps: 20, Sampler: Euler a, CFG scale: 7'
+    vi.mocked(parser.parseImage).mockResolvedValueOnce({
+      raw: { source: 'a1111', parameters },
+      params: parseA1111Parameters(parameters),
+    })
+    api.addFiles([{ file: new File(['x'], name, { lastModified: mtime }) }])
+  }
+  const dayKey = (t: number) => {
+    const d = new Date(t)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`
+  }
+  const t1 = new Date(2025, 0, 15, 10, 30).getTime()
+  const t2 = new Date(2026, 4, 2, 8, 0).getTime()
+  add('a.png', t1)
+  add('b.png', t2)
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  const names = (q: string) => {
+    api.store.search = q
+    return api.filteredItems.value.map((i) => i.name)
+  }
+  expect(names(`date:${dayKey(t1)}`)).toEqual(['a.png'])
+  expect(names(`date:${dayKey(t2)}`)).toEqual(['b.png'])
+  expect(names('date:2025-01')).toEqual(['a.png']) // 月份前缀
+  expect(names('date:2025')).toEqual(['a.png']) // 年份前缀
+  expect(names('date:2025-02')).toEqual([])
+  expect(names('date:abc')).toEqual([]) // 非法格式恒不命中
+  // 排除条件组合
+  expect(names(`date:${dayKey(t1)} -date:2026`)).toEqual(['a.png'])
+  expect(names(`date:${dayKey(t1)} -date:2025`)).toEqual([])
   api.store.search = ''
 })
 

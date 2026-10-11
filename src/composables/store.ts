@@ -757,10 +757,7 @@ export const dailyCounts = computed<DayCount[]>(() => {
   const byDay = new Map<string, number>()
   for (const it of state.items) {
     if (it.status !== 'done') continue
-    const d = new Date(it.mtime)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-      d.getDate(),
-    ).padStart(2, '0')}`
+    const key = localDayKey(new Date(it.mtime))
     byDay.set(key, (byDay.get(key) ?? 0) + 1)
   }
   return Array.from(byDay, ([day, count]) => ({ day, count }))
@@ -845,6 +842,8 @@ export interface QueryConditions {
   lora: string[]
   seed: string[]
   path: string[]
+  /** `date:YYYY-MM-DD`（支持 YYYY / YYYY-MM 前缀，本地时区按天匹配 mtime） */
+  date: string[]
   num: NumCondition[]
 }
 
@@ -855,7 +854,7 @@ export interface ParsedQuery {
   none: QueryConditions
 }
 
-const QUERY_FIELD_RE = /^(model|lora|seed|path|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
+const QUERY_FIELD_RE = /^(model|lora|seed|path|date|steps|cfg|width|w|height|h|batch|clip):(.*)$/i
 
 /** 数值字段别名：w / h 是 width / height 的简写 */
 const NUM_FIELDS: Record<string, NumField> = {
@@ -902,7 +901,24 @@ function hitSeed(cond: string, it: ImageItem): boolean {
   }
 }
 
-function hitCondition(kind: 'terms' | 'model' | 'lora' | 'seed' | 'path', value: string, it: ImageItem): boolean {
+/** 本地时区的 YYYY-MM-DD（dailyCounts 与 date: 搜索共用同一构造） */
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`
+}
+
+/** date: 条件：按 mtime 的本地时区日期匹配；支持 YYYY / YYYY-MM / YYYY-MM-DD 前缀 */
+function hitDate(cond: string, it: ImageItem): boolean {
+  if (!/^\d{4}(-\d{2})?(-\d{2})?$/.test(cond)) return false
+  return localDayKey(new Date(it.mtime)).startsWith(cond)
+}
+
+function hitCondition(
+  kind: 'terms' | 'model' | 'lora' | 'seed' | 'path' | 'date',
+  value: string,
+  it: ImageItem,
+): boolean {
   switch (kind) {
     case 'terms':
       return searchTextField(it).includes(value)
@@ -916,6 +932,8 @@ function hitCondition(kind: 'terms' | 'model' | 'lora' | 'seed' | 'path', value:
       return hitSeed(value, it)
     case 'path':
       return (it.path ?? it.name).toLowerCase().includes(value)
+    case 'date':
+      return hitDate(value, it)
   }
 }
 
@@ -959,7 +977,7 @@ function hitNum(cond: NumCondition, it: ImageItem): boolean {
 }
 
 function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): boolean {
-  for (const kind of ['terms', 'model', 'lora', 'seed', 'path'] as const) {
+  for (const kind of ['terms', 'model', 'lora', 'seed', 'path', 'date'] as const) {
     for (const v of conds[kind]) {
       if (hitCondition(kind, v, it) !== want) return false
     }
@@ -973,6 +991,7 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
 /**
  * 解析搜索框语法（O1 增强）：
  * - 字段限定 `model:xxx` / `lora:xxx` / `seed:123` / `path:目录`，普通关键词匹配搜索域
+ * - 日期（本地时区）：`date:2026-01-31` 精确到天，`date:2026-01` / `date:2026` 按前缀
  * - 数值范围（FEAT-3）：`steps:>30` / `cfg:<8` / `w:>=1024` / `h:<768` / `batch:2` / `clip:>1`，
  *   无操作符为精确相等；非数值值忽略该条件
  * - `seed:>100`（支持 > / >= / < / <=）范围筛选，大种子按数字字符串比较不丢精度
@@ -981,7 +1000,15 @@ function matchConditions(conds: QueryConditions, it: ImageItem, want: boolean): 
  * 正向条件按 AND 组合，大小写不敏感。
  */
 export function parseQuery(raw: string): ParsedQuery {
-  const empty = (): QueryConditions => ({ terms: [], model: [], lora: [], seed: [], path: [], num: [] })
+  const empty = (): QueryConditions => ({
+    terms: [],
+    model: [],
+    lora: [],
+    seed: [],
+    path: [],
+    date: [],
+    num: [],
+  })
   const out: ParsedQuery = { all: empty(), none: empty() }
   // 可选 `-` 前缀必须与引号在同一 token 内识别，否则 `-"model:a b"` 会在空格处被拆坏
   const tokens = raw.trim().match(/-?"[^"]*"|\S+/g) ?? []
@@ -1005,7 +1032,7 @@ export function parseQuery(raw: string): ParsedQuery {
         if (cond) bucket.num.push(cond)
       } else if (m[2]) {
         // 空值字段（如裸 `model:`）忽略：空串子串匹配会恒真，不符合直觉
-        bucket[field as 'model' | 'lora' | 'seed' | 'path'].push(m[2].toLowerCase())
+        bucket[field as 'model' | 'lora' | 'seed' | 'path' | 'date'].push(m[2].toLowerCase())
       }
     } else {
       bucket.terms.push(token.toLowerCase())

@@ -34,12 +34,12 @@ const maxCount = (list: UsageStat[]): number => list[0]?.count ?? 1
 /**
  * 点击统计项 → 应用对应筛选并关闭抽屉。模型走 modelFilter 精确筛选；
  * LoRA / 采样器 / 高频词写入搜索框：含空格的名称会被 parseQuery 拆成多词 AND，
- * 而搜索串（searchText）包含完整名称，逐词命中等价于整名命中。日期行不可筛选。
+ * 而搜索串（searchText）包含完整名称，逐词命中等价于整名命中。
+ * 日期行写入 `date:` 条件（本地时区按天匹配 mtime，见 store 的 hitDate）。
  */
 function pick(kind: StatSection['kind'], name: string) {
-  if (kind === 'day') return
   if (kind === 'model') store.modelFilter = name
-  else store.search = name
+  else store.search = kind === 'day' ? `date:${name}` : name
   show.value = false
 }
 

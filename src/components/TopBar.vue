@@ -170,6 +170,7 @@ const helpLines = computed(() => [
   t('help.seed'),
   t('help.seedRange'),
   t('help.numRange'),
+  t('help.date'),
   t('help.path'),
   t('help.exclude'),
   t('help.quoted'),
