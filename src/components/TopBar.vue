@@ -375,7 +375,12 @@ function savePreset() {
           :aria-label="t('topbar.autoRescanAria')"
         />
       </template>
-      {{ t('topbar.autoRescanTooltip', { name: store.rescanName }) }}
+      {{
+        t('topbar.autoRescanTooltip', {
+          name: store.rescanName,
+          interval: store.autoRescanInterval,
+        })
+      }}
     </NTooltip>
     <NSelect
       v-if="store.rescanName && store.autoRescan"

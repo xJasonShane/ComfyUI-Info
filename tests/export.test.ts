@@ -83,11 +83,11 @@ describe('buildExportCsv', () => {
     const lines = csv.slice(1).split('\r\n')
     expect(lines).toHaveLength(2)
     expect(
-      lines[0].startsWith(
+      lines[0]!.startsWith(
         '文件名,路径,大小(字节),来源,修改时间,模型,模型哈希,LoRA,Clip Skip,VAE,放大模型,ControlNet,采样器',
       ),
     ).toBe(true)
-    expect(lines[1].startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
+    expect(lines[1]!.startsWith('a.png,,1234')).toBe(true) // 无路径时路径列留空
     expect(lines[1]).toContain('"masterpiece, a cat"') // 含逗号的提示词整体加引号
     expect(lines[1]).toContain('add_detail(m:0.8 c:0.8 #aaaabbbb)')
     expect(lines[1]).toContain('#hires Hires fix, steps=12, denoise=0.7') // 二阶段摘要
@@ -96,7 +96,7 @@ describe('buildExportCsv', () => {
 
   it('路径列输出相对路径', () => {
     const csv = buildExportCsv([makeItem({ params, path: 'sets/v2/a.png' })])
-    const line = csv.slice(1).split('\r\n')[1]
+    const line = csv.slice(1).split('\r\n')[1]!
     expect(line.startsWith('a.png,sets/v2/a.png,1234')).toBe(true)
   })
 
@@ -131,12 +131,12 @@ describe('buildExportCsv', () => {
       makeItem({ name: 'bad.png', status: 'error', source: 'none', error: 'boom' }),
     ])
     const rows = csv.slice(1).split('\r\n')
-    const empty = rows[1].split(',')
+    const empty = rows[1]!.split(',')
     expect(empty).toHaveLength(25)
     expect(empty.slice(0, 4)).toEqual(['a.png', '', '1234', 'none'])
     expect(empty[4]).toMatch(/^\d{4}-\d{2}-\d{2}T/) // 修改时间（ISO）
     expect(empty.slice(5).every((c) => c === '')).toBe(true)
-    const failed = rows[2].split(',')
+    const failed = rows[2]!.split(',')
     expect(failed[3]).toBe('error')
     expect(failed[24]).toBe('boom')
   })
@@ -196,13 +196,13 @@ describe('buildParamsSummary', () => {
 
 describe('buildWorkflowZip', () => {
   it('store 模式 ZIP：本地头、条目数据与 EOCD 可直接解出', async () => {
-    const blob = await buildWorkflowZip([
+    const blob = (await buildWorkflowZip([
       makeItem({
         params,
         raw: { source: 'comfyui', prompt: '{"a":1}', workflow: '{"b":2}' },
         path: 'sets/v1/a.png',
       }),
-    ])!
+    ]))!
     expect(blob.type).toBe('application/zip')
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
@@ -220,9 +220,9 @@ describe('buildWorkflowZip', () => {
   })
 
   it('A1111 项打包为 parameters.txt，条目含 manifest；空列表返回 null', async () => {
-    const blob = await buildWorkflowZip([
+    const blob = (await buildWorkflowZip([
       makeItem({ source: 'a1111', raw: { source: 'a1111', parameters: 'Steps: 20' } }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const text = new TextDecoder().decode(zip)
     expect(text).toContain('a.parameters.txt')
@@ -232,11 +232,11 @@ describe('buildWorkflowZip', () => {
   })
 
   it('同工作流批量出图：相同内容的条目数据逐字节一致（编码缓存不串内容）', async () => {
-    const blob = await buildWorkflowZip([
+    const blob = (await buildWorkflowZip([
       makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'a.png' }),
       makeItem({ raw: { source: 'comfyui', prompt: '{"a":1}' }, name: 'b.png' }),
       makeItem({ raw: { source: 'comfyui', prompt: '{"other":2}' }, name: 'c.png' }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const text = new TextDecoder().decode(zip)
     expect(text).toContain('a.prompt.json')
@@ -251,13 +251,13 @@ describe('buildWorkflowZip', () => {
 
 describe('buildImagesZip', () => {
   it('按相对路径打包原图字节，跳过存档 / 参数文件项，空列表返回 null', async () => {
-    const blob = await buildImagesZip([
+    const blob = (await buildImagesZip([
       makeItem({ path: 'sets/v1/a.png', file: new File([new Uint8Array([1, 2, 3])], 'a.png') }),
       makeItem({ name: 'b.png', file: new File([new Uint8Array([4])], 'b.png'), path: undefined }),
       // 存档项（无文件）与参数文件（无图片本体）都不打包
       makeItem({ name: 'c.png', file: undefined, detached: true }),
       makeItem({ name: 'p.json', metaOnly: true, file: new File(['{}'], 'p.json') }),
-    ])!
+    ]))!
     expect(blob.type).toBe('application/zip')
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
@@ -271,10 +271,10 @@ describe('buildImagesZip', () => {
   })
 
   it('无路径同名文件（不同指纹项）条目名追加序号，ZIP 内不重名', async () => {
-    const blob = await buildImagesZip([
+    const blob = (await buildImagesZip([
       makeItem({ name: 'a.png', file: new File([new Uint8Array([1])], 'a.png'), size: 1 }),
       makeItem({ name: 'a.png', file: new File([new Uint8Array([2])], 'a.png'), size: 2 }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const text = new TextDecoder().decode(zip)
     expect(text).toContain('a.png')
@@ -284,9 +284,9 @@ describe('buildImagesZip', () => {
 
   it('Blob 条目的 CRC 与文件内容一致（解包工具可校验）', async () => {
     // CRC32("hello") = 0x3610a686
-    const blob = await buildImagesZip([
+    const blob = (await buildImagesZip([
       makeItem({ name: 'a.png', file: new File(['hello'], 'a.png') }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
     expect(dv.getUint32(14, true)).toBe(0x3610a686 >>> 0)
@@ -295,13 +295,13 @@ describe('buildImagesZip', () => {
 
 describe('buildDatasetZip', () => {
   it('原图 + 同名 .txt 标注（正向提示词），按相对路径成对打包', async () => {
-    const blob = await buildDatasetZip([
+    const blob = (await buildDatasetZip([
       makeItem({
         params,
         path: 'sets/v1/a.png',
         file: new File([new Uint8Array([1, 2, 3])], 'a.png'),
       }),
-    ])!
+    ]))!
     expect(blob.type).toBe('application/zip')
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
@@ -327,10 +327,10 @@ describe('buildDatasetZip', () => {
   })
 
   it('同名冲突：标注名跟随图片的去重序号，不串对', async () => {
-    const blob = await buildDatasetZip([
+    const blob = (await buildDatasetZip([
       makeItem({ name: 'a.png', params, file: new File([new Uint8Array([1])], 'a.png') }),
       makeItem({ name: 'a.png', file: new File([new Uint8Array([2])], 'a.png') }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const text = new TextDecoder().decode(zip)
     expect(text).toContain('a.txt')
@@ -340,14 +340,14 @@ describe('buildDatasetZip', () => {
   })
 
   it('无参数 / 无正向提示词的图片给空标注占位', async () => {
-    const blob = await buildDatasetZip([
+    const blob = (await buildDatasetZip([
       makeItem({ name: 'b.png', file: new File([new Uint8Array([9])], 'b.png') }),
       makeItem({
         name: 'c.png',
         params: { ...params, positive: ['', '  '] },
         file: new File([new Uint8Array([8])], 'c.png'),
       }),
-    ])!
+    ]))!
     const zip = new Uint8Array(await blob.arrayBuffer())
     const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
     // b.png 的标注 b.txt 是第二条目，内容为空（大小 0）

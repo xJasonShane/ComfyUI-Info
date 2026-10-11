@@ -25,7 +25,7 @@ import {
   type PersistRecord,
 } from '../src/lib/persist'
 
-const rec = (over: Partial<PersistRecord>): PersistRecord => ({
+const rec = (over: Partial<PersistRecord> = {}): PersistRecord => ({
   key: 'a.png|1|1000',
   name: 'a.png',
   size: 1,
@@ -256,7 +256,12 @@ describe('存档备份（serialize / parse）', () => {
   })
 
   it('recordKey 与指纹构造一致', () => {
-    expect(recordKey({ path: 'v1/a.png', size: 3, mtime: 9 })).toBe('v1/a.png|3|9')
+    // path 形态（省略 name）是刻意的鸭子类型调用：recordKey 以 path ?? name 取位置段
+    expect(
+      recordKey({ path: 'v1/a.png', size: 3, mtime: 9 } as unknown as Parameters<
+        typeof recordKey
+      >[0]),
+    ).toBe('v1/a.png|3|9')
     expect(recordKey({ name: 'a.png', size: 3, mtime: 9 })).toBe('a.png|3|9')
   })
 })

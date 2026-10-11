@@ -60,7 +60,7 @@ describe('collectDirectoryFiles', () => {
     const tree = dirHandle('root', [fileHandle('ok.png'), broken])
     const paths: string[] = []
     const total = await collectDirectoryFiles(tree, (files) =>
-      paths.push(...files.map((f) => f.path)),
+      paths.push(...files.map((f) => f.path!)),
     )
     expect(total).toBe(1)
     expect(paths).toEqual(['root/ok.png'])

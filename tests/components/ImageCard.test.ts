@@ -7,15 +7,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ImageCard from '../../src/components/ImageCard.vue'
-import { restoreArchived, store } from '../../src/composables/store'
+import { clearAll, restoreArchived, store } from '../../src/composables/store'
 import type { PersistRecord } from '../../src/lib/persist'
 import type { ImageItem } from '../../src/types'
 
 vi.stubGlobal(
   'URL',
   class extends URL {
-    static createObjectURL = vi.fn(() => 'blob:thumb-test')
-    static revokeObjectURL = vi.fn()
+    static override createObjectURL = vi.fn(() => 'blob:thumb-test')
+    static override revokeObjectURL = vi.fn()
   },
 )
 
@@ -37,12 +37,23 @@ function mountCard(item: ImageItem) {
 }
 
 beforeEach(() => {
-  store.items = []
+  // clearAll 一并重置模块级账本（seenKeys / detachedByKey / itemsByIdentityKey），
+  // 只清 items 数组会让下一用例的同身份存档被去重合并（638e2b8 起的身份去重语义）
+  clearAll()
 })
 
 describe('ImageCard', () => {
   it('存档项以内嵌缩略图兜底渲染（F2）；无缩略图时保持占位', async () => {
-    restoreArchived([rec({ key: 'k-arch', thumbB64: btoa('jpeg-bytes') }), rec({ key: 'k-plain' })])
+    // 两张卡用不同路径：身份键是位置身份（identity:path），同路径存档会被去重合并成一张
+    restoreArchived([
+      rec({
+        key: 'k-arch',
+        name: 'with-thumb.png',
+        path: 'with-thumb.png',
+        thumbB64: btoa('jpeg-bytes'),
+      }),
+      rec({ key: 'k-plain', name: 'plain.png', path: 'plain.png' }),
+    ])
     const [withThumb, plain] = store.items
 
     const w1 = mountCard(withThumb!)

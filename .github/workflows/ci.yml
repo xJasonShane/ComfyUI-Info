@@ -17,6 +17,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+      # 类型检查覆盖 src + tests + e2e（build 里的 vue-tsc 只查 src，tests/e2e 另行守护）
+      - run: npm run typecheck
       - run: npm run test
       - run: npm run build
       - name: Upload dist for Pages deploy (main only)

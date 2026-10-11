@@ -108,7 +108,8 @@ const zh = {
   'topbar.rescan': '重扫',
   'topbar.rescanTooltip': '重新扫描记住的目录「{name}」，添加新文件并重新解析已更新文件',
   'topbar.autoRescanAria': '自动重扫开关',
-  'topbar.autoRescanTooltip': '自动重扫：每 10 秒扫描「{name}」，添加新文件并更新已变化的文件（边出图边看）',
+  'topbar.autoRescanTooltip':
+    '自动重扫：每 {interval} 秒扫描「{name}」，添加新文件并更新已变化的文件（边出图边看）',
   'topbar.dirs': '目录',
   'topbar.dirsTitle': '已记住的目录（点击切换重扫目标）',
   'topbar.clearBookmarks': '清除全部书签',
@@ -154,8 +155,10 @@ const zh = {
   'persistence.unavailable': '存储不可用 · 点击重试',
   'persistence.retry': '重试存储',
   'persistence.okDetail': '会话记录已保存到浏览器本地存储。',
-  'persistence.unavailableDetail': '浏览器本地存储不可用或写入探测失败；本会话数据目前只保存在内存中。',
-  'persistence.errorDetail': '存储操作失败：{msg}。未提交的更改仍保留在当前会话，可点击状态重试或导出备份。',
+  'persistence.unavailableDetail':
+    '浏览器本地存储不可用或写入探测失败；本会话数据目前只保存在内存中。',
+  'persistence.errorDetail':
+    '存储操作失败：{msg}。未提交的更改仍保留在当前会话，可点击状态重试或导出备份。',
   'msg.archiveEmpty': '当前列表没有可备份的存档记录',
   'msg.archiveExported': '已导出 {n} 条存档记录（不含图片本体）',
   'msg.archiveImported': '已导入 {n} 条存档记录',
@@ -493,7 +496,7 @@ const en: Record<DictKey, string> = {
     'Rescan remembered directory "{name}": add new files and reparse files whose content version changed',
   'topbar.autoRescanAria': 'Auto rescan toggle',
   'topbar.autoRescanTooltip':
-    'Auto rescan: scan "{name}" every 10s, adding new files and updating changed files',
+    'Auto rescan: scan "{name}" every {interval}s, adding new files and updating changed files',
   'topbar.dirs': 'Dirs',
   'topbar.dirsTitle': 'Remembered directories (click to switch the rescan target)',
   'topbar.clearBookmarks': 'Clear all bookmarks',
@@ -529,7 +532,8 @@ const en: Record<DictKey, string> = {
   'archive.previewNewFavorites': 'Favorite marks to add',
   'archive.previewTagRecords': 'Tagged records in backup',
   'archive.previewChangedTagRecords': 'Records receiving new tags',
-  'archive.previewWarnings': '{n} format issue(s) or duplicate(s) found; invalid records and fields will be skipped.',
+  'archive.previewWarnings':
+    '{n} format issue(s) or duplicate(s) found; invalid records and fields will be skipped.',
   'archive.previewConfirm': 'Import backup',
   'archive.previewCancel': 'Cancel',
   'archive.previewImporting': 'Importing…',
@@ -540,8 +544,10 @@ const en: Record<DictKey, string> = {
   'persistence.unavailable': 'Storage unavailable · retry',
   'persistence.retry': 'Retry storage',
   'persistence.okDetail': 'Session records are saved in browser storage.',
-  'persistence.unavailableDetail': 'Browser storage is unavailable or its write probe failed; this session currently exists only in memory.',
-  'persistence.errorDetail': 'Storage operation failed: {msg}. Uncommitted changes remain in this session. Click the status to retry or export a backup.',
+  'persistence.unavailableDetail':
+    'Browser storage is unavailable or its write probe failed; this session currently exists only in memory.',
+  'persistence.errorDetail':
+    'Storage operation failed: {msg}. Uncommitted changes remain in this session. Click the status to retry or export a backup.',
   'msg.archiveEmpty': 'No archivable records in the current list',
   'msg.archiveExported': 'Exported {n} archive records (no image data)',
   'msg.archiveImported': 'Imported {n} archive records',

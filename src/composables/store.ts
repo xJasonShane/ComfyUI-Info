@@ -519,7 +519,11 @@ export function addFiles(files: IncomingFile[]): number {
   return added
 }
 
-function discardIdentityVersions(items: ImageItem[], keep: ImageItem | undefined, targetKey: string) {
+function discardIdentityVersions(
+  items: ImageItem[],
+  keep: ImageItem | undefined,
+  targetKey: string,
+) {
   for (const item of items) {
     if (item === keep) continue
     const oldKey = recordKeyOf(item)
@@ -538,7 +542,13 @@ function updateExistingVersion(
   sourceId?: string,
 ): number {
   const oldKey = recordKeyOf(item)
-  const nextIdentity = { path, name: file.name, sourceId, size: file.size, mtime: file.lastModified }
+  const nextIdentity = {
+    path,
+    name: file.name,
+    sourceId,
+    size: file.size,
+    mtime: file.lastModified,
+  }
   const nextKey = recordKey(nextIdentity)
   if (
     oldKey === nextKey ||
@@ -853,19 +863,18 @@ function refreshDirNames() {
     const occurrence = (seen.get(bookmark.name) ?? 0) + 1
     seen.set(bookmark.name, occurrence)
     const baseLabel =
-      (totals.get(bookmark.name) ?? 0) > 1
-        ? `${bookmark.name} (${occurrence})`
-        : bookmark.name
+      (totals.get(bookmark.name) ?? 0) > 1 ? `${bookmark.name} (${occurrence})` : bookmark.name
     let label = baseLabel
     if (bookmarkLabelToId.has(label)) label = `${baseLabel} · ${bookmark.id.slice(-4)}`
     let suffix = 2
-    while (bookmarkLabelToId.has(label)) label = `${baseLabel} · ${bookmark.id.slice(-4)}-${suffix++}`
+    while (bookmarkLabelToId.has(label))
+      label = `${baseLabel} · ${bookmark.id.slice(-4)}-${suffix++}`
     bookmarkLabelToId.set(label, bookmark.id)
     return label
   })
   state.dirBookmarks = labels
   state.rescanName = rescanBookmarkId
-    ? sorted.find((bookmark) => bookmark.id === rescanBookmarkId)?.name ?? null
+    ? (sorted.find((bookmark) => bookmark.id === rescanBookmarkId)?.name ?? null)
     : null
   // When names collide, the visible label carries the ordinal used by the menu.
   if (rescanBookmarkId) {
@@ -1261,6 +1270,10 @@ async function flushPersist() {
 async function hydrate() {
   state.persistenceStatus = 'checking'
   state.persistenceError = null
+  // 清空竞态哨兵：恢复期间 clearAll 会递增 persistEpoch 并清库，flushPersist 成功后
+  // pendingClear 复位为 false——单靠它拦不住「读库取到清库前快照 → 清库完成 → 旧记录装回」
+  // 的时序（磁盘已清、界面复活，刷新即消失），必须以代际号作第二取消条件
+  const epoch = persistEpoch
   try {
     persistAvailable = await probePersistence()
     if (!persistAvailable) {
@@ -1268,9 +1281,9 @@ async function hydrate() {
       state.persistenceError = null
       return
     }
-    if (!pendingClear) {
+    if (!pendingClear && epoch === persistEpoch) {
       const records = await loadPersisted()
-      await restoreArchivedInChunks(records, () => pendingClear)
+      await restoreArchivedInChunks(records, () => pendingClear || epoch !== persistEpoch)
     }
     // 恢复全部目录书签（FEAT-7），最近记住的作为当前重扫目标
     const bookmarks = clearBookmarksPending ? [] : await loadDirBookmarks()
@@ -1378,10 +1391,7 @@ function prepareArchiveImport(text: string): PreparedArchiveImport {
   // 来源 ID 是目录句柄的本机身份。当前机器已有同一来源时保留它以便幂等导入；
   // 外部备份的 ID 加 imported 前缀，重新选择本机目录时可按唯一旧路径别名迁移。
   const remappedKeys = new Map<string, string>()
-  const candidatesByIdentity = new Map<
-    string,
-    { record: PersistRecord; sourceKeys: string[] }
-  >()
+  const candidatesByIdentity = new Map<string, { record: PersistRecord; sourceKeys: string[] }>()
   let duplicateRecords = inspection.duplicateRecords
   let identityMatches = 0
   for (const rec of records) {

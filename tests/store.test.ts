@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
-import type { ImageItem } from '../src/types'
+import type { ImageItem, ParsedParams } from '../src/types'
 import type { PersistRecord } from '../src/lib/persist'
 
 // mock 掉解析调度：解析耗时由测试里的 gate 手动控制，用于复现「清空列表时仍有解析在途」的竞态
@@ -59,8 +59,8 @@ beforeAll(async () => {
   vi.stubGlobal(
     'URL',
     class extends URL {
-      static createObjectURL = () => 'blob:mock'
-      static revokeObjectURL = () => {}
+      static override createObjectURL = () => 'blob:mock'
+      static override revokeObjectURL = () => {}
     },
   )
   parser = await import('../src/lib/parser')
@@ -111,7 +111,7 @@ it('失败的项可重试并正确计入当前批次', async () => {
   vi.mocked(parser.parseImage).mockRejectedValueOnce(new Error('boom'))
   api.addFiles([file('a.png')])
   await flush()
-  const item = api.store.items[0]
+  const item = api.store.items[0]!
   expect(item.status).toBe('error')
   expect(api.stats.value.error).toBe(1)
 
@@ -189,7 +189,7 @@ it('移除已完成条目：列表 / 指纹 / 计数同步，同名可重加', a
   await flush()
   expect(api.store.batchTotal).toBe(3)
 
-  api.removeItem(api.store.items[1])
+  api.removeItem(api.store.items[1]!)
   expect(api.store.items.length).toBe(2)
   expect(api.store.batchTotal).toBe(2)
   expect(api.store.batchDone).toBe(2)
@@ -272,7 +272,7 @@ it('移除在途条目：计数保留，解析完成后自动对账', async () =
   api.addFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.png`)))
 
   // 并发上限 8，先入队的必在途；P1 后 status 在结果应用前保持 pending，用入队顺序定位
-  const inflight = api.store.items[0]
+  const inflight = api.store.items[0]!
   expect(inflight).toBeDefined()
   api.removeItem(inflight)
   expect(api.store.items.length).toBe(9)
@@ -325,7 +325,7 @@ it('移除 / 清空的在途项解析完成后不写库存档（不「复活」�
 
     // 场景一：解析在途时单张移除 → 删除事务照常执行，孤儿结果不得写库
     api.addFiles([file('a.png')])
-    const item = api.store.items[0]
+    const item = api.store.items[0]!
     api.removeItem(item)
     release()
     await vi.advanceTimersByTimeAsync(600) // 解析完成 + 500ms 写库防抖
@@ -382,8 +382,8 @@ it('工作流 JSON / 参数文本文件直接入列解析，无预览 URL（F1�
     { file: new File(['{"3":{"class_type":"KSampler"}}'], 'wf.json', { lastModified: 1 }) },
   ])
   expect(api.store.items.length).toBe(1)
-  expect(api.store.items[0].metaOnly).toBe(true)
-  expect(api.store.items[0].url).toBe('')
+  expect(api.store.items[0]!.metaOnly).toBe(true)
+  expect(api.store.items[0]!.url).toBe('')
   api.addFiles([{ file: new File(['Steps: 20'], 'params.txt', { lastModified: 2 }) }])
   expect(api.store.items.length).toBe(2)
   await flush()
@@ -447,24 +447,24 @@ it('扫描进行中解析结果按节拍批量应用，全部完成后立即应�
       return { gate: new Promise<void>((res) => (r = res)), release: r }
     })
     vi.mocked(parser.parseImage).mockImplementation((f: File) =>
-      gates[Number(f.name[1])].gate.then(() => ({ raw: { source: 'comfyui' } })),
+      gates[Number(f.name[1])]!.gate.then(() => ({ raw: { source: 'comfyui' } })),
     )
     api.addFiles([file('a0.png'), file('a1.png'), file('a2.png')])
     await vi.advanceTimersByTimeAsync(0) // 三个任务全部启动
     expect(api.store.items.every((i) => i.status === 'pending')).toBe(true)
 
-    gates[0].release() // 仅 a0 完成，其余仍在途
+    gates[0]!.release() // 仅 a0 完成，其余仍在途
     await vi.advanceTimersByTimeAsync(0)
     // 扫描进行中：结果挂起不写响应式字段，不触发 stats / filteredItems 全量重算
-    expect(api.store.items[0].status).toBe('pending')
+    expect(api.store.items[0]!.status).toBe('pending')
     expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, none: 0, error: 0 })
 
     await vi.advanceTimersByTimeAsync(250) // 节拍（200ms）到点批量应用
-    expect(api.store.items[0].status).toBe('done')
+    expect(api.store.items[0]!.status).toBe('done')
     expect(api.stats.value.comfyui).toBe(1)
 
-    gates[1].release()
-    gates[2].release()
+    gates[1]!.release()
+    gates[2]!.release()
     await vi.advanceTimersByTimeAsync(0) // 全部完成 → 立即收尾应用，不等下一拍
     expect(api.store.items.map((i) => i.status)).toEqual(['done', 'done', 'done'])
     expect(api.stats.value.comfyui).toBe(3)
@@ -609,11 +609,11 @@ it('重新拖入与存档项同指纹的文件时自动回挂，不重新解析'
     },
   ])
   expect(api.store.items.length).toBe(1)
-  expect(api.store.items[0].detached).toBe(true)
+  expect(api.store.items[0]!.detached).toBe(true)
 
   api.addFiles([{ file: new File(['x'], 'a.png', { lastModified: 1000 }), path: 'v1/a.png' }])
   expect(api.store.items.length).toBe(1)
-  const item = api.store.items[0]
+  const item = api.store.items[0]!
   expect(item.detached).toBe(false)
   expect(item.url).toBe('blob:mock')
   expect(api.store.batchTotal).toBe(0) // 元数据已在库中，不重新排队解析
@@ -776,7 +776,7 @@ it('存档导入：同指纹跳过，恢复为可搜索的存档项（FEAT-6）'
   const { n } = await api.importArchive(JSON.stringify({ version: 3, records: [rec] }))
   expect(n).toBe(1)
   expect(api.store.items.length).toBe(1)
-  expect(api.store.items[0].detached).toBe(true)
+  expect(api.store.items[0]!.detached).toBe(true)
   // 惰性搜索串按需构建：存档项按参数可搜索（OPT-6）
   api.store.sourceFilter = 'all'
   api.store.search = 'cat'
@@ -1229,7 +1229,7 @@ it('pos / neg 字段定向搜索：仅匹配对应方向的提示词', async () 
 })
 
 it('sampler / scheduler / vae / upscale 定向与 has: 存在性条件', async () => {
-  const base = {
+  const base: ParsedParams = {
     positive: [],
     negative: [],
     models: [],
@@ -1543,7 +1543,7 @@ it('多目录书签：记住多个目录、切换目标、忘记仅当前（FEAT
 
 it('预览 URL 惰性创建：入列为空，渲染时才生成（P2）', () => {
   api.addFiles([file('a.png')])
-  const item = api.store.items[0]
+  const item = api.store.items[0]!
   expect(item.url).toBe('')
   api.ensureItemUrl(item)
   expect(item.url).toBe('blob:mock')
@@ -1627,7 +1627,17 @@ describe('usageStats', () => {
     status: 'done' as const,
     source: 'comfyui' as const,
     raw: { source: 'comfyui' as const },
-    params: { positive: [], negative: [], models, loras, samplers, nodeCount: 1 },
+    params: {
+      positive: [],
+      negative: [],
+      models,
+      loras,
+      samplers,
+      vaes: [],
+      upscalers: [],
+      controlNets: [],
+      nodeCount: 1,
+    },
   })
 
   it('按已解析项聚合模型 / LoRA / 采样器频次（次数降序，同次数按名排序）', () => {

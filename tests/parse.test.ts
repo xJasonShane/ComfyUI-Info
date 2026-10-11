@@ -22,7 +22,7 @@ import { extractComfyParams, extractUiWorkflowParams } from '../src/lib/comfyExt
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { BROKEN, JOB_TIMEOUT_MS, ParsePool, ParseScheduler, WorkerEntry } from '../src/lib/parser'
 import type { ParseTransport } from '../src/lib/parser'
-import type { ParseResult } from '../types'
+import type { ParseResult } from '../src/types'
 
 const PNG_SIG = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
 
@@ -450,7 +450,7 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
       '"8":{"class_type":"PrimitiveInt","inputs":{"value":10978932088412290001}}}'
     const p = extractComfyParams(prompt)!
     expect(p.samplers).toHaveLength(1)
-    expect(p.samplers[0].steps).toBe(20)
+    expect(p.samplers[0]!.steps).toBe(20)
   })
 
   it('UI 格式：KSamplerSelect 不产生伪采样阶段', () => {
@@ -469,7 +469,7 @@ describe('extractUiWorkflowParams（O2：UI 格式工作流兜底）', () => {
     })
     const p = extractUiWorkflowParams(wf)!
     expect(p.samplers).toHaveLength(1)
-    expect(p.samplers[0].classType).toBe('KSampler')
+    expect(p.samplers[0]!.classType).toBe('KSampler')
   })
 
   it('bypass（mode=4）的采样器与加载节点不参与提取', () => {
@@ -705,7 +705,7 @@ describe('extractComfyParams', () => {
 
   it('提取采样参数', () => {
     expect(params.samplers).toHaveLength(1)
-    const s = params.samplers[0]
+    const s = params.samplers[0]!
     expect(s.steps).toBe(28)
     expect(s.cfg).toBe(6.5)
     expect(s.sampler).toBe('dpmpp_2m')
@@ -714,7 +714,7 @@ describe('extractComfyParams', () => {
   })
 
   it('大数 seed 不丢精度', () => {
-    expect(params.samplers[0].seed).toBe('1562088014288583000')
+    expect(params.samplers[0]!.seed).toBe('1562088014288583000')
   })
 
   it('提取正负提示词和模型、尺寸', () => {
@@ -732,7 +732,7 @@ describe('extractComfyParams', () => {
     })
     const p = extractComfyParams(wf)!
     expect(p.samplers.map((s) => s.nodeId)).toEqual(['3', '10'])
-    expect(p.samplers[1].denoise).toBe(0.5)
+    expect(p.samplers[1]!.denoise).toBe(0.5)
   })
 
   it('出图尺寸沿 latent 链回溯：两阶段工作流取末端缩放后的尺寸', () => {
@@ -931,10 +931,10 @@ describe('parseA1111Parameters', () => {
   it('提取提示词与参数', () => {
     expect(p.positive).toEqual(['masterpiece, a cat'])
     expect(p.negative).toEqual(['blurry, bad hands'])
-    expect(p.samplers[0].steps).toBe(20)
-    expect(p.samplers[0].cfg).toBe(7)
-    expect(p.samplers[0].sampler).toBe('DPM++ 2M Karras')
-    expect(p.samplers[0].seed).toBe('42')
+    expect(p.samplers[0]!.steps).toBe(20)
+    expect(p.samplers[0]!.cfg).toBe(7)
+    expect(p.samplers[0]!.sampler).toBe('DPM++ 2M Karras')
+    expect(p.samplers[0]!.seed).toBe('42')
     expect(p.width).toBe(512)
     expect(p.height).toBe(768)
     expect(p.models).toEqual(['majicMIX'])
@@ -953,7 +953,8 @@ describe('parseA1111Parameters', () => {
       ['bad', 0.5, 0.5, null],
     ])
     expect(p.samplers).toHaveLength(2)
-    const [s1, s2] = p.samplers
+    const s1 = p.samplers[0]!
+    const s2 = p.samplers[1]!
     expect(s1.denoise).toBeUndefined() // 一阶段（txt2img）没有重绘幅度
     expect(s2.classType).toBe('Hires fix')
     expect(s2.steps).toBe(12) // Hires steps 覆盖
@@ -970,7 +971,7 @@ describe('parseA1111Parameters', () => {
     // ComfyUI 生态的 Civitai 兼容保存节点写出的种子超过 Number 安全范围
     const big = '1234567890123456789'
     const p = parseA1111Parameters(`a cat\nSteps: 20, Sampler: Euler a, Seed: ${big}`)
-    expect(p.samplers[0].seed).toBe(big)
+    expect(p.samplers[0]!.seed).toBe(big)
     expect(p.samplers).toHaveLength(1)
   })
 
@@ -988,7 +989,7 @@ describe('parseA1111Parameters', () => {
       'a cat\nNegative prompt: x\nSteps: 15, Sampler: Euler a, CFG scale: 6, Seed: 1, Denoising strength: 0.45, Size: 512x512',
     )
     expect(p.samplers).toHaveLength(1)
-    expect(p.samplers[0].denoise).toBe(0.45)
+    expect(p.samplers[0]!.denoise).toBe(0.45)
   })
 
   it('扩展键：Clip skip / VAE / Batch size（FEAT-2）', () => {
@@ -1027,9 +1028,11 @@ describe('internParseResult', () => {
 /* ---------- Worker 池与回退编排（传输注入的假实现，不触碰真实 Worker） ---------- */
 
 /** 可控假传输：post 返回的 promise 由测试手动 resolve / reject */
+type FakeTransport = ParseTransport & { terminated: boolean }
+
 function makeFakeTransport() {
   const jobs: { file: File; resolve: (r: ParseResult) => void; reject: (e: unknown) => void }[] = []
-  const transport: ParseTransport = {
+  const transport: FakeTransport = {
     broken: false,
     terminated: false,
     terminate() {

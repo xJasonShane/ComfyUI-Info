@@ -61,7 +61,7 @@ export class WorkerEntry implements ParseTransport {
       if (e.data.error !== undefined || !e.data.raw) {
         job.reject(new Error(e.data.error ?? 'Worker 返回了无效结果'))
       } else {
-        job.resolve({ raw: e.data.raw, params: e.data.params })
+        job.resolve({ raw: e.data.raw, params: e.data.params, thumb: e.data.thumb })
       }
     }
     this.worker.onerror = () => this.fail()

@@ -352,6 +352,15 @@ function getAllFrom(db: IDBDatabase, storeName: string): Promise<unknown[]> {
   })
 }
 
+/** 只取主键不物化记录：导入去重只需 key 集合，整载会把 v2 内联大文本与缩略图全部拉进内存 */
+function getAllKeysOf(db: IDBDatabase, storeName: string): Promise<string[]> {
+  const req = db.transaction(storeName).objectStore(storeName).getAllKeys()
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result as string[])
+    req.onerror = () => reject(req.error ?? new Error('读取存档键失败'))
+  })
+}
+
 /**
  * 可用性探测：完整走一遍「建库 → 写入 → 删除」探测记录。
  * 任何一步失败（含 file:// 受限、Safari 隐私模式直接抛错）即判定不可用，结果进程内缓存。
@@ -455,7 +464,7 @@ export async function saveDirBookmark(
   await settled(tx)
 }
 
-/** 读取全部书签（新→旧）；迁移旧版单一 'last' 行时保留独立身份，避免覆盖同名目录。 */
+/** 读取全部书签（新→旧）；v2 单一 'last' 行迁移为按目录名寻址，与书签主键语义一致。 */
 export async function loadDirBookmarks(): Promise<DirBookmark[]> {
   const db = await getDb()
   const rows = (await getAllFrom(db, HANDLE_STORE)) as {
@@ -470,7 +479,7 @@ export async function loadDirBookmarks(): Promise<DirBookmark[]> {
     if (!row?.handle) continue
     if (row.id === 'last') {
       legacy = {
-        id: 'legacy:last',
+        id: row.handle.name,
         name: row.handle.name,
         handle: row.handle,
         savedAt: row.savedAt ?? 0,
@@ -488,7 +497,8 @@ export async function loadDirBookmarks(): Promise<DirBookmark[]> {
     out.push(legacy)
     try {
       await saveDirBookmark(legacy.handle, legacy.id)
-      await removeDirBookmarkRow('last')
+      // 目录恰好名为 last 时 put 已原地覆盖旧行；再删 'last' 会误删迁移结果
+      if (legacy.id !== 'last') await removeDirBookmarkRow('last')
     } catch {
       // 迁移失败时保留旧行，下次启动继续尝试；当前会话仍可使用已读取的句柄。
     }
@@ -669,7 +679,10 @@ function normalizeArchiveRecord(value: unknown): PersistRecord | null {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') return null
   }
   if (raw.hints !== undefined && !isStringArray(raw.hints)) return null
-  if (value.savedAt !== undefined && (typeof value.savedAt !== 'number' || !Number.isFinite(value.savedAt))) {
+  if (
+    value.savedAt !== undefined &&
+    (typeof value.savedAt !== 'number' || !Number.isFinite(value.savedAt))
+  ) {
     return null
   }
 
@@ -709,6 +722,7 @@ export function inspectArchive(text: string): ArchiveInspection {
     throw new Error('缺少 records 数组，不是存档备份文件')
   }
   const o = parsed
+  const archivedRecords = parsed.records as unknown[]
   if (
     o.version !== undefined &&
     (typeof o.version !== 'number' ||
@@ -722,7 +736,7 @@ export function inspectArchive(text: string): ArchiveInspection {
   let warningCount = 0
   if (o.count !== undefined) {
     if (typeof o.count !== 'number' || !Number.isInteger(o.count) || o.count < 0) warningCount++
-    else if (o.count !== o.records.length) warningCount++
+    else if (o.count !== archivedRecords.length) warningCount++
   }
   const exportedAt =
     typeof o.exportedAt === 'string' && Number.isFinite(Date.parse(o.exportedAt))
@@ -734,7 +748,7 @@ export function inspectArchive(text: string): ArchiveInspection {
   const recordKeys = new Set<string>()
   let invalidRecords = 0
   let duplicateRecords = 0
-  for (const value of o.records) {
+  for (const value of archivedRecords) {
     const rec = normalizeArchiveRecord(value)
     if (!rec) {
       invalidRecords++
@@ -822,8 +836,7 @@ export function parseArchive(text: string): {
 export async function importPersisted(records: PersistRecord[]): Promise<PersistRecord[]> {
   if (!records.length) return []
   const db = await getDb()
-  const rows = await getAllFrom(db, STORE)
-  const existing = new Set(rows.map((r) => (r as { key?: unknown }).key))
+  const existing = new Set(await getAllKeysOf(db, STORE))
   const fresh = records.filter((r) => !existing.has(r.key))
   if (fresh.length) await putPersisted(fresh)
   return fresh
