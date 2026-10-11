@@ -754,6 +754,17 @@ it('自动重扫：周期增量触发、解析中跳过、句柄丢失后停表�
   }
 })
 
+it('重扫目录枚举失败（目录被删 / 拔盘）返回 null，不抛未捕获异常', async () => {
+  const fsMod = await import('../src/lib/fs')
+  vi.mocked(fsMod.collectDirectoryFiles).mockRejectedValueOnce(new Error('NotFoundError'))
+  await api.setRescanHandle({ name: 'gone' } as unknown as FileSystemDirectoryHandle)
+  try {
+    await expect(api.rescanDirectory()).resolves.toBe(null)
+  } finally {
+    api.forgetRescanHandle()
+  }
+})
+
 it('parseQuery 拆分字段限定与普通关键词', () => {
   const empty = { terms: [], model: [], lora: [], seed: [], path: [], num: [] }
   expect(api.parseQuery('cat MODEL:majic seed:123')).toEqual({

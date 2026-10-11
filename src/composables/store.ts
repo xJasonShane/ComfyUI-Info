@@ -462,9 +462,15 @@ export async function rescanDirectory(): Promise<number | null> {
   if (!rescanHandle) return null
   if (!(await ensureReadPermission(rescanHandle))) return null
   let added = 0
-  await collectDirectoryFiles(rescanHandle, (files) => {
-    added += addFiles(files)
-  })
+  try {
+    await collectDirectoryFiles(rescanHandle, (files) => {
+      added += addFiles(files)
+    })
+  } catch {
+    // 目录被删除 / 移动（U 盘拔出等）：本拍按不可用处理。手动重扫由调用方提示无权限，
+    // 自动重扫各拍静默重试，不再把枚举异常抛成全局错误横幅 / unhandled rejection
+    return null
+  }
   return added
 }
 
