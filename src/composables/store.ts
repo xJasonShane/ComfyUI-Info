@@ -32,7 +32,6 @@ import {
   probePersistence,
   putPersisted,
   recordKey,
-  removeDirBookmark,
   saveDirBookmark,
   serializeArchive,
   toRecord,
@@ -45,6 +44,7 @@ export type { QueryConditions, ParsedQuery, NumField, HasField, NumCondition } f
 
 export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
 export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc' | 'workflow'
+export type PersistenceStatus = 'checking' | 'saved' | 'saving' | 'error' | 'unavailable'
 const SORT_MODES: SortMode[] = [
   'default',
   'time-desc',
@@ -71,6 +71,9 @@ interface StoreState {
   autoRescan: boolean
   /** 自动重扫间隔（秒，5 / 10 / 30 / 60）：出图节奏不同，扫描频率需求不同（偏好记忆） */
   autoRescanInterval: number
+  /** IndexedDB 会话存档状态；失败时保留待写操作并提供手动重试 */
+  persistenceStatus: PersistenceStatus
+  persistenceError: string | null
   /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
   dupeOnly: boolean
   /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
@@ -164,6 +167,8 @@ const state = reactive<StoreState>({
   dirBookmarks: [],
   autoRescan: safeGetItem(AUTO_RESCAN_KEY) === '1',
   autoRescanInterval: loadRescanInterval(),
+  persistenceStatus: 'checking',
+  persistenceError: null,
   dupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
@@ -602,7 +607,8 @@ export function clearAll() {
   dirtyItems.clear()
   dirtyThumbs.clear()
   deletedKeys.clear()
-  if (persistAvailable) void clearPersisted().catch(() => {})
+  pendingClear = true
+  void flushPersistNow()
 }
 
 /* ---------- 目录书签（FEAT-7 多目录：切换重扫目标 / 一键重扫） ---------- */
@@ -682,12 +688,9 @@ export async function setRescanHandle(
   dirBookmarks.set(id, { id, name: handle.name, handle, savedAt: Date.now() })
   refreshDirNames()
   syncAutoRescanTimer()
-  try {
-    // 句柄持久化不可用的浏览器（不支持结构化克隆）仅本次会话有效
-    if (persistAvailable) await saveDirBookmark(handle, id)
-  } catch {
-    // 忽略：重扫按钮仍在本会话可用
-  }
+  dirtyBookmarks = true
+  bookmarkRevision++
+  await flushPersistNow()
   return id
 }
 
@@ -714,7 +717,11 @@ export function forgetRescanHandle() {
   rescanBookmarkId = null
   state.rescanName = null
   syncAutoRescanTimer() // 自动重扫随当前目标消失停表；偏好保留，下次记住目录时自动恢复
-  if (persistAvailable && id) void removeDirBookmark(id).catch(() => {})
+  if (id) {
+    dirtyBookmarks = true
+    bookmarkRevision++
+    void flushPersistNow()
+  }
 }
 
 /** 清除全部目录书签（含当前重扫目标） */
@@ -725,7 +732,10 @@ export function clearAllDirBookmarks() {
   rescanBookmarkId = null
   state.rescanName = null
   syncAutoRescanTimer()
-  if (persistAvailable) void clearPersistedBookmarks().catch(() => {})
+  dirtyBookmarks = true
+  clearBookmarksPending = true
+  bookmarkRevision++
+  void flushPersistNow()
 }
 
 /** 扫描单个目录句柄（增量入列）：返回新增数，无权限 / 枚举失败返回 null（F3 抽取复用） */
@@ -827,7 +837,7 @@ watch(
   },
 )
 
-/* ---------- 会话持久化（探测失败时静默降级为纯内存） ---------- */
+/* ---------- 会话持久化：失败状态可见，未提交的数据留在内存待重试 ---------- */
 let persistAvailable = false
 let persistEpoch = 0
 const dirtyItems = new Map<string, ImageItem>()
@@ -835,6 +845,25 @@ const dirtyItems = new Map<string, ImageItem>()
 const dirtyThumbs = new Map<string, Uint8Array>()
 const deletedKeys = new Set<string>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
+let flushRunning = false
+let pendingClear = false
+let dirtyBookmarks = false
+let clearBookmarksPending = false
+let bookmarkRevision = 0
+
+function persistenceErrorText(err: unknown): string {
+  return err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+}
+
+function hasPendingPersistence(): boolean {
+  return (
+    pendingClear ||
+    dirtyBookmarks ||
+    dirtyItems.size > 0 ||
+    dirtyThumbs.size > 0 ||
+    deletedKeys.size > 0
+  )
+}
 
 /**
  * 把存档记录装回列表（hydrate 与测试共用）：跳过同指纹已存在项
@@ -846,6 +875,7 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
  */
 export function restoreArchived(records: PersistRecord[]) {
   for (const rec of records) {
+    if (deletedKeys.has(rec.key)) continue
     if (seenKeys.has(rec.key)) continue
     // 同指纹存档卡已在列：hydrate 分批恢复未完成时导入备份，同一记录会从两条路径到达，
     // 存档项从不写入 seenKeys（为了允许回挂），这里以 detachedByKey 兜底防重复卡片
@@ -869,27 +899,56 @@ function markDirty(item: ImageItem) {
 }
 
 function schedulePersist() {
-  if (!persistAvailable || flushTimer !== null) return
+  if (!persistAvailable) return
+  state.persistenceStatus = 'saving'
+  state.persistenceError = null
+  if (flushTimer !== null) return
   flushTimer = setTimeout(() => {
     flushTimer = null
     void flushPersist()
   }, 500)
 }
 
+async function flushPersistNow() {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  await flushPersist()
+}
+
 async function flushPersist() {
+  if (!persistAvailable) return
+  if (flushRunning) {
+    schedulePersist()
+    return
+  }
+  flushRunning = true
+  state.persistenceStatus = 'saving'
+  state.persistenceError = null
   const epoch = persistEpoch
   // 取消检查贯穿到事务创建前：flush 在 await getDb 期间遇 clearAll 时，
   // persistEpoch 已作废本轮，写库若继续排队会落在 clearPersisted 之后，把已清历史写回
   const isStale = () => epoch !== persistEpoch
+  const clearBatch = pendingClear
+  const bookmarkBatch = dirtyBookmarks ? [...dirBookmarks.values()] : null
+  const bookmarkRevisionBatch = bookmarkRevision
+  const clearBookmarksBatch = clearBookmarksPending
   const items = [...dirtyItems.values()]
   dirtyItems.clear()
   const thumbs = new Map(dirtyThumbs)
   dirtyThumbs.clear()
   const keys = [...deletedKeys]
   deletedKeys.clear()
+  let failed = false
   try {
     // 清空列表会作废本轮写库，避免把已删除的历史写回去
     if (isStale()) return
+    if (clearBatch) {
+      await clearPersisted()
+      if (isStale()) return
+      pendingClear = false
+    }
     const records = items
       .map((it) => {
         const r = toRecord(it)
@@ -902,10 +961,21 @@ async function flushPersist() {
       .filter((r) => r !== null)
     if (records.length) await putPersisted(records, isStale)
     if (keys.length && !isStale()) await deletePersisted(keys, isStale)
+    if (bookmarkBatch && !isStale()) {
+      await clearPersistedBookmarks()
+      for (const bookmark of bookmarkBatch) {
+        if (isStale()) return
+        await saveDirBookmark(bookmark.handle, bookmark.id)
+      }
+    }
+    if (isStale()) return
+    if (bookmarkBatch && bookmarkRevisionBatch === bookmarkRevision) {
+      dirtyBookmarks = false
+      clearBookmarksPending = false
+    }
   } catch (err) {
-    // 瞬态写库失败（标签页隐藏期 IO 错误等）：未作废且仍存活的项塞回暂存区，
-    // 随下一次 markDirty 触发的 flush 一并重试；失败不主动重排，持久失败（配额）不空转。
-    // 缩略图字节随批次保留（重试时重新附带）；已入库的批次缩略图本就与记录同事务写入
+    failed = true
+    // 失败时保留整个批次；UI 提供显式重试，避免持久错误下无界自动重试。
     if (!isStale()) {
       for (const it of items) {
         if (!liveIds.has(it.id)) continue
@@ -916,36 +986,77 @@ async function flushPersist() {
       }
       // 删除标记不覆盖写库期间被重新 markDirty 的指纹（后者已从 deletedKeys 摘除）
       for (const k of keys) if (!dirtyItems.has(k)) deletedKeys.add(k)
+      if (bookmarkBatch) dirtyBookmarks = true
+      if (clearBookmarksBatch) clearBookmarksPending = true
+      state.persistenceStatus = 'error'
+      state.persistenceError = persistenceErrorText(err)
     }
     console.warn('[comfyui-info] 存档写入失败，暂存区保留待重试:', err)
-    return
+  } finally {
+    flushRunning = false
   }
-  if (dirtyItems.size || deletedKeys.size) schedulePersist() // 写库期间又有变更
+  if (isStale() || failed) return
+  if (hasPendingPersistence()) schedulePersist()
+  else {
+    state.persistenceStatus = 'saved'
+    state.persistenceError = null
+  }
 }
 
-/** 启动恢复：探测 IndexedDB 可用性，可用则装回历史存档与记住的扫描目录；失败静默降级纯内存 */
+/** 启动 / 手动重试恢复 IndexedDB；失败状态写入界面供用户判断和重试。 */
 async function hydrate() {
+  state.persistenceStatus = 'checking'
+  state.persistenceError = null
   try {
     persistAvailable = await probePersistence()
-    if (!persistAvailable) return
-    await restoreArchivedInChunks(await loadPersisted())
-    // 恢复全部目录书签（FEAT-7），最近记住的作为当前重扫目标
-    const bookmarks = await loadDirBookmarks()
-    for (const bm of bookmarks) {
-      dirBookmarks.set(bm.id, bm)
+    if (!persistAvailable) {
+      state.persistenceStatus = 'unavailable'
+      state.persistenceError = null
+      return
     }
+    if (!pendingClear) {
+      const records = await loadPersisted()
+      await restoreArchivedInChunks(records, () => pendingClear)
+    }
+    // 恢复全部目录书签（FEAT-7），最近记住的作为当前重扫目标
+    const bookmarks = clearBookmarksPending ? [] : await loadDirBookmarks()
+    for (const bm of bookmarks) dirBookmarks.set(bm.id, bm)
     refreshDirNames()
     const latest = bookmarks[0]
-    if (latest) {
+    if (latest && !rescanBookmarkId) {
       rescanHandle = latest.handle
       rescanBookmarkId = latest.id
-      refreshDirNames()
       syncAutoRescanTimer() // 偏好为开时恢复自动监视（权限需重新授权时各拍静默重试）
     }
+    if (hasPendingPersistence()) schedulePersist()
+    else state.persistenceStatus = 'saved'
   } catch (err) {
-    // 恢复失败等同不可用：静默降级纯内存，但保留一条告警便于排查环境问题
-    console.warn('[comfyui-info] 会话恢复失败，本次会话不启用持久化:', err)
     persistAvailable = false
+    state.persistenceStatus = 'error'
+    state.persistenceError = persistenceErrorText(err)
+    console.warn('[comfyui-info] 会话恢复失败，本次会话不启用持久化:', err)
+  }
+}
+
+/** 手动重试失败的 IndexedDB 操作；恢复连接后将当前内存记录一并补写。 */
+export async function retryPersistence(): Promise<void> {
+  if (state.persistenceStatus === 'checking' || flushRunning) return
+  if (!persistAvailable) {
+    await hydrate()
+    if (!persistAvailable) return
+    for (const item of state.items) {
+      if (item.status !== 'pending') markDirty(item)
+    }
+  }
+  if (hasPendingPersistence()) {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    await flushPersist()
+  } else {
+    state.persistenceStatus = 'saved'
+    state.persistenceError = null
   }
 }
 
@@ -959,12 +1070,14 @@ const yieldToMain = () => new Promise<void>((r) => setTimeout(r, 0))
  * 存档分批装回：每批之间让出主线程处理渲染与输入，卡片渐进出现；
  * 全部装回后再空闲分批预热存档项的搜索串（命中 WeakMap 缓存后首次搜索零等待）。
  */
-async function restoreArchivedInChunks(records: PersistRecord[]) {
+async function restoreArchivedInChunks(records: PersistRecord[], cancelled = () => false) {
   for (let i = 0; i < records.length; i += RESTORE_CHUNK) {
+    if (cancelled()) return
     restoreArchived(records.slice(i, i + RESTORE_CHUNK))
     await yieldToMain()
   }
   for (let i = 0; i < state.items.length; i += RESTORE_CHUNK) {
+    if (cancelled()) return
     let warmed = false
     for (let j = i; j < Math.min(i + RESTORE_CHUNK, state.items.length); j++) {
       const it = state.items[j]!

@@ -32,6 +32,7 @@ import {
   importArchive,
   modelOptions,
   parsing,
+  retryPersistence,
   rescanAllDirectories,
   rescanDirectory,
   RESCAN_INTERVALS,
@@ -67,6 +68,32 @@ const message = useMessage()
 // Chromium 系走 File System Access 选择器（可记住目录、一键重扫），其余回退 webkitdirectory
 const fsPickSupported = supportsDirectoryPicker()
 const scanning = ref(false)
+const persistenceLabel = computed(() => {
+  switch (store.persistenceStatus) {
+    case 'checking':
+      return t('persistence.checking')
+    case 'saving':
+      return t('persistence.saving')
+    case 'error':
+      return t('persistence.error')
+    case 'unavailable':
+      return t('persistence.unavailable')
+    default:
+      return t('persistence.saved')
+  }
+})
+const persistenceCanRetry = computed(
+  () => store.persistenceStatus === 'error' || store.persistenceStatus === 'unavailable',
+)
+const persistenceTooltip = computed(() => {
+  if (store.persistenceStatus === 'unavailable') return t('persistence.unavailableDetail')
+  if (store.persistenceError) {
+    return t('persistence.errorDetail', { msg: store.persistenceError })
+  }
+  if (store.persistenceStatus === 'saving') return t('persistence.saving')
+  if (store.persistenceStatus === 'checking') return t('persistence.checking')
+  return t('persistence.okDetail')
+})
 // 统计抽屉显隐提升到 ui.ts：App 的全局 Esc（清空选择）需要感知抽屉是否打开
 const showStats = statsVisible
 // 模型库抽屉（F4）同理
@@ -352,6 +379,23 @@ function savePreset() {
         {{ t('topbar.archive') }}
       </NButton>
     </NDropdown>
+    <NTooltip>
+      <template #trigger>
+        <NButton
+          size="small"
+          secondary
+          :type="persistenceCanRetry ? 'error' : 'default'"
+          :loading="store.persistenceStatus === 'checking' || store.persistenceStatus === 'saving'"
+          :disabled="!persistenceCanRetry"
+          :aria-label="persistenceCanRetry ? t('persistence.retry') : persistenceLabel"
+          @click="retryPersistence"
+        >
+          <template #icon><Icon :name="persistenceCanRetry ? 'refresh' : 'archive'" /></template>
+          {{ persistenceLabel }}
+        </NButton>
+      </template>
+      {{ persistenceTooltip }}
+    </NTooltip>
     <NTooltip v-if="store.items.length > 0">
       <template #trigger>
         <NPopconfirm @positive-click="clearAll">
