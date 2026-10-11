@@ -2,7 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import type { ImageItem } from '../types'
 import { shortModel } from '../lib/utils'
-import { ensureItemUrl, store, workflowClusters } from '../composables/store'
+import { ensureItemUrl, sameSourceGroups, store, workflowClusters } from '../composables/store'
+import { t } from '../locales'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ item: ImageItem; index: number; selected?: boolean }>()
@@ -16,6 +17,14 @@ onMounted(() => ensureItemUrl(props.item))
 /** F3：聚类排序模式下展示「同工作流第 x/y 张」 */
 const cluster = computed(() =>
   store.sortMode === 'workflow' ? workflowClusters.value.get(props.item.id) : undefined,
+)
+
+/** F4：同源重复（同工作流同种子）组信息，组内 ≥2 张时展示角标 */
+const dupe = computed(() => sameSourceGroups.value.get(props.item.id))
+
+/** FEAT-8：URL 未创建前不渲染空 src 的 img（覆盖空占位而非「无法预览」） */
+const showImg = computed(
+  () => !broken.value && !props.item.detached && !props.item.metaOnly && !!props.item.url,
 )
 
 /** Ctrl/⌘+点击或点击指示器切换选中，Shift+点击区间选择，普通点击打开详情 */
@@ -41,11 +50,11 @@ const srcColor = computed(() => {
 })
 
 const srcLabel = computed(() => {
-  if (props.item.status === 'error') return '解析失败'
-  if (props.item.status !== 'done') return '解析中'
+  if (props.item.status === 'error') return t('src.error')
+  if (props.item.status !== 'done') return t('card.parsing')
   if (props.item.source === 'comfyui') return 'ComfyUI'
   if (props.item.source === 'a1111') return 'A1111'
-  return '无元数据'
+  return t('src.none')
 })
 
 const dims = computed(() => {
@@ -71,54 +80,56 @@ const displayPath = computed(() => props.item.path ?? props.item.name)
     role="button"
     tabindex="0"
     :data-item-id="item.id"
-    :aria-label="`${item.name}，查看详情`"
-    :title="item.status === 'error' ? `${displayPath}（${item.error ?? '解析失败'}）` : displayPath"
+    :aria-label="t('card.openAria', { name: item.name })"
+    :title="
+      item.status === 'error'
+        ? t('card.errorTitle', { path: displayPath, error: item.error ?? t('src.error') })
+        : displayPath
+    "
     @click="onClick"
     @keydown.enter.exact.prevent="$emit('open')"
     @keydown.space.exact.prevent="$emit('open')"
     @keydown.ctrl.space.prevent="$emit('select-toggle')"
     @keydown.meta.space.prevent="$emit('select-toggle')"
   >
-    <img
-      v-if="!broken && !item.detached && !item.metaOnly"
-      :src="item.url"
-      loading="lazy"
-      alt=""
-      @error="broken = true"
-    />
+    <img v-if="showImg" :src="item.url" loading="lazy" alt="" @error="broken = true" />
     <div v-else-if="item.metaOnly" class="archived">
       <Icon name="file-text" :size="20" :stroke="1.8" />
-      <span>参数文件</span>
-      <span class="tip">无预览图</span>
+      <span>{{ t('card.metaFile') }}</span>
+      <span class="tip">{{ t('card.metaFileTip') }}</span>
     </div>
     <div v-else-if="item.detached" class="archived">
       <Icon name="image" :size="20" :stroke="1.8" />
-      <span>已存档</span>
-      <span class="tip">重新拖入原文件可回挂</span>
+      <span>{{ t('card.archived') }}</span>
+      <span class="tip">{{ t('card.archivedTip') }}</span>
     </div>
-    <div v-else class="broken">无法预览</div>
+    <div v-else-if="!item.url" class="broken" />
+    <div v-else class="broken">{{ t('card.broken') }}</div>
     <div class="src" :style="{ '--src-color': srcColor }"><i />{{ srcLabel }}</div>
     <button
       class="card-check"
       :class="{ on: selected }"
       type="button"
       tabindex="-1"
-      :title="selected ? '取消选中' : '选中'"
+      :title="selected ? t('card.unselect') : t('card.select')"
       :aria-pressed="!!selected"
-      aria-label="选中这张图片"
+      :aria-label="t('card.selectAria')"
       @click.stop.prevent="$emit('select-toggle')"
     />
     <button
       class="card-remove"
       type="button"
-      title="从列表移除"
-      aria-label="从列表移除这张图片"
+      :title="t('card.removeTitle')"
+      :aria-label="t('card.removeAria')"
       @click.stop="$emit('remove')"
     >
       <Icon name="x" :size="12" :stroke="2.4" />
     </button>
-    <div v-if="cluster && cluster.total > 1" class="cluster-badge" title="同工作流出图序号">
-      同款 {{ cluster.seq }}/{{ cluster.total }}
+    <div v-if="dupe && dupe.total > 1" class="cluster-badge" :title="t('card.sameSourceTitle')">
+      {{ t('card.sameSource', { x: dupe.seq, y: dupe.total }) }}
+    </div>
+    <div v-else-if="cluster && cluster.total > 1" class="cluster-badge" :title="t('card.sameWorkflowTitle')">
+      {{ t('card.sameWorkflow', { x: cluster.seq, y: cluster.total }) }}
     </div>
     <div v-if="modelShort || dims" class="veil">
       <span class="model">{{ modelShort }}</span>

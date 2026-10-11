@@ -33,7 +33,9 @@ import {
   NMessageProvider,
   NPopconfirm,
   darkTheme,
+  dateEnUS,
   dateZhCN,
+  enUS,
   zhCN,
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
@@ -45,6 +47,7 @@ import EmptyState from './components/EmptyState.vue'
 import { addFiles, filteredItems, parsing, rangeIds, removeItem, removeItems, retryAllFailed, stats, store } from './composables/store'
 import { exportItems, exportOptions } from './lib/export'
 import { copyText } from './lib/utils'
+import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
 
 /* ---------- 主题 ---------- */
@@ -179,8 +182,8 @@ function onRemove(item: ImageItem) {
 // 批量重试全部解析失败的图片（O4）
 function onRetryAll() {
   const n = retryAllFailed()
-  if (n) appMessage().success(`已重新排队 ${n} 张失败图片`)
-  else appMessage().info('没有可重试的失败项（存档失败项需重新拖入原文件）')
+  if (n) appMessage().success(t('msg.retried', { n }))
+  else appMessage().info(t('msg.nothingToRetry'))
 }
 
 /* ---------- 多选与批量操作 ---------- */
@@ -222,19 +225,19 @@ async function batchCopyPrompts() {
     .map((i) => i.params!.positive.join('\n'))
     .filter((s) => s.trim() !== '')
   if (!prompts.length) {
-    appMessage().warning('所选图片中还没有已解析出提示词的项')
+    appMessage().warning(t('msg.noParsedPrompts'))
     return
   }
   const ok = await copyText(prompts.join('\n'))
-  if (ok) appMessage().success(`已复制 ${prompts.length} 张图片的正向提示词`)
-  else appMessage().error('复制失败，请手动选择文本复制')
+  if (ok) appMessage().success(t('msg.copiedPrompts', { n: prompts.length }))
+  else appMessage().error(t('common.copyFailed'))
 }
 
 const exporting = ref(false)
 
 async function batchExport(key: string | number) {
   if (parsing.value) {
-    appMessage().warning('扫描仍在进行，请等扫描完成后再导出')
+    appMessage().warning(t('common.exportWhileParsing'))
     return
   }
   exporting.value = true
@@ -284,6 +287,17 @@ function onKeydown(e: KeyboardEvent) {
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+
+/* ---------- 剪贴板粘贴添加（FEAT-10）：Ctrl / ⌘+V 直接贴入图片或参数文件 ---------- */
+function onPaste(e: ClipboardEvent) {
+  const files = e.clipboardData?.files
+  if (!files?.length) return
+  e.preventDefault()
+  const added = addFiles(Array.from(files).map((f) => ({ file: f })))
+  if (added) appMessage().success(t('msg.pasted', { n: added }))
+}
+onMounted(() => window.addEventListener('paste', onPaste))
+onBeforeUnmount(() => window.removeEventListener('paste', onPaste))
 
 // 抽屉关闭后把焦点返还给来源卡片（对话框关闭的 ARIA 模式）
 watch(showDetail, (v) => {
@@ -367,8 +381,8 @@ async function onDrop(e: DragEvent) {
   <NConfigProvider
     :theme="store.dark ? darkTheme : null"
     :theme-overrides="store.dark ? darkOverrides : lightOverrides"
-    :locale="zhCN"
-    :date-locale="dateZhCN"
+    :locale="locale === 'en' ? enUS : zhCN"
+    :date-locale="locale === 'en' ? dateEnUS : dateZhCN"
   >
     <NMessageProvider>
       <MessageBridge />
@@ -383,42 +397,43 @@ async function onDrop(e: DragEvent) {
 
         <div v-if="store.items.length" class="statline">
           <span
-            >已加载 <b>{{ store.items.length }}</b></span
+            >{{ t('stat.loaded') }} <b>{{ store.items.length }}</b></span
           >
           <span
-            ><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b> ComfyUI
-            原图</span
+            ><i class="dot" style="background: var(--accent)" /><b>{{ stats.comfyui }}</b>
+            {{ t('src.comfyui') }}</span
           >
           <span
             ><i class="dot" style="background: var(--teal)" /><b>{{ stats.a1111 }}</b> A1111</span
           >
           <span
             ><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b>
-            无元数据</span
+            {{ t('src.none') }}</span
           >
           <span
             v-if="stats.error"
             class="stat-error"
             role="button"
             tabindex="0"
-            title="点击查看解析失败的图片"
+            :title="t('stat.errorTitle')"
             @click="store.sourceFilter = 'error'"
             @keydown.enter.prevent="store.sourceFilter = 'error'"
             @keydown.space.prevent="store.sourceFilter = 'error'"
           >
-            <i class="dot" style="background: var(--danger)" /><b>{{ stats.error }}</b> 解析失败
+            <i class="dot" style="background: var(--danger)" /><b>{{ stats.error }}</b>
+            {{ t('src.error') }}
           </span>
           <NButton
             v-if="stats.error"
             size="tiny"
             quaternary
             type="error"
-            title="重试全部解析失败的图片"
+            :title="t('stat.retryAllTitle')"
             @click="onRetryAll"
           >
-            重试
+            {{ t('common.retry') }}
           </NButton>
-          <span v-if="parsing" style="color: var(--accent)">扫描中…</span>
+          <span v-if="parsing" style="color: var(--accent)">{{ t('stat.parsing') }}</span>
         </div>
 
         <main ref="galleryRef" class="gallery">
@@ -448,29 +463,29 @@ async function onDrop(e: DragEvent) {
         </main>
 
         <div v-if="selectedItems.length" class="select-bar" role="toolbar" aria-label="批量操作">
-          <span class="sel-count">已选 <b>{{ selectedItems.length }}</b> 张</span>
-          <NButton size="tiny" secondary @click="selectAllFiltered">全选筛选结果</NButton>
+          <span class="sel-count" v-html="t('bar.selected', { n: selectedItems.length })" />
+          <NButton size="tiny" secondary @click="selectAllFiltered">{{ t('bar.selectAllFiltered') }}</NButton>
           <NButton
             v-if="selectedItems.length === 2"
             size="tiny"
             secondary
             :disabled="!canCompare"
-            title="两张图需都已解析出参数"
+            :title="t('bar.compareTitle')"
             @click="openCompare"
           >
-            对比
+            {{ t('bar.compare') }}
           </NButton>
-          <NButton size="tiny" secondary @click="batchCopyPrompts">复制提示词</NButton>
+          <NButton size="tiny" secondary @click="batchCopyPrompts">{{ t('bar.copyPrompts') }}</NButton>
           <NDropdown trigger="click" :options="exportOptions" @select="batchExport">
-            <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">导出选中</NButton>
+            <NButton size="tiny" secondary :loading="exporting" :disabled="exporting">{{ t('bar.exportSelected') }}</NButton>
           </NDropdown>
           <NPopconfirm @positive-click="batchRemove">
             <template #trigger>
-              <NButton size="tiny" secondary type="error">移除选中</NButton>
+              <NButton size="tiny" secondary type="error">{{ t('bar.removeSelected') }}</NButton>
             </template>
-            确定移除选中的 {{ selectedItems.length }} 张图片？
+            {{ t('bar.removeConfirm', { n: selectedItems.length }) }}
           </NPopconfirm>
-          <NButton size="tiny" quaternary @click="clearSelection">取消选择</NButton>
+          <NButton size="tiny" quaternary @click="clearSelection">{{ t('bar.clearSelection') }}</NButton>
         </div>
 
         <DetailDrawer v-model:show="showDetail" :item="current" />
@@ -478,7 +493,7 @@ async function onDrop(e: DragEvent) {
         <CompareDrawer v-model:show="showCompare" :a="comparePair?.[0] ?? null" :b="comparePair?.[1] ?? null" />
 
         <div v-if="dragging" class="drop-overlay">
-          <div class="inner">松开以添加图片 / 文件夹 / 工作流文件</div>
+          <div class="inner">{{ t('drop.hint') }}</div>
         </div>
       </div>
     </NMessageProvider>

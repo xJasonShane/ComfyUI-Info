@@ -102,7 +102,7 @@ test('解析 → 详情 → 统计 → 搜索 → 导出 CSV 全链路', async (
   await page.getByRole('button', { name: '生成统计' }).click()
   const stats = page.locator('.stats')
   await expect(stats).toBeVisible()
-  await expect(stats).toContainText('模型（1）')
+  await expect(stats).toContainText('模型 (1)')
   await stats.locator('.stat-row').first().click()
   await expect(stats).not.toBeVisible()
   await expect(cards).toHaveCount(1) // 模型筛选命中同一张

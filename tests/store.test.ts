@@ -26,8 +26,10 @@ vi.mock('../src/lib/persist', async (importOriginal) => {
     putPersisted: vi.fn(async () => {}),
     deletePersisted: vi.fn(async () => {}),
     clearPersisted: vi.fn(async () => {}),
-    saveHandle: vi.fn(async () => {}),
-    clearHandle: vi.fn(async () => {}),
+    saveDirBookmark: vi.fn(async () => {}),
+    removeDirBookmark: vi.fn(async () => {}),
+    clearDirBookmarks: vi.fn(async () => {}),
+    loadDirBookmarks: vi.fn(async () => []),
     importPersisted: vi.fn(async () => []),
   }
 })
@@ -863,6 +865,78 @@ it('聚类指纹缓存随解析结果失效：结果应用前后分组正确更�
   expect(c.get(api.store.items[0]!.id)).toEqual({ group: 0, seq: 1, total: 2 })
   expect(c.get(api.store.items[1]!.id)).toEqual({ group: 0, seq: 2, total: 2 })
   api.store.sortMode = 'default'
+})
+
+it('同源出图检测：同工作流同种子分组，只看重复筛选（FEAT-4）', async () => {
+  const { extractComfyParams } = await import('../src/lib/comfyExtract')
+  const promptA = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20 } } })
+  const promptB = JSON.stringify({ '3': { class_type: 'KSampler', inputs: { seed: 9, steps: 20 } } })
+  vi.mocked(parser.parseImage).mockImplementation((f: File) => {
+    const prompt = f.name.startsWith('a') ? promptA : promptB
+    return Promise.resolve({
+      raw: { source: 'comfyui', prompt },
+      params: extractComfyParams(prompt) ?? undefined,
+    })
+  })
+  api.addFiles([
+    { file: new File(['x'], 'a1.png', { lastModified: 1000 }) },
+    { file: new File(['x'], 'a2.png', { lastModified: 2000 }) },
+    { file: new File(['x'], 'b1.png', { lastModified: 3000 }) },
+  ])
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  const idOf = (n: string) => api.store.items.find((i) => i.name === n)!.id
+  const groups = api.sameSourceGroups.value
+  expect(groups.get(idOf('a1.png'))!.total).toBe(2) // a1 / a2 同工作流同种子
+  expect(groups.get(idOf('b1.png'))!.total).toBe(1) // 不同种子自成一组
+  expect(api.dupeCount.value).toBe(2)
+
+  // 只看重复：b1（非重复）被隐藏
+  api.store.dupeOnly = true
+  expect(api.filteredItems.value.map((i) => i.name).sort()).toEqual(['a1.png', 'a2.png'])
+  api.store.dupeOnly = false
+  expect(api.filteredItems.value).toHaveLength(3)
+})
+
+it('统计增强：按天出图量与提示词高频词（FEAT-5）', async () => {
+  const parameters = 'masterpiece, a cat, masterpiece\nSteps: 20'
+  vi.mocked(parser.parseImage).mockResolvedValue({
+    raw: { source: 'a1111', parameters },
+    params: parseA1111Parameters(parameters),
+  })
+  const day = new Date(2026, 9, 11).getTime() // 本地时区 2026-10-11
+  api.addFiles([
+    { file: new File(['x'], 'a.png', { lastModified: day }) },
+    { file: new File(['x'], 'b.png', { lastModified: day + 1 }) },
+  ])
+  await flush()
+  api.store.sourceFilter = 'all'
+
+  expect(api.dailyCounts.value).toEqual([{ day: '2026-10-11', count: 2 }])
+  // masterpiece 每条提示词出现 2 次 × 2 张 = 4；单字符 / 纯数字噪声被过滤
+  expect(api.keywordStats.value[0]).toEqual({ name: 'masterpiece', count: 4 })
+  expect(api.keywordStats.value.some((w) => w.name === 'cat')).toBe(true)
+})
+
+it('多目录书签：记住多个目录、切换目标、忘记仅当前（FEAT-7）', async () => {
+  await api.setRescanHandle({ name: 'out-a' } as unknown as FileSystemDirectoryHandle)
+  await api.setRescanHandle({ name: 'out-b' } as unknown as FileSystemDirectoryHandle)
+  expect([...api.store.dirBookmarks].sort()).toEqual(['out-a', 'out-b'])
+  expect(api.store.rescanName).toBe('out-b') // 最近记住的为当前目标
+
+  expect(api.switchRescanTarget('out-a')).toBe(true)
+  expect(api.store.rescanName).toBe('out-a')
+  expect(api.switchRescanTarget('nope')).toBe(false)
+  expect(api.store.rescanName).toBe('out-a')
+
+  // 忘记仅移除当前书签，其余保留
+  api.forgetRescanHandle()
+  expect(api.store.rescanName).toBeNull()
+  expect(api.store.dirBookmarks).toEqual(['out-b'])
+
+  api.clearAllDirBookmarks()
+  expect(api.store.dirBookmarks).toEqual([])
 })
 
 it('预览 URL 惰性创建：入列为空，渲染时才生成（P2）', () => {

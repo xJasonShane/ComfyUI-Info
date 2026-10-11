@@ -7,6 +7,7 @@ import Icon from './Icon.vue'
 import { baseName, copyText, downloadText, humanBytes } from '../lib/utils'
 import { retryItem, ensureItemUrl } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
+import { dateLocale, t } from '../locales'
 
 const props = defineProps<{ item: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
@@ -15,6 +16,18 @@ const message = useMessage()
 const drawerWidth = useDrawerWidth(940)
 
 const p = computed(() => props.item?.params)
+
+/* ---------- FEAT-8：详情大图点击放大（点遮罩关闭，切图 / 关抽屉自动收起） ---------- */
+const zoomed = ref(false)
+watch(
+  () => props.item?.id,
+  () => {
+    zoomed.value = false
+  },
+)
+watch(show, (v) => {
+  if (!v) zoomed.value = false
+})
 
 // P2：详情大图与抽屉浏览同样按需创建预览 URL
 watch(
@@ -27,7 +40,7 @@ watch(
 
 const fileTime = computed(() => {
   if (!props.item) return ''
-  return new Date(props.item.mtime).toLocaleString('zh-CN', {
+  return new Date(props.item.mtime).toLocaleString(dateLocale(), {
     hour12: false,
     month: 'numeric',
     day: 'numeric',
@@ -80,28 +93,26 @@ const corruptHint = computed(() => {
   const it = props.item
   if (!it) return ''
   if (!it.raw.prompt && !it.raw.parameters && it.raw.workflow) {
-    return '检测到 UI 工作流，但无法从中提取结构化参数；可在下方「UI 工作流」页签查看或下载'
+    return t('detail.corruptUiOnly')
   }
-  return it.raw.source === 'comfyui'
-    ? '内嵌的工作流 JSON 无法解析（可能被截断或损坏），可在下方查看原始 JSON 排查'
-    : '参数文本无法解析为结构化参数，可在下方查看原文'
+  return it.raw.source === 'comfyui' ? t('detail.corruptJson') : t('detail.corruptText')
 })
 
 const generalRows = computed<[string, string][]>(() => {
   const params = p.value
   const rows: [string, string][] = []
   if (!params) return rows
-  if (params.models.length) rows.push(['模型', params.models.join(' + ')])
-  if (params.vaes.length) rows.push(['VAE', params.vaes.join(' + ')])
-  if (params.clipSkip !== undefined) rows.push(['Clip Skip', String(params.clipSkip)])
+  if (params.models.length) rows.push([t('detail.model'), params.models.join(' + ')])
+  if (params.vaes.length) rows.push([t('detail.vae'), params.vaes.join(' + ')])
+  if (params.clipSkip !== undefined) rows.push([t('detail.clipSkip'), String(params.clipSkip)])
   if (params.width && params.height) {
     let s = `${params.width} × ${params.height}`
-    if (params.batch && params.batch > 1) s += `，每批 ${params.batch} 张`
-    rows.push(['出图尺寸', s])
+    if (params.batch && params.batch > 1) s += t('detail.perBatch', { n: params.batch })
+    rows.push([t('detail.size'), s])
   }
-  if (params.upscalers.length) rows.push(['放大模型', params.upscalers.join(' + ')])
-  if (params.controlNets.length) rows.push(['ControlNet', params.controlNets.join(' + ')])
-  if (params.nodeCount) rows.push(['工作流节点', `${params.nodeCount} 个`])
+  if (params.upscalers.length) rows.push([t('detail.upscaler'), params.upscalers.join(' + ')])
+  if (params.controlNets.length) rows.push([t('detail.controlnet'), params.controlNets.join(' + ')])
+  if (params.nodeCount) rows.push([t('detail.nodeCount'), t('detail.nodes', { n: params.nodeCount })])
   return rows
 })
 
@@ -111,12 +122,12 @@ const samplerRows = computed<[string, string][]>(() => {
   const s = sampler.value
   const rows: [string, string][] = []
   if (!s) return rows
-  if (s.sampler) rows.push(['采样器', s.sampler])
-  if (s.scheduler) rows.push(['调度器', s.scheduler])
-  if (s.steps != null) rows.push(['步数', String(s.steps)])
-  if (s.cfg != null) rows.push(['CFG', String(s.cfg)])
-  if (s.seed) rows.push(['种子', s.seed])
-  if (s.denoise != null) rows.push(['重绘幅度', String(s.denoise)])
+  if (s.sampler) rows.push([t('detail.sampler'), s.sampler])
+  if (s.scheduler) rows.push([t('detail.scheduler'), s.scheduler])
+  if (s.steps != null) rows.push([t('detail.steps'), String(s.steps)])
+  if (s.cfg != null) rows.push([t('detail.cfg'), String(s.cfg)])
+  if (s.seed) rows.push([t('detail.seed'), s.seed])
+  if (s.denoise != null) rows.push([t('detail.denoise'), String(s.denoise)])
   return rows
 })
 
@@ -126,7 +137,7 @@ function stageText(s: SamplerInfo): string {
     `cfg ${s.cfg ?? '-'}`,
     `seed ${s.seed ?? '-'}`,
     `denoise ${s.denoise ?? '-'}`,
-    s.sampler ? `采样 ${s.sampler}` : '',
+    s.sampler ? `${t('detail.sampler')} ${s.sampler}` : '',
   ].filter(Boolean)
   return `#${s.nodeId} ${s.classType} ｜ ${parts.join(' · ')}`
 }
@@ -136,15 +147,15 @@ const negativeText = computed(() => p.value?.negative.join('\n') ?? '')
 
 const jsonText = computed(() => {
   if (!props.item) return ''
-  if (tab.value === 'workflow') return props.item.raw.workflow ?? '（此图未内嵌 UI 工作流）'
+  if (tab.value === 'workflow') return props.item.raw.workflow ?? t('detail.noWorkflow')
   return props.item.raw.prompt ?? ''
 })
 
 async function copy(value: string | undefined, label: string) {
   if (!value) return
   const ok = await copyText(value)
-  if (ok) message.success(`${label}已复制`)
-  else message.error('复制失败，请手动选择文本复制')
+  if (ok) message.success(t('detail.copied', { label }))
+  else message.error(t('common.copyFailed'))
 }
 
 function downloadJson(text: string | undefined, suffix: string) {
@@ -157,12 +168,27 @@ function downloadJson(text: string | undefined, suffix: string) {
   <NDrawer v-model:show="show" :width="drawerWidth" placement="right">
     <div v-if="item" class="detail">
       <div class="detail-view">
-        <img v-if="item.url" :src="item.url" :alt="item.name" />
+        <img
+          v-if="item.url"
+          :src="item.url"
+          :alt="item.name"
+          :title="t('detail.zoomIn')"
+          @click="zoomed = true"
+        />
         <div v-else class="detail-noimg">
           <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
-          <span>{{ item.metaOnly ? '参数文件（无预览图）' : '图片未加载' }}</span>
-          <span v-if="!item.metaOnly" class="tip">重新拖入原文件即可回挂预览</span>
+          <span>{{ item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded') }}</span>
+          <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
         </div>
+      </div>
+      <div
+        v-if="zoomed"
+        class="img-zoom"
+        role="button"
+        :aria-label="t('detail.zoomClose')"
+        @click="zoomed = false"
+      >
+        <img :src="item.url" :alt="item.name" />
       </div>
 
       <div class="detail-panel">
@@ -170,14 +196,14 @@ function downloadJson(text: string | undefined, suffix: string) {
           <span style="flex: 1" :title="item.path ?? item.name">{{ item.path ?? item.name }}</span>
           <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
           <span>{{ humanBytes(item.size) }}</span>
-          <NButton size="tiny" quaternary circle aria-label="关闭详情" @click="show = false">
+          <NButton size="tiny" quaternary circle :aria-label="t('detail.close')" @click="show = false">
             <template #icon><Icon name="x" :size="13" /></template>
           </NButton>
         </div>
 
         <template v-if="p">
           <div class="section">
-            <div class="section-title">生成参数</div>
+            <div class="section-title">{{ t('detail.genParams') }}</div>
             <dl class="kv">
               <template v-for="([k, v], i) in generalRows" :key="i">
                 <dt>{{ k }}</dt>
@@ -194,8 +220,9 @@ function downloadJson(text: string | undefined, suffix: string) {
           <div v-if="samplerRows.length" class="section">
             <div class="section-title">
               <span
-                >采样参数<template v-if="p.samplers.length > 1"
-                  >（{{ p.samplers.length }} 阶段）</template
+                >{{ t('detail.samplerParams')
+                }}<template v-if="p.samplers.length > 1"
+                  >{{ t('detail.stages', { n: p.samplers.length }) }}</template
                 ></span
               >
             </div>
@@ -218,14 +245,24 @@ function downloadJson(text: string | undefined, suffix: string) {
           </div>
 
           <div v-if="p.loras.length" class="section">
-            <div class="section-title">LoRA（{{ p.loras.length }}）</div>
+            <div class="section-title">{{ t('detail.loraCount', { n: p.loras.length }) }}</div>
             <div v-for="l in p.loras" :key="l.name" class="stage-row">
-              <span class="tag">LoRA</span>
+              <span class="tag">{{ t('detail.loraTag') }}</span>
               <span class="txt">
-                {{ l.name }}（模型强度 {{ l.strengthModel ?? '-' }} / 文本强度
-                {{ l.strengthClip ?? '-' }}{{ l.hash ? ` · ${l.hash}` : '' }}）
+                {{ l.name }}{{
+                  t('detail.loraStrength', {
+                    m: l.strengthModel ?? '-',
+                    c: l.strengthClip ?? '-',
+                    hash: l.hash ? ` · ${l.hash}` : '',
+                  })
+                }}
               </span>
-              <button class="kv-copy" type="button" title="复制 LoRA 名称" @click="copy(l.name, 'LoRA 名称')">
+              <button
+                class="kv-copy"
+                type="button"
+                :title="t('detail.copyLoraName')"
+                @click="copy(l.name, t('detail.loraTag'))"
+              >
                 <Icon name="copy" :size="11" :stroke="2.2" />
               </button>
             </div>
@@ -233,10 +270,10 @@ function downloadJson(text: string | undefined, suffix: string) {
 
           <div v-if="positiveText" class="section">
             <div class="section-title">
-              <span>正向提示词</span>
-              <NButton size="tiny" quaternary @click="copy(positiveText, '正向提示词')">
+              <span>{{ t('detail.positive') }}</span>
+              <NButton size="tiny" quaternary @click="copy(positiveText, t('detail.positive'))">
                 <template #icon><Icon name="copy" :size="13" /></template>
-                复制
+                {{ t('common.copy') }}
               </NButton>
             </div>
             <pre class="prompt-text">{{ positiveText }}</pre>
@@ -244,10 +281,10 @@ function downloadJson(text: string | undefined, suffix: string) {
 
           <div v-if="negativeText" class="section">
             <div class="section-title">
-              <span>负向提示词</span>
-              <NButton size="tiny" quaternary @click="copy(negativeText, '负向提示词')">
+              <span>{{ t('detail.negative') }}</span>
+              <NButton size="tiny" quaternary @click="copy(negativeText, t('detail.negative'))">
                 <template #icon><Icon name="copy" :size="13" /></template>
-                复制
+                {{ t('common.copy') }}
               </NButton>
             </div>
             <pre class="prompt-text">{{ negativeText }}</pre>
@@ -255,24 +292,24 @@ function downloadJson(text: string | undefined, suffix: string) {
         </template>
 
         <div v-else-if="item.status === 'error'" class="notice">
-          <span class="notice-title">解析失败</span>
-          <p class="err-message">{{ item.error ?? '读取图片元数据时发生未知错误' }}</p>
+          <span class="notice-title">{{ t('detail.parseFailed') }}</span>
+          <p class="err-message">{{ item.error ?? t('detail.unknownParseError') }}</p>
           <NButton v-if="item.file" size="small" secondary @click="retryItem(item)">
             <template #icon><Icon name="refresh" :size="13" /></template>
-            重试
+            {{ t('common.retry') }}
           </NButton>
         </div>
         <div v-else-if="item.status !== 'done'" class="notice">
-          正在解析元数据…
+          {{ t('detail.parsingNow') }}
           <br />
-          <span style="font-size: 12px; color: var(--text-faint)">稍等片刻，参数马上出来</span>
+          <span style="font-size: 12px; color: var(--text-faint)">{{ t('detail.parsingHint') }}</span>
         </div>
         <div v-else-if="corruptRawText" class="notice">
-          <span class="notice-title">检测到生成元数据，但无法提取结构化参数</span>
+          <span class="notice-title">{{ t('detail.corruptTitle') }}</span>
           <p class="err-message">{{ corruptHint }}</p>
         </div>
         <div v-else class="notice">
-          未检测到 ComfyUI / A1111 生成元数据
+          {{ t('detail.noMetadata') }}
           <ul v-if="item.raw.hints?.length" class="hints">
             <li v-for="h in item.raw.hints" :key="h">{{ h }}</li>
           </ul>
@@ -280,30 +317,30 @@ function downloadJson(text: string | undefined, suffix: string) {
 
         <div v-if="showJsonTabs" class="section">
           <NTabs v-model:value="tab" type="segment" size="small" animated>
-            <NTabPane v-if="item.raw.parameters" name="raw" tab="原始参数">
+            <NTabPane v-if="item.raw.parameters" name="raw" :tab="t('detail.tabRaw')">
               <pre class="json-pre">{{ item.raw.parameters }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px">
-                <NButton size="tiny" secondary @click="copy(item.raw.parameters, '参数文本')">
-                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                <NButton size="tiny" secondary @click="copy(item.raw.parameters, t('detail.tabRaw'))">
+                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
               </div>
             </NTabPane>
-            <NTabPane v-if="item.raw.prompt" name="prompt" tab="Prompt JSON">
+            <NTabPane v-if="item.raw.prompt" name="prompt" :tab="t('detail.tabPrompt')">
               <pre class="json-pre">{{ jsonText }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px">
-                <NButton size="tiny" secondary @click="copy(item.raw.prompt, 'Prompt JSON')">
-                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                <NButton size="tiny" secondary @click="copy(item.raw.prompt, t('detail.tabPrompt'))">
+                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
                 <NButton size="tiny" secondary @click="downloadJson(item.raw.prompt, 'prompt.json')">
-                  <template #icon><Icon name="download" :size="13" /></template>下载
+                  <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
                 </NButton>
               </div>
             </NTabPane>
-            <NTabPane v-if="item.raw.source !== 'a1111'" name="workflow" tab="UI 工作流">
+            <NTabPane v-if="item.raw.source !== 'a1111'" name="workflow" :tab="t('detail.tabWorkflow')">
               <pre class="json-pre">{{ jsonText }}</pre>
               <div style="display: flex; gap: 8px; margin-top: 10px">
-                <NButton size="tiny" secondary @click="copy(item.raw.workflow, 'UI 工作流 JSON')">
-                  <template #icon><Icon name="copy" :size="13" /></template>复制
+                <NButton size="tiny" secondary @click="copy(item.raw.workflow, t('detail.tabWorkflow'))">
+                  <template #icon><Icon name="copy" :size="13" /></template>{{ t('common.copy') }}
                 </NButton>
                 <NButton
                   size="tiny"
@@ -311,17 +348,17 @@ function downloadJson(text: string | undefined, suffix: string) {
                   :disabled="!item.raw.workflow"
                   @click="downloadJson(item.raw.workflow, 'workflow.json')"
                 >
-                  <template #icon><Icon name="download" :size="13" /></template>下载
+                  <template #icon><Icon name="download" :size="13" /></template>{{ t('common.download') }}
                 </NButton>
               </div>
               <p style="margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint)">
-                下载的 workflow.json 可直接拖入 ComfyUI 画布恢复整个工作流。
+                {{ t('detail.workflowHint') }}
               </p>
             </NTabPane>
           </NTabs>
         </div>
 
-        <p class="kbd-hint">← / → 切换图片 · Esc 关闭</p>
+        <p class="kbd-hint">{{ t('detail.kbdHint') }}</p>
       </div>
     </div>
   </NDrawer>

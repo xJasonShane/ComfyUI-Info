@@ -3,19 +3,21 @@ import type { ImageItem, ImageSource, IncomingFile, ParsedParams, RawMetadata } 
 import { clearInternPool, hasSupportedSignature, isMetaTextFile, isSupportedImage } from '../lib/metadata'
 import { parseImage } from '../lib/parser'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
+import { t } from '../locales'
 import {
-  clearHandle,
+  clearDirBookmarks as clearPersistedBookmarks,
   clearPersisted,
   deletePersisted,
   fromRecord,
   importPersisted,
-  loadHandle,
+  loadDirBookmarks,
   loadPersisted,
   parseArchive,
   probePersistence,
   putPersisted,
   recordKey,
-  saveHandle,
+  removeDirBookmark,
+  saveDirBookmark,
   serializeArchive,
   toRecord,
   type PersistRecord,
@@ -36,8 +38,12 @@ interface StoreState {
   batchDone: number
   /** 记住的扫描目录名（句柄本体不进响应式状态，避免被代理后无法结构化克隆回写） */
   rescanName: string | null
+  /** 已记住的目录书签名列表（FEAT-7 多目录；句柄本体在模块级 Map 中） */
+  dirBookmarks: string[]
   /** 目录监视自动重扫：开启后周期增量重扫记住的目录（边出图边看，偏好记忆） */
   autoRescan: boolean
+  /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
+  dupeOnly: boolean
 }
 
 const storedSort = localStorage.getItem('cii:sort') as SortMode | null
@@ -71,17 +77,26 @@ function loadStoredFilters(): {
 
 const storedFilters = loadStoredFilters()
 
+// FEAT-8：主题显式偏好优先，未设置过时跟随系统 prefers-color-scheme
+const storedTheme = localStorage.getItem('cii:theme')
+const prefersLight =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-color-scheme: light)').matches
+
 const state = reactive<StoreState>({
   items: [],
   search: storedFilters.search,
   modelFilter: storedFilters.modelFilter,
   sourceFilter: storedFilters.sourceFilter,
   sortMode: storedSort && SORT_MODES.includes(storedSort) ? storedSort : 'default',
-  dark: localStorage.getItem('cii:theme') !== 'light',
+  dark: storedTheme ? storedTheme === 'dark' : !prefersLight,
   batchTotal: 0,
   batchDone: 0,
   rescanName: null,
+  dirBookmarks: [],
   autoRescan: localStorage.getItem(AUTO_RESCAN_KEY) === '1',
+  dupeOnly: false,
 })
 
 watch(
@@ -373,27 +388,63 @@ export function clearAll() {
   if (persistAvailable) void clearPersisted().catch(() => {})
 }
 
-/* ---------- 目录句柄（File System Access，一键重扫） ---------- */
-// 句柄不放进 reactive 状态：代理对象无法结构化克隆回写 IndexedDB，界面只依赖 rescanName
+/* ---------- 目录书签（FEAT-7 多目录：切换重扫目标 / 一键重扫） ---------- */
+// 句柄不放进 reactive 状态：代理对象无法结构化克隆回写 IndexedDB，界面只依赖 rescanName / dirBookmarks
 let rescanHandle: FileSystemDirectoryHandle | null = null
+const dirBookmarks = new Map<string, { handle: FileSystemDirectoryHandle; savedAt: number }>()
 
+function refreshDirNames() {
+  state.dirBookmarks = [...dirBookmarks.entries()]
+    .sort((a, b) => b[1].savedAt - a[1].savedAt)
+    .map(([name]) => name)
+}
+
+/** 记住目录并设为当前重扫目标（加入 / 刷新书签，同名覆盖） */
 export async function setRescanHandle(handle: FileSystemDirectoryHandle) {
   rescanHandle = handle
   state.rescanName = handle.name
+  dirBookmarks.set(handle.name, { handle, savedAt: Date.now() })
+  refreshDirNames()
   syncAutoRescanTimer()
   try {
     // 句柄持久化不可用的浏览器（不支持结构化克隆）仅本次会话有效
-    if (persistAvailable) await saveHandle(handle)
+    if (persistAvailable) await saveDirBookmark(handle)
   } catch {
     // 忽略：重扫按钮仍在本会话可用
   }
 }
 
+/** 切换当前重扫目标为已记住的目录（不立即扫描）；无此书签返回 false */
+export function switchRescanTarget(name: string): boolean {
+  const bm = dirBookmarks.get(name)
+  if (!bm) return false
+  rescanHandle = bm.handle
+  state.rescanName = name
+  syncAutoRescanTimer()
+  return true
+}
+
+/** 不再记住当前目录（仅移除该书签，其余书签保留） */
 export function forgetRescanHandle() {
+  const name = state.rescanName
+  if (name) {
+    dirBookmarks.delete(name)
+    refreshDirNames()
+  }
   rescanHandle = null
   state.rescanName = null
-  syncAutoRescanTimer() // 自动重扫随句柄消失停表；偏好保留，下次记住目录时自动恢复
-  if (persistAvailable) void clearHandle().catch(() => {})
+  syncAutoRescanTimer() // 自动重扫随当前目标消失停表；偏好保留，下次记住目录时自动恢复
+  if (persistAvailable && name) void removeDirBookmark(name).catch(() => {})
+}
+
+/** 清除全部目录书签（含当前重扫目标） */
+export function clearAllDirBookmarks() {
+  dirBookmarks.clear()
+  refreshDirNames()
+  rescanHandle = null
+  state.rescanName = null
+  syncAutoRescanTimer()
+  if (persistAvailable) void clearPersistedBookmarks().catch(() => {})
 }
 
 /**
@@ -522,10 +573,16 @@ async function hydrate() {
     persistAvailable = await probePersistence()
     if (!persistAvailable) return
     await restoreArchivedInChunks(await loadPersisted())
-    const handle = await loadHandle()
-    if (handle) {
-      rescanHandle = handle
-      state.rescanName = handle.name
+    // 恢复全部目录书签（FEAT-7），最近记住的作为当前重扫目标
+    const bookmarks = await loadDirBookmarks()
+    for (const bm of bookmarks) {
+      dirBookmarks.set(bm.name, { handle: bm.handle, savedAt: bm.savedAt })
+    }
+    refreshDirNames()
+    const latest = bookmarks[0]
+    if (latest) {
+      rescanHandle = latest.handle
+      state.rescanName = latest.name
       syncAutoRescanTimer() // 偏好为开时恢复自动监视（权限需重新授权时各拍静默重试）
     }
   } catch (err) {
@@ -671,6 +728,50 @@ export const usageStats = computed(() => {
       (a, b) => b.count - a.count || nameCollator.compare(a.name, b.name),
     )
   return { models: toList(models), loras: toList(loras), samplers: toList(samplers) }
+})
+
+export interface DayCount {
+  /** 本地时区的 YYYY-MM-DD */
+  day: string
+  count: number
+}
+
+/** F5：按天出图量（本地时区聚合，仅含有出图的日期，新→旧，最多 14 天） */
+export const dailyCounts = computed<DayCount[]>(() => {
+  const byDay = new Map<string, number>()
+  for (const it of state.items) {
+    if (it.status !== 'done') continue
+    const d = new Date(it.mtime)
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`
+    byDay.set(key, (byDay.get(key) ?? 0) + 1)
+  }
+  return Array.from(byDay, ([day, count]) => ({ day, count }))
+    .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+    .slice(0, 14)
+})
+
+/** 提示词分词：按空白与常见标点切分，单字符与纯数字视为噪声 */
+const KEYWORD_SPLIT_RE = /[\s,，、;；:：|()[\]{}<>"'`~·!！?？.]+/
+const KEYWORD_LIMIT = 30
+
+/** F5：正向提示词高频词 Top-N（跨条目累计出现次数），点击可应用搜索筛选 */
+export const keywordStats = computed<UsageStat[]>(() => {
+  const freq = new Map<string, number>()
+  for (const it of state.items) {
+    if (!it.params) continue
+    for (const prompt of it.params.positive) {
+      for (const raw of prompt.split(KEYWORD_SPLIT_RE)) {
+        const w = raw.trim().toLowerCase()
+        if (w.length < 2 || /^\d+$/.test(w)) continue
+        freq.set(w, (freq.get(w) ?? 0) + 1)
+      }
+    }
+  }
+  return Array.from(freq, ([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || nameCollator.compare(a.name, b.name))
+    .slice(0, KEYWORD_LIMIT)
 })
 
 /**
@@ -914,6 +1015,7 @@ export const filteredItems = computed(() => {
       }
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
+      if (state.dupeOnly && !sameSourceIds.value.has(it.id)) return false
       if (query && !matchQuery(it, query)) return false
       return true
     })
@@ -942,19 +1044,20 @@ export function rangeIds(
   return list.slice(lo, hi + 1).map((i) => i.id)
 }
 
-export const sourceOptions: { label: string; value: SourceFilter }[] = [  { label: 'ComfyUI 原图', value: 'comfyui' },
-  { label: 'A1111 / WebUI', value: 'a1111' },
-  { label: '无元数据', value: 'none' },
-  { label: '解析失败', value: 'error' },
-  { label: '全部图片', value: 'all' },
-]
+export const sourceOptions = computed<{ label: string; value: SourceFilter }[]>(() => [
+  { label: t('src.comfyui'), value: 'comfyui' },
+  { label: t('src.a1111'), value: 'a1111' },
+  { label: t('src.none'), value: 'none' },
+  { label: t('src.error'), value: 'error' },
+  { label: t('src.all'), value: 'all' },
+])
 
-export const sortOptions: { label: string; value: SortMode }[] = [
-  { label: '默认排序', value: 'default' },
-  { label: '时间 新→旧', value: 'time-desc' },
-  { label: '时间 旧→新', value: 'time-asc' },
-  { label: '按工作流聚类', value: 'workflow' },
-]
+export const sortOptions = computed<{ label: string; value: SortMode }[]>(() => [
+  { label: t('sort.default'), value: 'default' },
+  { label: t('sort.timeDesc'), value: 'time-desc' },
+  { label: t('sort.timeAsc'), value: 'time-asc' },
+  { label: t('sort.workflow'), value: 'workflow' },
+])
 
 /**
  * F3：工作流内容指纹。同串同引用来自 interning（本会话解析），存档恢复的是内容副本，
@@ -1007,6 +1110,49 @@ export const workflowClusters = computed(() => {
   })
   return out
 })
+
+/** F4：同源出图指纹 = 工作流内容 + 首阶段种子；同键即同一生成来源（重跑 / 同参再生成） */
+function sameSourceKey(it: ImageItem): string | null {
+  const p = it.params
+  if (!p) return null
+  const seed = p.samplers.find((s) => s.seed)?.seed
+  if (!seed) return null
+  return `${workflowKey(it)}|${seed}`
+}
+
+/** F4：同源出图分组（itemId → 组号 / 组内序号 / 组大小），排序规则与工作流聚类一致 */
+export const sameSourceGroups = computed(() => {
+  const groups = new Map<string, ImageItem[]>()
+  for (const it of state.items) {
+    if (it.status !== 'done') continue
+    const k = sameSourceKey(it)
+    if (!k) continue
+    const g = groups.get(k)
+    if (g) g.push(it)
+    else groups.set(k, [it])
+  }
+  const out = new Map<string, { group: number; seq: number; total: number }>()
+  ;[...groups.values()]
+    .map((members) => ({ members, latest: Math.max(...members.map((m) => m.mtime)) }))
+    .sort((a, b) => b.latest - a.latest)
+    .forEach(({ members }, gi) => {
+      const sorted = [...members].sort((a, b) => b.mtime - a.mtime || nameCollator.compare(a.name, b.name))
+      sorted.forEach((it, i) => out.set(it.id, { group: gi, seq: i + 1, total: members.length }))
+    })
+  return out
+})
+
+/** F4：处于同源组（组内 ≥2 张）中的条目 id 集合，供「只看重复」筛选 */
+const sameSourceIds = computed(() => {
+  const ids = new Set<string>()
+  for (const [id, info] of sameSourceGroups.value) {
+    if (info.total > 1) ids.add(id)
+  }
+  return ids
+})
+
+/** F4：同源重复条目总数（≥2 张的组内条目），0 表示当前没有同源组 */
+export const dupeCount = computed(() => sameSourceIds.value.size)
 
 export function toggleDark() {
   state.dark = !state.dark

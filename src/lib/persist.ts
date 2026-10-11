@@ -376,32 +376,67 @@ export async function clearPersisted(): Promise<void> {
   await settled(tx)
 }
 
-/* ---------- 目录句柄（一键重扫的书签，不随清空列表删除） ---------- */
+/* ---------- 目录书签（FEAT-7 多目录：按目录名存储，可切换重扫目标） ---------- */
 
-/** 保存目录句柄；浏览器不支持结构化克隆句柄时抛错，由调用方降级为仅本会话有效 */
-export async function saveHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+export interface DirBookmark {
+  name: string
+  handle: FileSystemDirectoryHandle
+  savedAt: number
+}
+
+/** 保存 / 更新目录书签（以目录名为键，同名覆盖并刷新时间） */
+export async function saveDirBookmark(handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(HANDLE_STORE, 'readwrite')
-  tx.objectStore(HANDLE_STORE).put({ id: 'last', handle, savedAt: Date.now() })
+  tx.objectStore(HANDLE_STORE).put({ id: handle.name, handle, savedAt: Date.now() })
   await settled(tx)
 }
 
-export async function loadHandle(): Promise<FileSystemDirectoryHandle | null> {
+/** 读取全部书签（新→旧）；v2 单一 'last' 行一次性迁移为按目录名存储 */
+export async function loadDirBookmarks(): Promise<DirBookmark[]> {
   const db = await getDb()
-  const req = db.transaction(HANDLE_STORE).objectStore(HANDLE_STORE).get('last')
-  const row = await new Promise<{ id: string; handle?: FileSystemDirectoryHandle } | undefined>(
-    (resolve, reject) => {
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error ?? new Error('读取目录句柄失败'))
-    },
-  )
-  return row?.handle ?? null
+  const rows = (await getAllFrom(db, HANDLE_STORE)) as {
+    id?: string
+    handle?: FileSystemDirectoryHandle
+    savedAt?: number
+  }[]
+  const out: DirBookmark[] = []
+  let legacy: DirBookmark | null = null
+  for (const row of rows) {
+    if (!row?.handle) continue
+    if (row.id === 'last') {
+      legacy = { name: row.handle.name, handle: row.handle, savedAt: row.savedAt ?? 0 }
+    } else if (typeof row.id === 'string') {
+      out.push({ name: row.id, handle: row.handle, savedAt: row.savedAt ?? 0 })
+    }
+  }
+  if (legacy) {
+    out.push(legacy)
+    void saveDirBookmark(legacy.handle)
+      .then(() => {
+        // 目录恰好名为 "last" 时迁移写入与旧行同键，不能再删
+        if (legacy!.name !== 'last') return removeDirBookmarkRow('last')
+      })
+      .catch(() => {})
+  }
+  return out.sort((a, b) => b.savedAt - a.savedAt)
 }
 
-export async function clearHandle(): Promise<void> {
+async function removeDirBookmarkRow(id: string): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(HANDLE_STORE, 'readwrite')
-  tx.objectStore(HANDLE_STORE).delete('last')
+  tx.objectStore(HANDLE_STORE).delete(id)
+  await settled(tx)
+}
+
+export async function removeDirBookmark(name: string): Promise<void> {
+  await removeDirBookmarkRow(name)
+}
+
+export async function clearDirBookmarks(): Promise<void> {
+  const db = await getDb()
+  const tx = db.transaction(HANDLE_STORE, 'readwrite')
+  tx.objectStore(HANDLE_STORE).clear()
   await settled(tx)
 }
 

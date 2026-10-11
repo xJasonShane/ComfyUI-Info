@@ -4,6 +4,7 @@
  */
 import type { ImageItem, LoraInfo, SamplerInfo } from '../types'
 import { downloadBinary, downloadText } from './utils'
+import { t } from '../locales'
 
 /**
  * CSV 公式注入防护：以 = + - @ Tab 开头的文本单元格会被 Excel / WPS 当公式执行
@@ -47,7 +48,7 @@ export function buildExportJson(items: ImageItem[]): string {
       mtime: new Date(it.mtime).toISOString(),
     }
     if (it.path) rec.path = it.path
-    if (it.status === 'error') rec.error = it.error ?? '未知错误'
+    if (it.status === 'error') rec.error = it.error ?? t('common.unknownError')
     const p = it.params
     if (p) {
       rec.positive = p.positive
@@ -112,32 +113,44 @@ export async function exportItems(
   message.success(`已导出 ${items.length} 项`)
 }
 
+export interface StatsSection {
+  title: string
+  rows: { name: string; count: number }[]
+}
+
+/** 统计频次导出（F5）：类别 / 名称 / 次数 三列，按传入区块顺序排列 */
+export function buildStatsCsv(sections: StatsSection[]): string {
+  const header = [t('csv.category'), t('csv.name'), t('csv.count')]
+  const lines = sections.flatMap((sec) => sec.rows.map((r) => csvRow([sec.title, r.name, r.count])))
+  return '\uFEFF' + [csvRow(header), ...lines].join('\r\n')
+}
+
 export function buildExportCsv(items: ImageItem[]): string {
   const header = [
-    '文件名',
-    '路径',
-    '大小(字节)',
-    '来源',
-    '修改时间',
-    '模型',
-    'LoRA',
-    'Clip Skip',
-    'VAE',
-    '放大模型',
-    'ControlNet',
-    '采样器',
-    '调度器',
-    '步数',
-    'CFG',
-    '种子',
-    '重绘幅度',
-    '宽',
-    '高',
-    '批量',
-    '多阶段',
-    '正向提示词',
-    '负向提示词',
-    '错误',
+    t('csv.name'),
+    t('csv.path'),
+    t('csv.size'),
+    t('csv.source'),
+    t('csv.mtime'),
+    t('csv.models'),
+    t('csv.loras'),
+    t('csv.clipSkip'),
+    t('csv.vae'),
+    t('csv.upscalers'),
+    t('csv.controlnets'),
+    t('csv.sampler'),
+    t('csv.scheduler'),
+    t('csv.steps'),
+    t('csv.cfg'),
+    t('csv.seed'),
+    t('csv.denoise'),
+    t('csv.width'),
+    t('csv.height'),
+    t('csv.batch'),
+    t('csv.stages'),
+    t('csv.positive'),
+    t('csv.negative'),
+    t('csv.error'),
   ]
   const lines = items.map((it) => {
     const p = it.params
@@ -168,7 +181,7 @@ export function buildExportCsv(items: ImageItem[]): string {
       stages,
       p?.positive.join('\n'),
       p?.negative.join('\n'),
-      it.status === 'error' ? (it.error ?? '未知错误') : undefined,
+      it.status === 'error' ? (it.error ?? t('common.unknownError')) : undefined,
     ])
   })
   return '\uFEFF' + [csvRow(header), ...lines].join('\r\n')

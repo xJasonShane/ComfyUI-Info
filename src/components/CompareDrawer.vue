@@ -1,11 +1,23 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { NDrawer } from 'naive-ui'
 import type { ImageItem, LoraInfo, ParsedParams } from '../types'
+import { ensureItemUrl } from '../composables/store'
 import { useDrawerWidth } from '../composables/ui'
+import { t } from '../locales'
 
 const props = defineProps<{ a: ImageItem | null; b: ImageItem | null }>()
 const show = defineModel<boolean>('show', { default: false })
+
+// FEAT-8：对比双方按需创建预览 URL，头部并排展示缩略图
+watch(
+  () => [props.a?.id, props.b?.id],
+  () => {
+    if (props.a) ensureItemUrl(props.a)
+    if (props.b) ensureItemUrl(props.b)
+  },
+  { immediate: true },
+)
 
 interface DiffRow {
   label: string
@@ -33,7 +45,7 @@ function loraText(l: LoraInfo): string {
 
 function sizeText(p: ParsedParams | undefined): string | null {
   if (!p?.width || !p?.height) return null
-  const batch = p.batch && p.batch > 1 ? `，每批 ${p.batch} 张` : ''
+  const batch = p.batch && p.batch > 1 ? t('detail.perBatch', { n: p.batch }) : ''
   return `${p.width} × ${p.height}${batch}`
 }
 
@@ -70,27 +82,27 @@ const sections = computed<DiffSection[]>(() => {
 
   const sections: DiffSection[] = [
     {
-      title: '基础',
+      title: t('cmp.basics'),
       rows: [
-        mk('文件', a.path ?? a.name, b.path ?? b.name),
-        mk('模型', pa?.models.length ? pa.models.join(' + ') : null, pb?.models.length ? pb.models.join(' + ') : null),
-        mk('VAE', pa?.vaes.length ? pa.vaes.join(' + ') : null, pb?.vaes.length ? pb.vaes.join(' + ') : null),
-        mk('Clip Skip', pa?.clipSkip != null ? String(pa.clipSkip) : null, pb?.clipSkip != null ? String(pb.clipSkip) : null),
-        mk('出图尺寸', sizeText(pa), sizeText(pb)),
+        mk(t('cmp.file'), a.path ?? a.name, b.path ?? b.name),
+        mk(t('detail.model'), pa?.models.length ? pa.models.join(' + ') : null, pb?.models.length ? pb.models.join(' + ') : null),
+        mk(t('detail.vae'), pa?.vaes.length ? pa.vaes.join(' + ') : null, pb?.vaes.length ? pb.vaes.join(' + ') : null),
+        mk(t('detail.clipSkip'), pa?.clipSkip != null ? String(pa.clipSkip) : null, pb?.clipSkip != null ? String(pb.clipSkip) : null),
+        mk(t('detail.size'), sizeText(pa), sizeText(pb)),
         mk(
-          '放大模型',
+          t('detail.upscaler'),
           pa?.upscalers.length ? pa.upscalers.join(' + ') : null,
           pb?.upscalers.length ? pb.upscalers.join(' + ') : null,
         ),
         mk(
-          'ControlNet',
+          t('detail.controlnet'),
           pa?.controlNets.length ? pa.controlNets.join(' + ') : null,
           pb?.controlNets.length ? pb.controlNets.join(' + ') : null,
         ),
         mk(
-          '工作流节点',
-          pa?.nodeCount ? `${pa.nodeCount} 个` : null,
-          pb?.nodeCount ? `${pb.nodeCount} 个` : null,
+          t('detail.nodeCount'),
+          pa?.nodeCount ? t('detail.nodes', { n: pa.nodeCount }) : null,
+          pb?.nodeCount ? t('detail.nodes', { n: pb.nodeCount }) : null,
         ),
       ],
     },
@@ -102,27 +114,27 @@ const sections = computed<DiffSection[]>(() => {
     for (let i = 0; i < count; i++) {
       const sa = pa?.samplers[i]
       const sb = pb?.samplers[i]
-      const prefix = count > 1 ? `阶段${i + 1} · ` : ''
+      const prefix = count > 1 ? t('cmp.stage', { n: i + 1 }) : ''
       rows.push(
-        mk(`${prefix}采样器`, sa?.sampler ?? null, sb?.sampler ?? null),
-        mk(`${prefix}调度器`, sa?.scheduler ?? null, sb?.scheduler ?? null),
-        mk(`${prefix}步数`, sa?.steps != null ? String(sa.steps) : null, sb?.steps != null ? String(sb.steps) : null),
-        mk(`${prefix}CFG`, sa?.cfg != null ? String(sa.cfg) : null, sb?.cfg != null ? String(sb.cfg) : null),
-        mk(`${prefix}种子`, sa?.seed ?? null, sb?.seed ?? null),
-        mk(`${prefix}重绘幅度`, sa?.denoise != null ? String(sa.denoise) : null, sb?.denoise != null ? String(sb.denoise) : null),
+        mk(`${prefix}${t('detail.sampler')}`, sa?.sampler ?? null, sb?.sampler ?? null),
+        mk(`${prefix}${t('detail.scheduler')}`, sa?.scheduler ?? null, sb?.scheduler ?? null),
+        mk(`${prefix}${t('detail.steps')}`, sa?.steps != null ? String(sa.steps) : null, sb?.steps != null ? String(sb.steps) : null),
+        mk(`${prefix}${t('detail.cfg')}`, sa?.cfg != null ? String(sa.cfg) : null, sb?.cfg != null ? String(sb.cfg) : null),
+        mk(`${prefix}${t('detail.seed')}`, sa?.seed ?? null, sb?.seed ?? null),
+        mk(`${prefix}${t('detail.denoise')}`, sa?.denoise != null ? String(sa.denoise) : null, sb?.denoise != null ? String(sb.denoise) : null),
       )
     }
-    sections.push({ title: '采样参数', rows })
+    sections.push({ title: t('cmp.samplerParams'), rows })
   }
 
   const loras = loraRows(pa, pb)
-  if (loras.length) sections.push({ title: 'LoRA', rows: loras })
+  if (loras.length) sections.push({ title: t('cmp.loras'), rows: loras })
 
   sections.push({
-    title: '提示词',
+    title: t('cmp.prompts'),
     rows: [
-      mk('正向提示词', textList(pa?.positive), textList(pb?.positive), true),
-      mk('负向提示词', textList(pa?.negative), textList(pb?.negative), true),
+      mk(t('detail.positive'), textList(pa?.positive), textList(pb?.positive), true),
+      mk(t('detail.negative'), textList(pa?.negative), textList(pb?.negative), true),
     ],
   })
   return sections
@@ -137,8 +149,14 @@ const nameB = computed(() => props.b?.path ?? props.b?.name ?? '')
     <div class="cmp">
       <div class="cmp-head">
         <span class="cmp-empty" />
-        <span class="name" :title="nameA">{{ nameA }}</span>
-        <span class="name" :title="nameB">{{ nameB }}</span>
+        <div class="cmp-item">
+          <img v-if="a?.url" :src="a.url" alt="" />
+          <span class="name" :title="nameA">{{ nameA }}</span>
+        </div>
+        <div class="cmp-item">
+          <img v-if="b?.url" :src="b.url" alt="" />
+          <span class="name" :title="nameB">{{ nameB }}</span>
+        </div>
       </div>
 
       <template v-if="sections.length">
@@ -158,7 +176,7 @@ const nameB = computed(() => props.b?.path ?? props.b?.name ?? '')
           </div>
         </section>
       </template>
-      <p v-else class="cmp-none">所选图片还没有可对比的解析结果</p>
+      <p v-else class="cmp-none">{{ t('cmp.none') }}</p>
     </div>
   </NDrawer>
 </template>
