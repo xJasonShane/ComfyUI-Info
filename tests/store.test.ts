@@ -466,7 +466,7 @@ it('扫描进行中解析结果按节拍批量应用，全部完成后立即应�
   }
 })
 
-it('modelOptions 从解析结果聚合去重并排序', async () => {
+it('modelOptions 从解析结果聚合去重并按使用频次排序', async () => {
   const addWithModel = (name: string, model: string) => {
     const parameters = `x\nSteps: 20, Model: ${model}`
     vi.mocked(parser.parseImage).mockResolvedValueOnce({
@@ -479,9 +479,10 @@ it('modelOptions 从解析结果聚合去重并排序', async () => {
   addWithModel('b.png', 'alpha')
   addWithModel('c.png', 'beta')
   await flush()
+  // 高频模型排前（beta 用了 2 次），同频次按名排序
   expect(api.modelOptions.value).toEqual([
-    { label: 'alpha', value: 'alpha' },
     { label: 'beta', value: 'beta' },
+    { label: 'alpha', value: 'alpha' },
   ])
 })
 

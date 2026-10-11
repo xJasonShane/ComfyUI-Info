@@ -706,16 +706,13 @@ export const stats = computed(() => {
   return c
 })
 
-export const modelOptions = computed(() => {
-  const set = new Set<string>()
-  for (const i of state.items) {
-    if (i.source === 'none') continue
-    for (const m of i.params?.models ?? []) set.add(m)
-  }
-  return Array.from(set)
-    .sort()
-    .map((m) => ({ label: m, value: m }))
-})
+/**
+ * 模型筛选下拉：复用 usageStats 的聚合一份数据源（同集合），按使用频次降序、
+ * 同频次按名排序——「最常用的模型」排在最前，与统计抽屉的排行一致。
+ */
+export const modelOptions = computed(() =>
+  usageStats.value.models.map((m) => ({ label: m.name, value: m.name })),
+)
 
 export interface UsageStat {
   name: string
