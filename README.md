@@ -12,10 +12,10 @@
 - **自动识别来源**：自动区分 ComfyUI 原图、A1111/WebUI 图片和无元数据的普通图片，默认只显示 ComfyUI 原图，可一键切换
 - **A1111 兼容格式支持**：ComfyUI 生态的 Civitai 兼容保存节点（Image Saver 等）和在线平台导出的图，参数以 A1111 文本格式存储——同样完整解析，含 `<lora:…>` 标签、Lora hashes、Model hash（识别同名模型的版本）与高清修复两阶段；若参数文本尾部内嵌了 workflow JSON，会自动升级按 ComfyUI 工作流解析
 - **完整参数解析**：
-  - 正向 / 负向提示词（ComfyUI 沿工作流连线自动回溯，兼容常见组合节点）
+  - 正向 / 负向提示词（ComfyUI 沿工作流连线自动回溯，兼容常见组合节点；SDXL 的 `text_g` / `text_l` 与 Flux 的 `t5xxl` / `clip_l` 双编码槽同样识别）
   - 模型（checkpoint / unet）、LoRA 及强度
-  - VAE、Clip Skip、放大模型（Upscale Model）、ControlNet 模型名
-  - 采样器、调度器、步数、CFG、种子（64 位大数不丢精度）、重绘幅度
+  - VAE、Clip Skip、放大模型（Upscale Model，含 A1111 的 `Hires upscaler`；`Latent` / `None` 不作为模型）、ControlNet 模型名
+  - 采样器、调度器、步数、CFG、种子（64 位大数不丢精度）、重绘幅度；兼容 KSampler 与 SamplerCustom / SamplerCustomAdvanced 分离式拓扑（参数沿 noise / guider / sigmas 连线回溯）
   - 出图尺寸与批量张数；识别到高清修复配置时自动推算放大后的最终输出尺寸
   - 多阶段采样（如高清修复两阶段）按节点顺序全部列出
 - **工作流提取**：查看 / 复制 / 下载 Prompt JSON 和 UI 工作流 JSON，一键复制 A1111 风格参数摘要（正向 + 负向 + Steps / Sampler / Seed / Size 等键值，LoRA 转回 `<lora:…>` 标签，多阶段附单行摘要，可直接贴回 WebUI 复现），复制或下载的 workflow.json 可直接粘贴（Ctrl/⌘+V）或拖回 ComfyUI 画布恢复工作流

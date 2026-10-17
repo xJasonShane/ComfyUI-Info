@@ -130,13 +130,36 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     if (!node || depth > 8) return null
     const memoKey = `${key}@${depth}`
     if (textMemo.has(memoKey)) return textMemo.get(memoKey)!
+    const inputs = (node.inputs || {}) as NodeInputs
     // 字符串原语节点（PrimitiveString / PrimitiveStringMultiline 等）把文本存在 `string` 输入槽
-    const direct = asText(node.inputs?.text) ?? asText(node.inputs?.string)
+    const direct = asText(inputs.text) ?? asText(inputs.string)
     if (direct) {
       textMemo.set(memoKey, direct)
       return direct
     }
-    for (const v of Object.values(node.inputs || {})) {
+    // 槽位读取：直接字符串优先，连线则递归到上游节点（文本也可能来自 PrimitiveString）
+    const slotText = (slot: string): string | null => {
+      const v = inputs[slot]
+      const t = asText(v)
+      if (t) return t
+      return isLink(v) ? resolveNodeText(v[0], depth + 1) : null
+    }
+    // SDXL / SDXL Refiner：提示词拆成 G（风格）与 L（内容）两槽，两段都属于正向描述
+    const sdxlTexts = [
+      ...new Set([slotText('text_g'), slotText('text_l')].filter((s): s is string => !!s)),
+    ]
+    if (sdxlTexts.length) {
+      const joined = sdxlTexts.join('\n')
+      textMemo.set(memoKey, joined)
+      return joined
+    }
+    // Flux：clip_l 与 t5xxl 是同一提示词的双编码，t5xxl 才是完整版本，优先取它
+    const fluxText = slotText('t5xxl') ?? slotText('clip_l')
+    if (fluxText) {
+      textMemo.set(memoKey, fluxText)
+      return fluxText
+    }
+    for (const v of Object.values(inputs)) {
       if (isLink(v)) {
         const found = resolveNodeText(v[0], depth + 1)
         if (found) {
@@ -178,6 +201,81 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
     }
     choiceMemo.set(memoKey, null)
     return null
+  }
+
+  // 沿连线向上找数值：SamplerCustomAdvanced 的 steps 在 sigmas 链的 BasicScheduler 上、
+  // cfg 在 guider 链的 CFGGuider 上——只读采样器直接输入会把这些阶段判成全空而整体丢弃。
+  // 记忆化键与文本 / 选择解析同构（节点 × depth × 槽位）
+  const numMemo = new Map<string, number | null>()
+  const resolveNodeNum = (id: unknown, slots: string[], depth = 0): number | undefined => {
+    const key = String(id)
+    const node = map[key]
+    if (!node || depth > 8) return undefined
+    const memoKey = `${key}@${depth}@${slots.join('|')}`
+    if (numMemo.has(memoKey)) return numMemo.get(memoKey) ?? undefined
+    const inputs = (node.inputs || {}) as NodeInputs
+    for (const slot of slots) {
+      const direct = asNum(inputs[slot])
+      if (direct !== undefined) {
+        numMemo.set(memoKey, direct)
+        return direct
+      }
+    }
+    for (const v of Object.values(inputs)) {
+      if (!isLink(v)) continue
+      const found = resolveNodeNum(v[0], slots, depth + 1)
+      if (found !== undefined) {
+        numMemo.set(memoKey, found)
+        return found
+      }
+    }
+    numMemo.set(memoKey, null)
+    return undefined
+  }
+
+  // seed 可能是 64 位大数（解析前已转字符串），按字符串保精度回溯；数值型同样转串
+  const seedMemo = new Map<string, string | null>()
+  const resolveNodeSeed = (id: unknown, depth = 0): string | undefined => {
+    const key = String(id)
+    const node = map[key]
+    if (!node || depth > 8) return undefined
+    const memoKey = `${key}@${depth}`
+    if (seedMemo.has(memoKey)) return seedMemo.get(memoKey) ?? undefined
+    const inputs = (node.inputs || {}) as NodeInputs
+    const direct =
+      asText(inputs.noise_seed) ??
+      asText(inputs.seed) ??
+      (asNum(inputs.noise_seed) !== undefined
+        ? String(inputs.noise_seed)
+        : asNum(inputs.seed) !== undefined
+          ? String(inputs.seed)
+          : undefined)
+    if (direct) {
+      seedMemo.set(memoKey, direct)
+      return direct
+    }
+    for (const v of Object.values(inputs)) {
+      if (!isLink(v)) continue
+      const found = resolveNodeSeed(v[0], depth + 1)
+      if (found) {
+        seedMemo.set(memoKey, found)
+        return found
+      }
+    }
+    seedMemo.set(memoKey, null)
+    return undefined
+  }
+
+  // 取指定节点某个输入槽的连线源节点 id（SamplerCustomAdvanced 的正负向提示词在 guider 上，
+  // BasicGuider 只有 conditioning，按正向处理）
+  const resolvePortSource = (id: unknown, slots: string[]): unknown => {
+    const node = map[String(id)]
+    if (!node) return undefined
+    const inputs = (node.inputs || {}) as NodeInputs
+    for (const slot of slots) {
+      if (isLink(inputs[slot])) return inputs[slot][0]
+    }
+    return undefined
   }
 
   // 沿 latent 链向上找出图信息：宽高取链上最近显式声明的节点（最终输出由末端缩放节点决定），
@@ -236,11 +334,18 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
       (/KSampler|Sampler/i.test(cls) ||
         (typeof inputs.steps === 'number' && typeof inputs.cfg === 'number'))
     if (looksSampler) {
+      // 分离式采样拓扑：noise → RandomNoise(noise_seed)、guider → CFGGuider(cfg)、
+      // sigmas → BasicScheduler(steps / scheduler / denoise)，参数不在采样器节点本身
+      const guider = isLink(inputs.guider) ? inputs.guider[0] : undefined
+      const sigmas = isLink(inputs.sigmas) ? inputs.sigmas[0] : undefined
       const s: SamplerInfo = {
         nodeId: id,
         classType: cls,
-        steps: asNum(inputs.steps),
-        cfg: asNum(inputs.cfg),
+        steps:
+          asNum(inputs.steps) ??
+          (sigmas !== undefined ? resolveNodeNum(sigmas, ['steps']) : undefined),
+        cfg:
+          asNum(inputs.cfg) ?? (guider !== undefined ? resolveNodeNum(guider, ['cfg']) : undefined),
         sampler:
           asText(inputs.sampler_name) ??
           (isLink(inputs.sampler_name)
@@ -255,6 +360,7 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
           (isLink(inputs.scheduler)
             ? resolveNodeChoice(inputs.scheduler[0], ['scheduler'])
             : undefined) ??
+          (sigmas !== undefined ? resolveNodeChoice(sigmas, ['scheduler']) : undefined) ??
           undefined,
         seed:
           asText(inputs.seed) ??
@@ -263,8 +369,11 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
             ? String(inputs.seed)
             : asNum(inputs.noise_seed) !== undefined
               ? String(inputs.noise_seed)
-              : undefined),
-        denoise: asNum(inputs.denoise),
+              : undefined) ??
+          (isLink(inputs.noise) ? resolveNodeSeed(inputs.noise[0]) : undefined),
+        denoise:
+          asNum(inputs.denoise) ??
+          (sigmas !== undefined ? resolveNodeNum(sigmas, ['denoise']) : undefined),
       }
       // 全字段为空的匹配项（自定义节点名恰好含 Sampler）同样不入伪阶段
       if (
@@ -278,12 +387,20 @@ export function extractComfyParams(promptText: string): ParsedParams | null {
         out.samplers.push(s)
       }
 
-      const pos = isLink(inputs.positive)
-        ? resolveNodeText(inputs.positive[0])
-        : asText(inputs.positive)
-      const neg = isLink(inputs.negative)
-        ? resolveNodeText(inputs.negative[0])
-        : asText(inputs.negative)
+      // 正负向提示词：直接槽位优先；分离式拓扑经 guider 的 positive / negative 取，
+      // BasicGuider 只有 conditioning（无负向），按正向处理
+      const posSource = isLink(inputs.positive)
+        ? inputs.positive[0]
+        : guider !== undefined
+          ? resolvePortSource(guider, ['positive', 'conditioning'])
+          : undefined
+      const negSource = isLink(inputs.negative)
+        ? inputs.negative[0]
+        : guider !== undefined
+          ? resolvePortSource(guider, ['negative'])
+          : undefined
+      const pos = posSource !== undefined ? resolveNodeText(posSource) : asText(inputs.positive)
+      const neg = negSource !== undefined ? resolveNodeText(negSource) : asText(inputs.negative)
       if (pos && !out.positive.includes(pos)) out.positive.push(pos)
       if (neg && !out.negative.includes(neg)) out.negative.push(neg)
     }

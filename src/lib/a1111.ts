@@ -168,6 +168,12 @@ export function parseA1111Parameters(text: string): ParsedParams {
   if (pairs['VAE']) out.vaes.push(pairs['VAE'])
   const batchSize = Number(pairs['Batch size'])
   if (Number.isFinite(batchSize) && batchSize > 0) out.batch = batchSize
+  // 高清修复的放大模型：Latent / None 不是模型文件（隐空间放大 / 未启用），
+  // 已由多阶段采样（has:hires）表达，写入 upscalers 会污染模型维度筛选与统计
+  const hiresUpscaler = pairs['Hires upscaler'] ?? pairs['Upscaler']
+  if (hiresUpscaler && !/^(latent|none)$/i.test(hiresUpscaler)) {
+    out.upscalers.push(hiresUpscaler)
+  }
 
   return out
 }

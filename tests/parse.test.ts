@@ -870,6 +870,141 @@ describe('extractComfyParams', () => {
     expect(p.samplers[0]!.sampler).toBe('dpmpp_2m')
   })
 
+  it('SamplerCustomAdvanced：steps/cfg/seed/提示词沿连线节点解析', () => {
+    const prompt = JSON.stringify({
+      '1': { class_type: 'RandomNoise', inputs: { noise_seed: 42 } },
+      '2': {
+        class_type: 'BasicScheduler',
+        inputs: { scheduler: 'simple', steps: 28, denoise: 1, model: ['4', 0] },
+      },
+      '3': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } },
+      '4': { class_type: 'UNETLoader', inputs: { unet_name: 'flux1-dev.safetensors' } },
+      '5': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+      '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a red fox', clip: ['7', 0] } },
+      '7': { class_type: 'DualCLIPLoader', inputs: { clip_name1: 't5xxl', clip_name2: 'clip_l' } },
+      '8': { class_type: 'CLIPTextEncode', inputs: { text: 'blurry', clip: ['7', 0] } },
+      '9': {
+        class_type: 'CFGGuider',
+        inputs: { cfg: 4.5, model: ['4', 0], positive: ['6', 0], negative: ['8', 0] },
+      },
+      '10': {
+        class_type: 'SamplerCustomAdvanced',
+        inputs: {
+          noise: ['1', 0],
+          guider: ['9', 0],
+          sampler: ['3', 0],
+          sigmas: ['2', 0],
+          latent_image: ['5', 0],
+        },
+      },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.samplers).toHaveLength(1)
+    const s = p.samplers[0]!
+    expect(s.classType).toBe('SamplerCustomAdvanced')
+    expect(s.steps).toBe(28)
+    expect(s.cfg).toBe(4.5)
+    expect(s.seed).toBe('42')
+    expect(s.sampler).toBe('euler')
+    expect(s.scheduler).toBe('simple')
+    expect(s.denoise).toBe(1)
+    expect(p.positive).toEqual(['a red fox'])
+    expect(p.negative).toEqual(['blurry'])
+    expect(p.models).toEqual(['flux1-dev.safetensors'])
+    expect(p.width).toBe(1024)
+    expect(p.height).toBe(1024)
+  })
+
+  it('SamplerCustomAdvanced 的 RandomNoise 大种子不丢精度', () => {
+    // 直接构造裸 JSON：19 位 seed 在 JSON.parse 前由 quoteUnsafeBigInts 转成字符串
+    const big = '1234567890123456789'
+    const prompt = `{
+      "1": { "class_type": "RandomNoise", "inputs": { "noise_seed": ${big} } },
+      "2": { "class_type": "BasicScheduler", "inputs": { "steps": 8 } },
+      "3": { "class_type": "KSamplerSelect", "inputs": { "sampler_name": "euler" } },
+      "4": {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": { "noise": ["1", 0], "sampler": ["3", 0], "sigmas": ["2", 0] }
+      }
+    }`
+    const p = extractComfyParams(prompt)!
+    expect(p.samplers[0]!.seed).toBe(big)
+  })
+
+  it('BasicGuider 的 conditioning 作为正向提示词（无负向）', () => {
+    const prompt = JSON.stringify({
+      '1': { class_type: 'RandomNoise', inputs: { noise_seed: 7 } },
+      '2': { class_type: 'BasicScheduler', inputs: { scheduler: 'normal', steps: 12 } },
+      '3': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'ddim' } },
+      '4': { class_type: 'CLIPTextEncode', inputs: { text: 'a watercolor lake' } },
+      '5': { class_type: 'BasicGuider', inputs: { model: ['6', 0], conditioning: ['4', 0] } },
+      '6': { class_type: 'UNETLoader', inputs: { unet_name: 'sd35.safetensors' } },
+      '7': {
+        class_type: 'SamplerCustomAdvanced',
+        inputs: {
+          noise: ['1', 0],
+          guider: ['5', 0],
+          sampler: ['3', 0],
+          sigmas: ['2', 0],
+        },
+      },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.positive).toEqual(['a watercolor lake'])
+    expect(p.negative).toEqual([])
+    expect(p.samplers[0]!.steps).toBe(12)
+    expect(p.samplers[0]!.cfg).toBeUndefined() // BasicGuider 不提供 CFG
+    expect(p.samplers[0]!.scheduler).toBe('normal')
+  })
+
+  it('CLIPTextEncodeSDXL 的 text_g / text_l 两槽都提取', () => {
+    const prompt = JSON.stringify({
+      '1': {
+        class_type: 'CLIPTextEncodeSDXL',
+        inputs: { text_g: 'cinematic, sunset', text_l: 'a castle on a hill' },
+      },
+      '2': {
+        class_type: 'KSampler',
+        inputs: {
+          seed: 1,
+          steps: 20,
+          cfg: 7,
+          positive: ['1', 0],
+          negative: ['3', 0],
+          latent_image: ['4', 0],
+        },
+      },
+      '3': { class_type: 'CLIPTextEncode', inputs: { text: 'blurry' } },
+      '4': { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 512, batch_size: 1 } },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.positive).toEqual(['cinematic, sunset\na castle on a hill'])
+  })
+
+  it('CLIPTextEncodeFlux 优先取 t5xxl 完整提示词', () => {
+    const prompt = JSON.stringify({
+      '1': {
+        class_type: 'CLIPTextEncodeFlux',
+        inputs: { clip_l: 'short tag', t5xxl: 'a detailed cinematic prompt', guidance: 3.5 },
+      },
+      '2': {
+        class_type: 'KSampler',
+        inputs: {
+          seed: 2,
+          steps: 20,
+          cfg: 1,
+          positive: ['1', 0],
+          negative: ['3', 0],
+          latent_image: ['4', 0],
+        },
+      },
+      '3': { class_type: 'CLIPTextEncode', inputs: { text: 'bad' } },
+      '4': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+    })
+    const p = extractComfyParams(prompt)!
+    expect(p.positive).toEqual(['a detailed cinematic prompt'])
+  })
+
   it('扩展参数：VAE / Clip Skip / 放大模型 / ControlNet（FEAT-2）', () => {
     const prompt = JSON.stringify({
       '3': { class_type: 'KSampler', inputs: { seed: 5, steps: 20, cfg: 7 } },
@@ -962,9 +1097,26 @@ describe('parseA1111Parameters', () => {
     expect(s2.seed).toBe('42')
     expect(s2.sampler).toBe('DPM++ 2M Karras') // 未提供 Hires sampler 时继承一阶段
     expect(s2.denoise).toBe(0.7) // 来自 Denoising strength
+    expect(p.upscalers).toEqual([]) // Latent 是隐空间放大，不是放大模型
     // Size 是一阶段尺寸：启用高清修复时最终输出 = Size × Hires upscale
     expect(p.width).toBe(2048)
     expect(p.height).toBe(3072)
+  })
+
+  it('高清修复的放大模型写入 upscalers（Latent / None 不算模型）', () => {
+    const text = [
+      'a cat',
+      'Steps: 20, Sampler: Euler a, Size: 1024x1024, Hires upscale: 2, Hires upscaler: 4x-UltraSharp',
+    ].join('\n')
+    const p = parseA1111Parameters(text)
+    expect(p.upscalers).toEqual(['4x-UltraSharp'])
+    expect(p.samplers).toHaveLength(2)
+
+    // 部分平台把键写成 Upscaler:；Latent / None 不写入，避免污染模型维度筛选
+    expect(parseA1111Parameters('a cat\nSteps: 20, Upscaler: R-ESRGAN 4x+').upscalers).toEqual([
+      'R-ESRGAN 4x+',
+    ])
+    expect(parseA1111Parameters('a cat\nSteps: 20, Hires upscaler: None').upscalers).toEqual([])
   })
 
   it('64 位大种子保精度，不经过 Number 转换', () => {
