@@ -45,7 +45,7 @@ jobs:
         with:
           path: dist
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   # 手动部署：完整门禁后自行构建
   deploy-manual:
@@ -69,4 +69,4 @@ jobs:
         with:
           path: dist
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
