@@ -19,6 +19,7 @@ import {
   extractParams,
 } from '../src/lib/metadata'
 import { extractComfyParams, extractUiWorkflowParams } from '../src/lib/comfyExtract'
+import { looksLikeFooocusJson, parseFooocusParameters } from '../src/lib/fooocus'
 import { parseA1111Parameters } from '../src/lib/a1111'
 import { BROKEN, JOB_TIMEOUT_MS, ParsePool, ParseScheduler, WorkerEntry } from '../src/lib/parser'
 import type { ParseTransport } from '../src/lib/parser'
@@ -1158,6 +1159,90 @@ describe('parseA1111Parameters', () => {
     // Clip skip 1 是默认值，不记录
     const skip1 = parseA1111Parameters('a cat\nSteps: 20, Clip skip: 1')
     expect(skip1.clipSkip).toBeUndefined()
+  })
+})
+
+describe('Fooocus 元数据（FEAT-4）', () => {
+  it('v2.3 snake_case：大 seed 保精度、模型 / 采样 / 尺寸 / LoRA / VAE / Clip Skip', () => {
+    const text = `{
+      "prompt": "a cozy cabin, cinematic",
+      "negative_prompt": "blurry",
+      "base_model": "juggernautXL.safetensors",
+      "base_model_hash": "abc123",
+      "guidance_scale": 4.5,
+      "steps": 28,
+      "sampler": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 123456789012345678,
+      "resolution": "(1024, 768)",
+      "clip_skip": 2,
+      "vae": "sdxl_vae.safetensors",
+      "loras": [{ "name": "detail_slider", "weight": 0.7, "hash": "loraHash" }]
+    }`
+    expect(looksLikeFooocusJson(text)).toBe(true)
+    const p = parseFooocusParameters(text)!
+    expect(p.positive).toEqual(['a cozy cabin, cinematic'])
+    expect(p.negative).toEqual(['blurry'])
+    expect(p.models).toEqual(['juggernautXL.safetensors'])
+    expect(p.modelHash).toBe('abc123')
+    expect(p.samplers[0]).toMatchObject({
+      classType: 'Fooocus',
+      steps: 28,
+      cfg: 4.5,
+      sampler: 'dpmpp_2m',
+      scheduler: 'karras',
+      seed: '123456789012345678',
+    })
+    expect(p.width).toBe(1024)
+    expect(p.height).toBe(768)
+    expect(p.clipSkip).toBe(2)
+    expect(p.vaes).toEqual(['sdxl_vae.safetensors'])
+    expect(p.loras).toEqual([
+      { name: 'detail_slider', strengthModel: 0.7, strengthClip: 0.7, hash: 'loraHash' },
+    ])
+  })
+
+  it('v2.1 Title Case：Performance 兜底 steps、LoRA 文本、Refiner 模型', () => {
+    const text = `{
+      "Prompt": "a cat",
+      "Negative Prompt": "dog",
+      "Base Model": "base.safetensors",
+      "Refiner Model": "refiner.safetensors",
+      "Performance": "Speed",
+      "Resolution": "(832, 1216)",
+      "Sampler": "euler",
+      "Scheduler": "normal",
+      "Seed": 42,
+      "LoRA 1": "my_lora : 0.8"
+    }`
+    const p = parseFooocusParameters(text)!
+    expect(p.models).toEqual(['base.safetensors', 'refiner.safetensors'])
+    expect(p.samplers[0]!.steps).toBe(30) // Speed 预设
+    expect(p.samplers[0]!.seed).toBe('42')
+    expect(p.loras).toEqual([{ name: 'my_lora', strengthModel: 0.8, strengthClip: 0.8 }])
+    expect(p.width).toBe(832)
+    expect(p.height).toBe(1216)
+  })
+
+  it('普通 JSON 不被误判为 Fooocus', () => {
+    expect(looksLikeFooocusJson('{"Prompt":"only prompt"}')).toBe(false)
+    expect(looksLikeFooocusJson('{"foo":"bar"}')).toBe(false)
+    expect(parseFooocusParameters('{"Prompt":"only prompt"}')).toBeNull()
+  })
+
+  it('PNG fooocus_scheme 显式声明来源，PNG 文本 / JSON 文件均可解析参数', async () => {
+    const json = `{"prompt":"p","negative_prompt":"n","base_model":"m","steps":20,"seed":7,"resolution":"(512, 512)"}`
+    const png = buildPng([
+      textChunkAscii('parameters', json),
+      textChunkAscii('fooocus_scheme', 'fooocus'),
+    ])
+    const meta = await readImageMetadata(new File([png], 'fooocus.png'))
+    expect(meta.source).toBe('fooocus')
+    expect(extractParams(meta)?.models).toEqual(['m'])
+
+    const textFile = await readTextMetadata(new File([json], 'fooocus.json'))
+    expect(textFile.source).toBe('fooocus')
+    expect(extractParams(textFile)?.samplers[0]!.seed).toBe('7')
   })
 })
 

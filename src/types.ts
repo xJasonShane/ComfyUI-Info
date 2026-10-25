@@ -1,4 +1,4 @@
-export type ImageSource = 'comfyui' | 'a1111' | 'none'
+export type ImageSource = 'comfyui' | 'a1111' | 'fooocus' | 'none'
 
 export interface RawMetadata {
   source: ImageSource

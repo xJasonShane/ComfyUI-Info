@@ -601,12 +601,39 @@ export async function clearDirBookmarks(): Promise<void> {
 
 /* ---------- 存档备份（FEAT-6：导出 / 导入，防清库与跨设备迁移） ---------- */
 
-const ARCHIVE_VERSION = 3
+const ARCHIVE_VERSION = 4
+
+/** 备份里的筛选预设（与 store 的 FilterPreset 结构一致，避免 persist 反向依赖 store） */
+export interface ArchivePreset {
+  name: string
+  search: string
+  modelFilter: string | null
+  sourceFilter: 'all' | 'comfyui' | 'a1111' | 'fooocus' | 'none' | 'error'
+}
+
+/** 可随备份迁移的视图偏好（主题 / 语言 / 排序 / 缩略图尺寸 / 安全模式） */
+export interface ArchivePreferences {
+  theme?: 'dark' | 'light'
+  locale?: 'zh' | 'en'
+  sortMode?: 'default' | 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc' | 'workflow'
+  thumbSize?: number
+  safeMode?: boolean
+}
+
+export interface ArchiveExtras {
+  presets?: ArchivePreset[]
+  preferences?: ArchivePreferences
+  searchHistory?: string[]
+}
 
 export interface ArchiveInspection {
   records: PersistRecord[]
   favorites: string[]
   tags: Record<string, string[]>
+  /** v4：筛选预设 / 搜索历史 / 视图偏好（旧版备份为空） */
+  presets: ArchivePreset[]
+  searchHistory: string[]
+  preferences?: ArchivePreferences
   /** Missing version is accepted as an unversioned legacy archive. */
   version?: number
   exportedAt?: string
@@ -625,7 +652,10 @@ export function serializeArchive(
   records: PersistRecord[],
   favorites?: string[],
   tags?: Record<string, string[]>,
+  extras: ArchiveExtras = {},
 ): string {
+  const preferences =
+    extras.preferences && Object.keys(extras.preferences).length ? extras.preferences : undefined
   return JSON.stringify(
     {
       version: ARCHIVE_VERSION,
@@ -635,6 +665,9 @@ export function serializeArchive(
       records: records.map((r) => ({ ...r, thumbB64: undefined })),
       ...(favorites?.length ? { favorites } : {}),
       ...(tags && Object.keys(tags).length ? { tags } : {}),
+      ...(extras.presets?.length ? { presets: extras.presets } : {}),
+      ...(extras.searchHistory?.length ? { searchHistory: extras.searchHistory } : {}),
+      ...(preferences ? { preferences } : {}),
     },
     null,
     2,
@@ -645,7 +678,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
 const isImageSource = (value: unknown): value is ImageSource =>
-  value === 'comfyui' || value === 'a1111' || value === 'none'
+  value === 'comfyui' || value === 'a1111' || value === 'fooocus' || value === 'none'
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -785,6 +818,77 @@ function normalizeArchiveRecord(value: unknown): PersistRecord | null {
   }
 }
 
+const ARCHIVE_SOURCE_FILTERS = ['all', 'comfyui', 'a1111', 'fooocus', 'none', 'error'] as const
+const ARCHIVE_SORT_MODES = [
+  'default',
+  'time-desc',
+  'time-asc',
+  'name-asc',
+  'name-desc',
+  'workflow',
+] as const
+
+function normalizeArchivePreset(value: unknown): ArchivePreset | null {
+  if (!isObject(value)) return null
+  const name = typeof value.name === 'string' ? value.name.trim() : ''
+  if (!name || typeof value.search !== 'string') return null
+  if (
+    value.modelFilter !== undefined &&
+    value.modelFilter !== null &&
+    typeof value.modelFilter !== 'string'
+  ) {
+    return null
+  }
+  if (
+    !ARCHIVE_SOURCE_FILTERS.includes(value.sourceFilter as (typeof ARCHIVE_SOURCE_FILTERS)[number])
+  ) {
+    return null
+  }
+  return {
+    name,
+    search: value.search,
+    modelFilter: (value.modelFilter as string | null | undefined) ?? null,
+    sourceFilter: value.sourceFilter as ArchivePreset['sourceFilter'],
+  }
+}
+
+function normalizeArchivePreferences(value: unknown): {
+  preferences?: ArchivePreferences
+  warnings: number
+} {
+  if (!isObject(value)) return { warnings: 1 }
+  const preferences: ArchivePreferences = {}
+  let warnings = 0
+  if (value.theme !== undefined) {
+    if (value.theme === 'dark' || value.theme === 'light') preferences.theme = value.theme
+    else warnings++
+  }
+  if (value.locale !== undefined) {
+    if (value.locale === 'zh' || value.locale === 'en') preferences.locale = value.locale
+    else warnings++
+  }
+  if (value.sortMode !== undefined) {
+    if (ARCHIVE_SORT_MODES.includes(value.sortMode as (typeof ARCHIVE_SORT_MODES)[number])) {
+      preferences.sortMode = value.sortMode as ArchivePreferences['sortMode']
+    } else warnings++
+  }
+  if (value.thumbSize !== undefined) {
+    if (
+      typeof value.thumbSize === 'number' &&
+      Number.isFinite(value.thumbSize) &&
+      value.thumbSize >= 150 &&
+      value.thumbSize <= 420
+    ) {
+      preferences.thumbSize = Math.round(value.thumbSize)
+    } else warnings++
+  }
+  if (value.safeMode !== undefined) {
+    if (typeof value.safeMode === 'boolean') preferences.safeMode = value.safeMode
+    else warnings++
+  }
+  return { preferences: Object.keys(preferences).length ? preferences : undefined, warnings }
+}
+
 /** Inspect archive structure and records, retaining counts for a safe import preview. */
 export function inspectArchive(text: string): ArchiveInspection {
   let parsed: unknown
@@ -885,10 +989,58 @@ export function inspectArchive(text: string): ArchiveInspection {
       }
     }
   }
+
+  // v4 可选数据：筛选预设 / 搜索历史 / 视图偏好。非法项逐条剔除并计入警告，
+  // 不让一个坏预设阻断整份备份的恢复。
+  const presets: ArchivePreset[] = []
+  const presetNames = new Set<string>()
+  if (o.presets !== undefined) {
+    if (!Array.isArray(o.presets)) warningCount++
+    else {
+      for (const value of o.presets) {
+        const preset = normalizeArchivePreset(value)
+        if (!preset || presetNames.has(preset.name)) {
+          warningCount++
+          continue
+        }
+        presetNames.add(preset.name)
+        presets.push(preset)
+      }
+    }
+  }
+  const searchHistory: string[] = []
+  const historyKeys = new Set<string>()
+  if (o.searchHistory !== undefined) {
+    if (!Array.isArray(o.searchHistory)) warningCount++
+    else {
+      for (const query of o.searchHistory) {
+        if (typeof query !== 'string' || !query.trim()) {
+          warningCount++
+          continue
+        }
+        const key = query.trim().toLowerCase()
+        if (historyKeys.has(key) || searchHistory.length >= 10) {
+          warningCount++
+          continue
+        }
+        historyKeys.add(key)
+        searchHistory.push(query.trim())
+      }
+    }
+  }
+  const normalizedPreferences =
+    o.preferences === undefined
+      ? { preferences: undefined, warnings: 0 }
+      : normalizeArchivePreferences(o.preferences)
+  warningCount += normalizedPreferences.warnings
+
   return {
     records,
     favorites,
     tags,
+    presets,
+    searchHistory,
+    preferences: normalizedPreferences.preferences,
     version: typeof o.version === 'number' ? o.version : undefined,
     exportedAt,
     invalidRecords,

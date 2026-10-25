@@ -7,6 +7,7 @@
  * 与单元测试同一套 prompt JSON 结构，保证解析器行为一致。
  */
 import { deflateSync } from 'node:zlib'
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 
 /* ---------- PNG 夹具构造 ---------- */
@@ -145,6 +146,52 @@ test('详情删除后可从撤销条恢复（FEAT-1）', async ({ page }) => {
   await undo.getByRole('button', { name: '撤销', exact: true }).click()
   await expect(cards).toHaveCount(1, { timeout: 10_000 })
   await expect(undo).not.toBeVisible()
+})
+
+test('? 打开快捷键帮助，Esc 关闭，顶栏按钮同样可打开（FEAT-6）', async ({ page }) => {
+  await page.goto('/')
+  await page.keyboard.press('Shift+/')
+  const dialog = page.locator('.n-modal').filter({ hasText: '键盘快捷键' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('详情内切换上一张 / 下一张')
+  await page.keyboard.press('Escape')
+  await expect(dialog).not.toBeVisible()
+
+  await page.getByRole('button', { name: '快捷键帮助（?）' }).click()
+  await expect(dialog).toBeVisible()
+})
+
+test('空状态与图片画廊无 critical 级无障碍违规（FEAT-6）', async ({ page }) => {
+  await page.goto('/')
+  const assertNoCritical = async () => {
+    const results = await new AxeBuilder({ page }).analyze()
+    const critical = results.violations
+      .filter((v) => v.impact === 'critical')
+      .map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target.join(' ')) }))
+    expect(critical, JSON.stringify(critical)).toEqual([])
+  }
+  await assertNoCritical()
+
+  await page.locator('input[type="file"]').first().setInputFiles(PNG_PAYLOAD)
+  await expect(page.locator('.card')).toHaveCount(1, { timeout: 15_000 })
+  await assertNoCritical()
+})
+
+test('完全重复文件扫描：结果计数与「只看完全重复」筛选（FEAT-2）', async ({ page }) => {
+  await page.goto('/')
+  const copy = { name: 'comfy-cabin-copy.png', mimeType: 'image/png', buffer: PNG_PAYLOAD.buffer }
+  await page.locator('input[type="file"]').first().setInputFiles([PNG_PAYLOAD, copy])
+  const cards = page.locator('.card')
+  await expect(cards).toHaveCount(2, { timeout: 15_000 })
+
+  await page.getByRole('button', { name: '查找完全重复文件' }).click()
+  const pop = page.locator('.file-dupe-pop')
+  await pop.getByRole('button', { name: '开始扫描' }).click()
+  await expect(pop).toContainText('1 组、2 张', { timeout: 15_000 })
+
+  await pop.getByRole('switch').click()
+  await expect(cards).toHaveCount(2)
+  await expect(page.locator('.chip').filter({ hasText: '只看完全重复' })).toBeVisible()
 })
 
 test('刷新后解析结果从 IndexedDB 以存档卡片恢复', async ({ page }) => {

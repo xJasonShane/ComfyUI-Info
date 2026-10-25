@@ -32,6 +32,7 @@ import {
   NConfigProvider,
   NDropdown,
   NMessageProvider,
+  NModal,
   NPopconfirm,
   NPopover,
   darkTheme,
@@ -72,7 +73,7 @@ import {
 import { exportItems, exportOptions, buildParamsSummary } from './lib/export'
 import { copyText, humanBytes } from './lib/utils'
 import { applyThemeVariables, themeOverrides } from './theme'
-import { modelsVisible, randomPickRequest, statsVisible } from './composables/ui'
+import { modelsVisible, randomPickRequest, shortcutsVisible, statsVisible } from './composables/ui'
 import { useVirtualGrid } from './composables/useVirtualGrid'
 import { locale, t } from './locales'
 import type { ImageItem, IncomingFile } from './types'
@@ -125,10 +126,11 @@ interface FilterChip {
 
 const SOURCE_CHIP_LABEL: Record<
   Exclude<SourceFilter, 'comfyui'>,
-  'src.all' | 'src.a1111' | 'src.none' | 'src.error'
+  'src.all' | 'src.a1111' | 'src.fooocus' | 'src.none' | 'src.error'
 > = {
   all: 'src.all',
   a1111: 'src.a1111',
+  fooocus: 'src.fooocus',
   none: 'src.none',
   error: 'src.error',
 }
@@ -169,6 +171,14 @@ const filterChips = computed<FilterChip[]>(() => {
       remove: () => (store.dupeOnly = false),
     })
   }
+  if (store.fileDupeOnly) {
+    chips.push({
+      key: 'file-dupe',
+      label: t('chip.fileDupeOnly'),
+      title: t('chip.removeAria', { name: t('chip.fileDupeOnly') }),
+      remove: () => (store.fileDupeOnly = false),
+    })
+  }
   // 搜索串的每个 token 一个 chip（含字段限定 / 排除条件），按原文位置移除
   tokenizeQuery(store.search).forEach((tk, i) => {
     chips.push({
@@ -187,6 +197,7 @@ function clearAllFilters() {
   store.sourceFilter = 'comfyui'
   store.favOnly = false
   store.dupeOnly = false
+  store.fileDupeOnly = false
 }
 
 // 任一筛选偏离默认且确实藏了图时，状态行显示命中数（搜索 / 筛选是否生效一目了然）
@@ -196,6 +207,7 @@ const filtersActive = computed(
     store.modelFilter !== null ||
     store.sourceFilter !== 'comfyui' ||
     store.dupeOnly ||
+    store.fileDupeOnly ||
     store.favOnly,
 )
 const showFilteredCount = computed(
@@ -516,8 +528,25 @@ function inEditable(target: EventTarget | null): boolean {
   )
 }
 
+/* ---------- FEAT-6：快捷键帮助面板 ---------- */
+const shortcutRows = computed(() => [
+  { keys: '← / →', label: t('shortcuts.nav') },
+  { keys: 'F', label: t('shortcuts.fav') },
+  { keys: 'Delete', label: t('shortcuts.remove') },
+  { keys: 'Ctrl / ⌘ + A', label: t('shortcuts.selectAll') },
+  { keys: 'Ctrl / ⌘ + V', label: t('shortcuts.paste') },
+  { keys: 'Esc', label: t('shortcuts.escape') },
+  { keys: '?', label: t('shortcuts.help') },
+])
+
 function onGlobalKeys(e: KeyboardEvent) {
   if (inEditable(e.target)) return
+  // ?（Shift+/）：打开快捷键帮助；带修饰键时留给浏览器 / 系统
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
+    e.preventDefault()
+    shortcutsVisible.value = !shortcutsVisible.value
+    return
+  }
   // Ctrl/⌘+A：全选当前筛选结果（输入框内的原生全选不受影响）
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
     if (!filteredItems.value.length) return
@@ -525,14 +554,15 @@ function onGlobalKeys(e: KeyboardEvent) {
     selectAllFiltered()
     return
   }
-  // Esc：先清空选择；任一抽屉打开时 Esc 属于关抽屉（NDrawer closeOnEsc），不动选择
+  // Esc：先清空选择；任一抽屉 / 帮助面板打开时 Esc 属于关面板，不动选择
   if (
     e.key === 'Escape' &&
     selectedIds.value.size &&
     !showDetail.value &&
     !showCompare.value &&
     !statsVisible.value &&
-    !modelsVisible.value
+    !modelsVisible.value &&
+    !shortcutsVisible.value
   ) {
     e.preventDefault()
     clearSelection()
@@ -666,6 +696,10 @@ async function onDrop(e: DragEvent) {
           >
           <span
             ><i class="dot" style="background: var(--teal)" /><b>{{ stats.a1111 }}</b> A1111</span
+          >
+          <span
+            ><i class="dot" style="background: var(--violet)" /><b>{{ stats.fooocus }}</b>
+            Fooocus</span
           >
           <span
             ><i class="dot" style="background: var(--gray-src)" /><b>{{ stats.none }}</b>
@@ -859,6 +893,24 @@ async function onDrop(e: DragEvent) {
             <Icon name="x" :size="11" :stroke="2.2" />
           </button>
         </div>
+
+        <!-- FEAT-6：快捷键帮助（? 或顶栏帮助按钮打开） -->
+        <NModal
+          v-model:show="shortcutsVisible"
+          preset="card"
+          :title="t('shortcuts.title')"
+          style="width: 460px; max-width: calc(100vw - 32px)"
+        >
+          <dl class="shortcut-list">
+            <template v-for="row in shortcutRows" :key="row.keys">
+              <dt>
+                <kbd>{{ row.keys }}</kbd>
+              </dt>
+              <dd>{{ row.label }}</dd>
+            </template>
+          </dl>
+          <p class="shortcut-note">{{ t('shortcuts.note') }}</p>
+        </NModal>
 
         <DetailDrawer
           v-model:show="showDetail"

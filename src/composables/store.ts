@@ -19,7 +19,9 @@ import {
   type QueryEnv,
 } from '../lib/query'
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
-import { t } from '../locales'
+import { scanDuplicateFiles } from '../lib/dupes'
+import type { FileDupeScanResult } from '../lib/dupes'
+import { setLocale, t } from '../locales'
 import {
   clearContentHashCache,
   clearDirBookmarks as clearPersistedBookmarks,
@@ -42,6 +44,8 @@ import {
   storagePersistedState,
   toRecord,
   type ArchiveInspection,
+  type ArchivePreferences,
+  type ArchivePreset,
   type DirBookmark,
   type PersistRecord,
 } from '../lib/persist'
@@ -49,7 +53,7 @@ import {
 export { parseQuery, tokenizeQuery, removeQueryToken } from '../lib/query'
 export type { QueryConditions, ParsedQuery, NumField, HasField, NumCondition } from '../lib/query'
 
-export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'none' | 'error'
+export type SourceFilter = 'all' | 'comfyui' | 'a1111' | 'fooocus' | 'none' | 'error'
 export type SortMode = 'default' | 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc' | 'workflow'
 export type PersistenceStatus = 'checking' | 'saved' | 'saving' | 'error' | 'unavailable'
 const SORT_MODES: SortMode[] = [
@@ -87,6 +91,8 @@ interface StoreState {
   storageUsage: { usage: number; quota: number } | null
   /** 只看重复（FEAT-4）：仅显示同工作流同种子的同源出图；无重复组时开关自动隐藏 */
   dupeOnly: boolean
+  /** 只看完全重复文件（FEAT-2）：扫描结果中的字节级重复条目 */
+  fileDupeOnly: boolean
   /** 只看收藏：仅显示已星标的条目；无收藏时开关自动隐藏（收藏本身按指纹跨会话记忆） */
   favOnly: boolean
   /** 画廊缩略图最小列宽（px，150–420）：卡片大小调节偏好 */
@@ -101,7 +107,7 @@ const storedSort = safeGetItem('cii:sort') as SortMode | null
 const FILTERS_KEY = 'cii:filters'
 /** 目录监视自动重扫的偏好键 */
 const AUTO_RESCAN_KEY = 'cii:auto-rescan'
-const SOURCE_FILTERS: SourceFilter[] = ['all', 'comfyui', 'a1111', 'none', 'error']
+const SOURCE_FILTERS: SourceFilter[] = ['all', 'comfyui', 'a1111', 'fooocus', 'none', 'error']
 
 function loadStoredFilters(): {
   search: string
@@ -183,6 +189,7 @@ const state = reactive<StoreState>({
   storagePersisted: null,
   storageUsage: null,
   dupeOnly: false,
+  fileDupeOnly: false,
   favOnly: false,
   thumbSize: loadThumbSize(),
   safeMode: safeGetItem(SAFE_MODE_KEY) === '1',
@@ -629,6 +636,9 @@ function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: str
     if (!exactItem.detached || seenKeys.has(key)) return 0
     exactItem.file = file
     exactItem.url = URL.createObjectURL(file)
+    if (exactItem.thumb) URL.revokeObjectURL(exactItem.thumb)
+    exactItem.thumb = undefined
+    exactItem.thumbB64 = undefined
     exactItem.detached = false
     seenKeys.add(key)
     detachedByKey.delete(key)
@@ -684,6 +694,9 @@ function enqueueFile(file: File, path?: string, metaOnly = false, sourceId?: str
   if (archived) {
     archived.file = file
     archived.url = URL.createObjectURL(file)
+    if (archived.thumb) URL.revokeObjectURL(archived.thumb)
+    archived.thumb = undefined
+    archived.thumbB64 = undefined
     archived.detached = false
     seenKeys.add(key)
     detachedByKey.delete(key)
@@ -906,8 +919,9 @@ function removeItemsInternal(items: ImageItem[], undoable: boolean): number {
 }
 
 export function clearAll() {
-  // 清空后撤销窗口必须失效：否则撤销会把已清空条目重新装回列表
+  // 清空后撤销窗口与完全重复扫描结果必须失效：否则撤销 / 清理会作用于已清空列表
   dismissUndo()
+  invalidateFileDupes()
   for (const i of state.items) {
     URL.revokeObjectURL(i.url)
     if (i.thumb) URL.revokeObjectURL(i.thumb)
@@ -1512,6 +1526,11 @@ export interface ArchiveImportPreview {
   newFavorites: number
   tagRecords: number
   changedTagRecords: number
+  /** v4：备份携带的筛选预设 / 新增预设 / 搜索历史 / 可应用偏好项数 */
+  presets: number
+  newPresets: number
+  searchHistory: number
+  preferences: number
   warningCount: number
 }
 
@@ -1522,13 +1541,16 @@ interface PreparedArchiveImport {
   alreadyPresent: number
   localFavorites: string[]
   localTags: Record<string, string[]>
+  localPresets: ArchivePreset[]
+  localSearchHistory: string[]
+  localPreferences?: ArchivePreferences
   duplicateRecords: number
 }
 
 /** Share identity remapping between preview and commit so the counts match the import path. */
 function prepareArchiveImport(text: string): PreparedArchiveImport {
   const inspection = inspectArchive(text)
-  const { records, favorites, tags } = inspection
+  const { records, favorites, tags, presets, searchHistory, preferences } = inspection
   // 来源 ID 是目录句柄的本机身份。当前机器已有同一来源时保留它以便幂等导入；
   // 外部备份的 ID 加 imported 前缀，重新选择本机目录时可按唯一旧路径别名迁移。
   const remappedKeys = new Map<string, string>()
@@ -1607,6 +1629,9 @@ function prepareArchiveImport(text: string): PreparedArchiveImport {
     alreadyPresent: identityMatches + localRecords.length - fresh.length,
     localFavorites,
     localTags,
+    localPresets: presets,
+    localSearchHistory: searchHistory,
+    localPreferences: preferences,
     duplicateRecords,
   }
 }
@@ -1633,16 +1658,44 @@ export function previewArchiveImport(text: string): ArchiveImportPreview {
     newFavorites,
     tagRecords: Object.keys(prepared.localTags).length,
     changedTagRecords,
+    presets: prepared.localPresets.length,
+    newPresets: prepared.localPresets.filter(
+      (preset) => !filterPresets.value.some((existing) => existing.name === preset.name),
+    ).length,
+    searchHistory: prepared.localSearchHistory.length,
+    preferences: prepared.localPreferences ? Object.keys(prepared.localPreferences).length : 0,
     warningCount:
       prepared.inspection.warningCount +
       (prepared.duplicateRecords - prepared.inspection.duplicateRecords),
   }
 }
 
-/** 当前列表全部可存档项 → 备份文本（含参数、诊断信息、收藏标记与标签，不含图片本体） */
+/** 当前列表全部可存档项 → 备份文本（含参数、诊断信息、收藏 / 标签、预设与视图偏好，不含图片本体） */
 export function buildArchiveBackup(): { text: string; count: number } {
   const records = state.items.map(toRecord).filter((r) => r !== null)
-  return { text: serializeArchive(records, [...favKeys], { ...itemTags }), count: records.length }
+  const preferences: ArchivePreferences = {
+    sortMode: state.sortMode,
+    thumbSize: state.thumbSize,
+    safeMode: state.safeMode,
+  }
+  // 主题 / 语言只有用户显式选择过才随备份走；跟随系统 / 浏览器的用户迁移后保持自动跟随
+  const storedTheme = safeGetItem('cii:theme')
+  if (storedTheme === 'dark' || storedTheme === 'light') preferences.theme = storedTheme
+  const storedLocale = safeGetItem('cii:locale')
+  if (storedLocale === 'zh' || storedLocale === 'en') preferences.locale = storedLocale
+  return {
+    text: serializeArchive(
+      records,
+      [...favKeys],
+      { ...itemTags },
+      {
+        presets: filterPresets.value,
+        searchHistory: recentSearches.value,
+        preferences,
+      },
+    ),
+    count: records.length,
+  }
 }
 
 /**
@@ -1651,24 +1704,32 @@ export function buildArchiveBackup(): { text: string; count: number } {
  * 存档卡片即带星标与标签）；持久化不可用时仅恢复到本会话内存。
  * 备份结构非法时抛错由调用方提示。
  */
-export async function importArchive(
-  text: string,
-): Promise<{ n: number; favs: number; tags: number }> {
-  const { fresh, localFavorites, localTags } = prepareArchiveImport(text)
+export async function importArchive(text: string): Promise<{
+  n: number
+  favs: number
+  tags: number
+  presets: number
+  history: number
+  prefs: number
+}> {
+  const { fresh, localFavorites, localTags, localPresets, localSearchHistory, localPreferences } =
+    prepareArchiveImport(text)
+  let n = fresh.length
   if (persistAvailable) {
     const written = await importPersisted(fresh)
     restoreArchived(written)
-    return {
-      n: written.length,
-      favs: mergeArchivedFavorites(localFavorites),
-      tags: mergeArchivedTags(localTags),
-    }
+    n = written.length
+  } else {
+    restoreArchived(fresh)
   }
-  restoreArchived(fresh)
+  // v4 附带数据：记录恢复完成后统一合并，避免中途失败留下半套偏好
   return {
-    n: fresh.length,
+    n,
     favs: mergeArchivedFavorites(localFavorites),
     tags: mergeArchivedTags(localTags),
+    presets: mergeArchivedPresets(localPresets),
+    history: mergeArchivedSearchHistory(localSearchHistory),
+    prefs: applyArchivePreferences(localPreferences),
   }
 }
 
@@ -1700,6 +1761,65 @@ function mergeArchivedTags(tags: Record<string, string[]>): number {
   if (added) persistTags()
   return added
 }
+
+/** 合并备份预设：同名覆盖、其余追加，返回应用数量（FEAT-5） */
+function mergeArchivedPresets(presets: ArchivePreset[]): number {
+  if (!presets.length) return 0
+  for (const preset of presets) {
+    const i = filterPresets.value.findIndex((p) => p.name === preset.name)
+    if (i >= 0) filterPresets.value.splice(i, 1, preset)
+    else filterPresets.value.push(preset)
+  }
+  persistPresets()
+  return presets.length
+}
+
+/** 合并备份搜索历史：大小写不敏感去重，保留最近 10 条（FEAT-5） */
+function mergeArchivedSearchHistory(history: string[]): number {
+  if (!history.length) return 0
+  const existing = new Set(recentSearches.value.map((q) => q.toLowerCase()))
+  let added = 0
+  for (const query of history) {
+    const key = query.toLowerCase()
+    if (existing.has(key)) continue
+    recentSearches.value.push(query)
+    existing.add(key)
+    added++
+  }
+  if (recentSearches.value.length > HISTORY_LIMIT) recentSearches.value.length = HISTORY_LIMIT
+  if (added) safeSetItem(HISTORY_KEY, JSON.stringify(recentSearches.value))
+  return added
+}
+
+/** 应用备份视图偏好（主题 / 语言 / 排序 / 缩略图 / 安全模式），返回应用项数（FEAT-5） */
+function applyArchivePreferences(preferences?: ArchivePreferences): number {
+  if (!preferences) return 0
+  let applied = 0
+  if (preferences.theme) {
+    state.dark = preferences.theme === 'dark'
+    safeSetItem('cii:theme', preferences.theme)
+    applied++
+  }
+  if (preferences.locale) {
+    setLocale(preferences.locale)
+    applied++
+  }
+  if (preferences.sortMode) {
+    state.sortMode = preferences.sortMode
+    applied++
+  }
+  if (preferences.thumbSize !== undefined) {
+    state.thumbSize = preferences.thumbSize
+    applied++
+  }
+  if (preferences.safeMode !== undefined) {
+    state.safeMode = preferences.safeMode
+    safeSetItem(SAFE_MODE_KEY, preferences.safeMode ? '1' : '0')
+    applied++
+  }
+  return applied
+}
+
 hydrationPromise = hydrate()
 
 /* ---------- 派生数据 ---------- */
@@ -1710,9 +1830,9 @@ export const scanProgress = computed(() =>
     : Math.min(100, Math.round((state.batchDone / state.batchTotal) * 100)),
 )
 
-const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, none: 2 }
+const sourceRank: Record<string, number> = { comfyui: 0, a1111: 1, fooocus: 2, none: 3 }
 
-const rankBySource = (it: ImageItem) => (it.status === 'error' ? 3 : (sourceRank[it.source] ?? 3))
+const rankBySource = (it: ImageItem) => (it.status === 'error' ? 4 : (sourceRank[it.source] ?? 4))
 // 时间模式下失败项始终靠后（它们不属于时间线），时间相同再按文件名兜底
 const errLast = (it: ImageItem) => (it.status === 'error' ? 1 : 0)
 // Collator 预实例化：排序是 O(n log n) 次比较，复用实例走 Intl 快路径，大列表排序不再每次重建比较器
@@ -1738,16 +1858,44 @@ const sorters: Record<SortMode, (a: ImageItem, b: ImageItem) => number> = {
   },
 }
 
-export const stats = computed(() => {
-  const c: Record<ImageSource | 'error', number> = { comfyui: 0, a1111: 0, none: 0, error: 0 }
-  for (const i of state.items) {
+export interface UsageStat {
+  name: string
+  count: number
+}
+
+/**
+ * 一次遍历同时产出来源计数与模型 / LoRA / 采样器频次（OPT-6）：
+ * 顶栏常驻读取 stats 与 modelOptions，原先两路 computed 各扫一遍全量条目；
+ * 合并后每个解析批次只做一次 O(n) 聚合，再分别派生轻量结果。
+ */
+const libraryUsage = computed(() => {
+  const sources: Record<ImageSource | 'error', number> = {
+    comfyui: 0,
+    a1111: 0,
+    fooocus: 0,
+    none: 0,
+    error: 0,
+  }
+  const models = new Map<string, number>()
+  const loras = new Map<string, number>()
+  const samplers = new Map<string, number>()
+  for (const it of state.items) {
     // 解析失败的项没有来源，单独计数，不冒充“无元数据”；
     // 解析中的项来源未定，同样不计数（初始 source:'none' 只是占位）
-    if (i.status === 'error') c.error++
-    else if (i.status === 'done') c[i.source]++
+    if (it.status === 'error') sources.error++
+    else if (it.status === 'done') sources[it.source]++
+    const p = it.params
+    if (!p) continue
+    for (const m of p.models) models.set(m, (models.get(m) ?? 0) + 1)
+    for (const l of p.loras) loras.set(l.name, (loras.get(l.name) ?? 0) + 1)
+    for (const s of p.samplers) {
+      if (s.sampler) samplers.set(s.sampler, (samplers.get(s.sampler) ?? 0) + 1)
+    }
   }
-  return c
+  return { sources, models, loras, samplers }
 })
+
+export const stats = computed(() => libraryUsage.value.sources)
 
 /**
  * 模型筛选下拉：复用 usageStats 的聚合一份数据源（同集合），按使用频次降序、
@@ -1757,33 +1905,17 @@ export const modelOptions = computed(() =>
   usageStats.value.models.map((m) => ({ label: m.name, value: m.name })),
 )
 
-export interface UsageStat {
-  name: string
-  count: number
-}
-
-/**
- * 生成统计：对已解析出参数的图片聚合模型 / LoRA / 采样器使用频次（次数降序，同次数按名排序）。
- * computed 缓存：解析中每个 item 出结果都会触发一次重算，开销 O(全部参数项)，量级可忽略。
- */
+/** 生成统计：模型 / LoRA / 采样器使用频次（次数降序，同次数按名排序），复用同一次聚合结果 */
 export const usageStats = computed(() => {
-  const models = new Map<string, number>()
-  const loras = new Map<string, number>()
-  const samplers = new Map<string, number>()
-  for (const it of state.items) {
-    const p = it.params
-    if (!p) continue
-    for (const m of p.models) models.set(m, (models.get(m) ?? 0) + 1)
-    for (const l of p.loras) loras.set(l.name, (loras.get(l.name) ?? 0) + 1)
-    for (const s of p.samplers) {
-      if (s.sampler) samplers.set(s.sampler, (samplers.get(s.sampler) ?? 0) + 1)
-    }
-  }
   const toList = (m: Map<string, number>): UsageStat[] =>
     Array.from(m, ([name, count]) => ({ name, count })).sort(
       (a, b) => b.count - a.count || nameCollator.compare(a.name, b.name),
     )
-  return { models: toList(models), loras: toList(loras), samplers: toList(samplers) }
+  return {
+    models: toList(libraryUsage.value.models),
+    loras: toList(libraryUsage.value.loras),
+    samplers: toList(libraryUsage.value.samplers),
+  }
 })
 
 export interface ModelStat {
@@ -1896,6 +2028,129 @@ export const resolutionStats = computed<UsageStat[]>(() => {
     .slice(0, DIR_STAT_LIMIT)
 })
 
+/* ---------- 完全重复文件（FEAT-2）：按需扫描，结果只保留本次会话 ---------- */
+
+export interface FileDupeGroupInfo {
+  group: number
+  seq: number
+  total: number
+}
+
+export interface FileDupeState {
+  status: 'idle' | 'scanning' | 'done'
+  done: number
+  total: number
+  /** 精确重复组数 / 组内条目数 */
+  groups: number
+  duplicates: number
+}
+
+export const fileDupeState = reactive<FileDupeState>({
+  status: 'idle',
+  done: 0,
+  total: 0,
+  groups: 0,
+  duplicates: 0,
+})
+
+export const fileDupeGroups = ref<Map<string, FileDupeGroupInfo>>(new Map())
+export const fileDupeCount = computed(() => fileDupeGroups.value.size)
+
+let fileDupeScanToken = 0
+
+/** 列表变化 / 新解析任务开始 / 用户取消时作废旧结果，避免用过期哈希做删除 */
+function invalidateFileDupes() {
+  fileDupeScanToken++
+  fileDupeState.status = 'idle'
+  fileDupeState.done = 0
+  fileDupeState.total = 0
+  fileDupeState.groups = 0
+  fileDupeState.duplicates = 0
+  fileDupeGroups.value = new Map()
+  state.fileDupeOnly = false
+}
+
+export function cancelFileDupeScan() {
+  invalidateFileDupes()
+}
+
+/**
+ * 扫描字节级完全重复文件（FEAT-2）：只在用户主动触发时读文件，结果按精确比较确认。
+ * 扫描期间列表变化 / 开始新一轮解析会作废本次扫描，防止对已变化文件执行清理。
+ */
+export async function scanFileDuplicates(): Promise<number> {
+  const token = ++fileDupeScanToken
+  const snapshot = state.items.slice()
+  fileDupeState.status = 'scanning'
+  fileDupeState.done = 0
+  fileDupeState.total = 0
+  fileDupeState.groups = 0
+  fileDupeState.duplicates = 0
+  fileDupeGroups.value = new Map()
+  state.fileDupeOnly = false
+
+  let result: FileDupeScanResult
+  try {
+    result = await scanDuplicateFiles(snapshot, {
+      cancelled: () => token !== fileDupeScanToken,
+      onProgress: (done, total) => {
+        if (token !== fileDupeScanToken) return
+        fileDupeState.done = done
+        fileDupeState.total = total
+      },
+    })
+  } catch {
+    if (token === fileDupeScanToken) invalidateFileDupes()
+    return 0
+  }
+  if (token !== fileDupeScanToken) return 0
+
+  // 扫描期间被移除的条目从组里剔除；剩余不足两条的组不再成立
+  const groups = new Map<string, FileDupeGroupInfo>()
+  let groupIndex = 0
+  for (const ids of result.groups) {
+    const live = ids.filter((id) => liveIds.has(id))
+    if (live.length < 2) continue
+    live.forEach((id, i) => groups.set(id, { group: groupIndex, seq: i + 1, total: live.length }))
+    groupIndex++
+  }
+  fileDupeGroups.value = groups
+  fileDupeState.status = 'done'
+  fileDupeState.done = result.scanned
+  fileDupeState.total = result.total
+  fileDupeState.groups = groupIndex
+  fileDupeState.duplicates = groups.size
+  return groupIndex
+}
+
+/** 完全重复治理：每组保留最新一张，其余整批移除（可撤销），并清空过期扫描结果 */
+export function keepLatestFileDupes(): ImageItem[] {
+  const groups = fileDupeGroups.value
+  const toRemove: ImageItem[] = []
+  for (const it of state.items) {
+    const info = groups.get(it.id)
+    if (info && info.total > 1 && info.seq > 1) toRemove.push(it)
+  }
+  if (!toRemove.length) return []
+  removeItemsUndoable(toRemove)
+  invalidateFileDupes()
+  return toRemove
+}
+
+// 列表长度变化（新增 / 移除）或解析重新开始：旧重复结果立即作废
+watch(
+  () => state.items.length,
+  () => {
+    if (fileDupeState.status !== 'idle') invalidateFileDupes()
+  },
+)
+watch(
+  () => parsing.value,
+  (parsingNow) => {
+    if (parsingNow && fileDupeState.status !== 'idle') invalidateFileDupes()
+  },
+)
+
 /** 查询环境（D1）：标签匹配与指纹键由 store 注入，lib/query 保持纯函数 */
 const queryEnv: QueryEnv = { recordKey: recordKeyOf, hasTag: hitTagKey }
 
@@ -1917,6 +2172,7 @@ export const filteredItems = computed(() => {
       if (state.sourceFilter !== 'all' && it.source !== state.sourceFilter) return false
       if (state.modelFilter && !(it.params?.models ?? []).includes(state.modelFilter)) return false
       if (state.dupeOnly && !sameSourceIds.value.has(it.id)) return false
+      if (state.fileDupeOnly && !fileDupeGroups.value.has(it.id)) return false
       if (state.favOnly && !favKeys.has(recordKeyOf(it))) return false
       if (query && !matchQuery(it, query, queryEnv)) return false
       return true
@@ -1944,6 +2200,7 @@ export function rangeIds(
 export const sourceOptions = computed<{ label: string; value: SourceFilter }[]>(() => [
   { label: t('src.comfyui'), value: 'comfyui' },
   { label: t('src.a1111'), value: 'a1111' },
+  { label: t('src.fooocus'), value: 'fooocus' },
   { label: t('src.none'), value: 'none' },
   { label: t('src.error'), value: 'error' },
   { label: t('src.all'), value: 'all' },
@@ -2023,10 +2280,10 @@ export const favoriteFlags = computed(() => {
   return flags
 })
 
-/** 当前列表内已收藏条数（驱动「只看收藏」开关的显隐） */
+/** 当前列表内已收藏条数（驱动「只看收藏」开关的显隐）：复用 favoriteFlags 的同一次扫描（OPT-6） */
 export const favCount = computed(() => {
   let n = 0
-  for (const it of state.items) if (favKeys.has(recordKeyOf(it))) n++
+  for (const flagged of favoriteFlags.value.values()) if (flagged) n++
   return n
 })
 

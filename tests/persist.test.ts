@@ -11,6 +11,7 @@ import {
   clearPersisted,
   deletePersisted,
   importPersisted,
+  inspectArchive,
   loadDirBookmarks,
   loadPersisted,
   materializeRecord,
@@ -266,6 +267,74 @@ describe('缩略图持久化（F2）', () => {
     expect(text).not.toContain('QUJDREVG')
     const { records } = parseArchive(text)
     expect(records[0]!.thumbB64).toBeUndefined()
+  })
+})
+
+describe('存档备份 v4：预设 / 历史 / 偏好（FEAT-5）', () => {
+  it('序列化往返保留 v4 数据，非法预设 / 偏好 / 超长历史逐条剔除并计警告', () => {
+    const text = serializeArchive(
+      [rec({ key: 'k1' })],
+      [],
+      {},
+      {
+        presets: [
+          { name: 'p1', search: 'cat', modelFilter: null, sourceFilter: 'comfyui' },
+          { name: '', search: 'bad', modelFilter: null, sourceFilter: 'all' },
+          { name: 'p1', search: 'dup', modelFilter: null, sourceFilter: 'all' },
+        ],
+        searchHistory: ['cat', 'CAT', 'dog', '', ...Array.from({ length: 10 }, (_, i) => `q${i}`)],
+        preferences: {
+          theme: 'dark',
+          locale: 'en',
+          sortMode: 'workflow',
+          thumbSize: 300,
+          safeMode: true,
+        },
+      },
+    )
+    const inspected = inspectArchive(text)
+    expect(inspected.version).toBe(4)
+    expect(inspected.presets).toEqual([
+      { name: 'p1', search: 'cat', modelFilter: null, sourceFilter: 'comfyui' },
+    ])
+    expect(inspected.searchHistory).toEqual([
+      'cat',
+      'dog',
+      'q0',
+      'q1',
+      'q2',
+      'q3',
+      'q4',
+      'q5',
+      'q6',
+      'q7',
+    ])
+    expect(inspected.preferences).toEqual({
+      theme: 'dark',
+      locale: 'en',
+      sortMode: 'workflow',
+      thumbSize: 300,
+      safeMode: true,
+    })
+    expect(inspected.warningCount).toBeGreaterThan(0)
+  })
+
+  it('偏好非法字段被忽略，不影响其余记录恢复', () => {
+    const inspected = inspectArchive(
+      JSON.stringify({
+        version: 4,
+        records: [rec({ key: 'k2' })],
+        preferences: { theme: 'neon', thumbSize: 9999, safeMode: 'yes', sortMode: 'workflow' },
+      }),
+    )
+    expect(inspected.preferences).toEqual({ sortMode: 'workflow' })
+    expect(inspected.records).toHaveLength(1)
+    expect(inspected.warningCount).toBeGreaterThanOrEqual(3)
+  })
+
+  it('parseArchive 保持旧返回形状（不含 v4 字段）', () => {
+    const text = serializeArchive([rec()], ['k'], {}, { presets: [], searchHistory: ['x'] })
+    expect(parseArchive(text)).toEqual({ records: [rec()], favorites: ['k'], tags: {} })
   })
 })
 

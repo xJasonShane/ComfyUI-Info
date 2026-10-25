@@ -15,6 +15,7 @@
   --accent-hover: #f2b558;
   --accent-soft: rgba(232, 163, 61, 0.13);
   --teal: #58b9ae;
+  --violet: #a78bfa;
   --gray-src: #8d8d8d;
   --dot: rgba(232, 163, 61, 0.075);
   --checker: rgba(255, 255, 255, 0.05);
@@ -41,6 +42,7 @@ html.light {
   --accent-hover: #c98427;
   --accent-soft: rgba(180, 116, 31, 0.12);
   --teal: #2e8f85;
+  --violet: #7c5cc4;
   --gray-src: #8d8d8d;
   --dot: rgba(120, 90, 40, 0.12);
   --checker: rgba(0, 0, 0, 0.06);
@@ -780,6 +782,44 @@ body {
   text-align: center;
 }
 
+/* 快捷键帮助（FEAT-6） */
+.shortcut-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 9px 16px;
+  margin: 0;
+}
+
+.shortcut-list dt {
+  text-align: right;
+}
+
+.shortcut-list kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.shortcut-list dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.shortcut-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
 /* ============ 空状态 ============ */
 .empty {
   flex: 1;
@@ -941,6 +981,11 @@ body {
   box-shadow: var(--shadow);
   /* FEAT-8：点击进全屏放大（原为文件尾追加式覆盖，此处回填） */
   cursor: zoom-in;
+}
+
+/* FEAT-3：存档项只有低清缩略图，不提供放大 */
+.detail-view img.thumb-only {
+  cursor: default;
 }
 
 .detail-view .detail-noimg {
@@ -1317,6 +1362,43 @@ html.light .search-warning p {
 .preset-pop {
   width: 280px;
   font-size: 12px;
+}
+
+/* 完全重复文件扫描（FEAT-2） */
+.file-dupe-pop {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 12px;
+}
+
+.file-dupe-head {
+  font-weight: 600;
+}
+
+.file-dupe-desc {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.file-dupe-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-dupe-result {
+  margin: 0;
+  color: var(--accent);
+}
+
+.file-dupe-only {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
 }
 
 .preset-head {

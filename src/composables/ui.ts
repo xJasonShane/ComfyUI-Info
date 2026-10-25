@@ -7,6 +7,9 @@ export const statsVisible = ref(false)
 /** 模型库抽屉显隐（F4，TopBar 按钮 / App 的 Esc 全局键共用一份状态） */
 export const modelsVisible = ref(false)
 
+/** 快捷键帮助面板显隐（FEAT-6）：`?`、顶栏帮助按钮与 App 全局 Esc 共用 */
+export const shortcutsVisible = ref(false)
+
 /**
  * 随机抽一张的请求信号：TopBar 按钮自增计数，App watch 后从当前筛选结果
  * 随机打开详情。计数信号而非回调注册——与 statsVisible 同一「共享 UI 状态」模式

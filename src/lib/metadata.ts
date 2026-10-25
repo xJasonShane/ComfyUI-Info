@@ -7,6 +7,7 @@ import type { ParseResult, ParsedParams, RawMetadata } from '../types'
 import { readPngTexts, parsePngChunks, isPng } from './png'
 import { extractComfyParams, extractUiWorkflowParams } from './comfyExtract'
 import { parseA1111Parameters } from './a1111'
+import { looksLikeFooocusJson, parseFooocusParameters } from './fooocus'
 import {
   extractExifThumbnail,
   extractTiffAsciiTag,
@@ -70,7 +71,9 @@ export async function readTextMetadata(file: File): Promise<RawMetadata> {
     if (/"nodes"\s*:\s*\[/.test(trimmed) && /"type"\s*:/.test(trimmed)) {
       return { source: 'comfyui', workflow: trimmed }
     }
-    return { source: 'none', hints: ['JSON 内容不是 ComfyUI 工作流（未找到节点结构）'] }
+    // Fooocus JSON（Prompt + Base Model / Performance 等特征键）
+    if (looksLikeFooocusJson(trimmed)) return { source: 'fooocus', parameters: trimmed }
+    return { source: 'none', hints: ['JSON 内容不是 ComfyUI / Fooocus 工作流（未找到节点结构）'] }
   }
   if (/^Steps:\s*\d/m.test(trimmed) || /^Negative prompt:/im.test(trimmed)) {
     return judgeParametersText(trimmed)
@@ -89,6 +92,8 @@ function judgeUserCommentText(text: string): RawMetadata | null {
   if (json && /"class_type"\s*:/.test(json)) {
     return { source: 'comfyui', prompt: json }
   }
+  // Fooocus 把纯 JSON 写进 EXIF UserComment（JPEG / WebP）
+  if (looksLikeFooocusJson(text)) return { source: 'fooocus', parameters: text }
   return judgeParametersText(text)
 }
 
@@ -105,6 +110,8 @@ function judgeParametersText(text: string): RawMetadata {
       return { source: 'comfyui', prompt: json, parameters: text }
     }
   }
+  // Fooocus 原生 JSON（PNG parameters / fooocus_scheme）
+  if (looksLikeFooocusJson(text)) return { source: 'fooocus', parameters: text }
   return { source: 'a1111', parameters: text }
 }
 
@@ -147,6 +154,9 @@ export function extractParams(raw: RawMetadata): ParsedParams | undefined {
     return undefined
   }
   if (raw.source === 'a1111' && raw.parameters) return parseA1111Parameters(raw.parameters)
+  if (raw.source === 'fooocus' && raw.parameters) {
+    return parseFooocusParameters(raw.parameters) ?? undefined
+  }
   return undefined
 }
 
@@ -273,6 +283,10 @@ export async function readImageMetadataWithThumb(file: File): Promise<ImageMetad
       return { raw: { source: 'comfyui', prompt: texts['prompt'], workflow: texts['workflow'] } }
     }
     if (texts['parameters']) {
+      // Fooocus PNG 用 fooocus_scheme 显式声明 JSON 方案，优先于内容启发式
+      if (texts['fooocus_scheme']?.trim().toLowerCase() === 'fooocus') {
+        return { raw: { source: 'fooocus', parameters: texts['parameters'] } }
+      }
       return { raw: judgeParametersText(texts['parameters']) }
     }
     // PNG eXIf 块（部分工具把 EXIF 存在独立块里）

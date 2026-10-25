@@ -3,6 +3,7 @@
  * 不依赖固定节点名：按 class_type 匹配 + 输入槽启发式双重识别，兼容自定义节点。
  */
 import type { LoraInfo, ParsedParams, SamplerInfo } from '../types'
+import { parseJsonPreservingBigInts } from './jsonBigInt'
 
 type NodeInputs = Record<string, unknown>
 
@@ -38,70 +39,8 @@ function asNum(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
-/** 2^53 ≈ 9.007e15（16 位起）以上的整数 JSON.parse 会丢精度，统一替换成字符串保原样 */
-const UNSAFE_INT_MIN_DIGITS = 16
-
-/**
- * 把 JSON 文本里所有 ≥2^53 的裸整数替换成等值字符串，避免 JSON.parse 丢精度
- * （ComfyUI 的 seed 是 64 位随机数）。逐字符扫描而非正则替换：大整数不一定紧跟在
- * 已知键后——UI 格式 widgets_values 数组的第 N 位（KSamplerAdvanced 以 add_noise
- * 开头）、PrimitiveINT 之类节点的自定义键都可能是 seed；字符串字面量内部原样跳过
- * （提示词可能含长数字串），小数 / 科学计数法的尾段不得当成独立整数改写。
- */
-function quoteUnsafeBigInts(text: string): string {
-  let out = ''
-  let i = 0
-  const n = text.length
-  while (i < n) {
-    const ch = text[i]!
-    if (ch === '"') {
-      // 字符串字面量（含转义）原样复制
-      let j = i + 1
-      while (j < n) {
-        if (text[j] === '\\') j += 2
-        else if (text[j] === '"') {
-          j++
-          break
-        } else j++
-      }
-      out += text.slice(i, j)
-      i = j
-      continue
-    }
-    if (ch >= '0' && ch <= '9') {
-      let j = i
-      while (j < n && text[j]! >= '0' && text[j]! <= '9') j++
-      const digits = text.slice(i, j)
-      const prev = out.charAt(out.length - 1)
-      const next = j < n ? text[j]! : ''
-      // 前邻小数点 / 指数符或后接小数点 / 指数符：是小数或科学计数法的片段，不是独立整数
-      const standalone =
-        prev !== '.' && prev !== 'e' && prev !== 'E' && next !== '.' && next !== 'e' && next !== 'E'
-      if (digits.length >= UNSAFE_INT_MIN_DIGITS && standalone) {
-        // 负号留在引号外会产生非法 JSON：一并移进引号（seed 恒为非负，防御性处理）
-        if (prev === '-') out = `${out.slice(0, -1)}"-${digits}"`
-        else out += `"${digits}"`
-      } else {
-        out += digits
-      }
-      i = j
-      continue
-    }
-    out += ch
-    i++
-  }
-  return out
-}
-
 function parseWorkflow(text: string): WorkflowMap | null {
-  const safe = quoteUnsafeBigInts(text)
-  try {
-    const obj: unknown = JSON.parse(safe)
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
-    return obj as WorkflowMap
-  } catch {
-    return null
-  }
+  return parseJsonPreservingBigInts(text) as WorkflowMap | null
 }
 
 export function extractComfyParams(promptText: string): ParsedParams | null {
@@ -516,11 +455,10 @@ function samplerFromWidgets(wv: unknown[]): Omit<SamplerInfo, 'nodeId' | 'classT
 export function extractUiWorkflowParams(text: string): ParsedParams | null {
   // widgets_values 里的 64 位大整数 seed 统一转字符串保精度（seed 不一定在数组首位，
   // KSamplerAdvanced 以 add_noise 开头——与 parseWorkflow 共用同一扫描器）
-  const safe = quoteUnsafeBigInts(text)
   let data: UiWorkflow
   try {
-    const obj: unknown = JSON.parse(safe)
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+    const obj = parseJsonPreservingBigInts(text)
+    if (!obj) return null
     data = obj as UiWorkflow
   } catch {
     return null

@@ -394,7 +394,7 @@ it('解析中的项不计入来源统计，也不冒充「无元数据」', asyn
   api.addFiles([file('a.png'), file('b.png')])
 
   // 解析中：占位 source:'none' 不参与计数，也不出现在「无元数据」筛选下
-  expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, none: 0, error: 0 })
+  expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, fooocus: 0, none: 0, error: 0 })
   api.store.sourceFilter = 'none'
   expect(api.filteredItems.value).toHaveLength(0)
   api.store.sourceFilter = 'all'
@@ -453,7 +453,7 @@ it('retryAllFailed 批量重试有文件的失败项，存档失败项跳过（O
   expect(api.retryAllFailed()).toBe(2)
   expect(api.store.batchTotal).toBe(4) // 首轮 2 + 重试 2
   await flush()
-  expect(api.stats.value).toEqual({ comfyui: 2, a1111: 0, none: 0, error: 1 })
+  expect(api.stats.value).toEqual({ comfyui: 2, a1111: 0, fooocus: 0, none: 0, error: 1 })
 })
 
 it('筛选与搜索状态写入 localStorage（U2）', async () => {
@@ -490,7 +490,7 @@ it('扫描进行中解析结果按节拍批量应用，全部完成后立即应�
     await vi.advanceTimersByTimeAsync(0)
     // 扫描进行中：结果挂起不写响应式字段，不触发 stats / filteredItems 全量重算
     expect(api.store.items[0]!.status).toBe('pending')
-    expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, none: 0, error: 0 })
+    expect(api.stats.value).toEqual({ comfyui: 0, a1111: 0, fooocus: 0, none: 0, error: 0 })
 
     await vi.advanceTimersByTimeAsync(250) // 节拍（200ms）到点批量应用
     expect(api.store.items[0]!.status).toBe('done')
@@ -943,6 +943,61 @@ it('存档导入：备份携带的收藏标记并入本机账本（跨设备迁�
   )
   expect(again.favs).toBe(0)
   expect(JSON.parse(localStorage.getItem('cii:favs')!)).toHaveLength(2)
+})
+
+it('v4 备份：合并筛选预设 / 搜索历史并应用视图偏好（FEAT-5）', async () => {
+  const { importPersisted } = await import('../src/lib/persist')
+  const rec: PersistRecord = {
+    key: 'v4/d.png|1|8',
+    name: 'd.png',
+    path: 'v4/d.png',
+    size: 1,
+    mtime: 8,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui' },
+    savedAt: 0,
+  }
+  api.clearSearchHistory()
+  const originalDark = api.store.dark
+  const originalThumb = api.store.thumbSize
+  const presetName = '任务5预设'
+  const text = JSON.stringify({
+    version: 4,
+    records: [rec],
+    presets: [{ name: presetName, search: 'cat', modelFilter: null, sourceFilter: 'comfyui' }],
+    searchHistory: ['history-a', 'history-b'],
+    preferences: { theme: 'light', sortMode: 'workflow', thumbSize: 300, safeMode: true },
+  })
+
+  const preview = api.previewArchiveImport(text)
+  expect(preview.presets).toBe(1)
+  expect(preview.newPresets).toBe(1)
+  expect(preview.searchHistory).toBe(2)
+  expect(preview.preferences).toBe(4)
+
+  vi.mocked(importPersisted).mockResolvedValueOnce([rec])
+  try {
+    const result = await api.importArchive(text)
+    expect(result).toMatchObject({ n: 1, presets: 1, history: 2, prefs: 4 })
+    expect(api.filterPresets.value.find((p) => p.name === presetName)?.search).toBe('cat')
+    expect(api.recentSearches.value).toEqual(['history-a', 'history-b'])
+    expect(api.store.dark).toBe(false)
+    expect(api.store.sortMode).toBe('workflow')
+    expect(api.store.thumbSize).toBe(300)
+    expect(api.store.safeMode).toBe(true)
+    // 幂等：再次导入同名预设不重复追加，偏好应用不改变结果
+    vi.mocked(importPersisted).mockResolvedValueOnce([])
+    expect((await api.importArchive(text)).presets).toBe(1)
+    expect(api.filterPresets.value.filter((p) => p.name === presetName)).toHaveLength(1)
+  } finally {
+    api.deleteFilterPreset(presetName)
+    api.clearSearchHistory()
+    api.store.dark = originalDark
+    api.store.sortMode = 'default'
+    api.store.thumbSize = originalThumb
+    api.store.safeMode = false
+  }
 })
 
 it('toRecord / fromRecord：列表项与存档记录往返', async () => {
@@ -1677,6 +1732,32 @@ it('keepLatestOfDupes：每组保留最新一张，其余整批移除（G3）', 
   expect(api.undoLastRemoval()).toBe(1)
   expect(api.store.items.map((i) => i.name).sort()).toEqual(['a1.png', 'a2.png', 'b1.png'])
   expect(api.dupeCount.value).toBe(2)
+})
+
+it('完全重复文件：扫描 / 只看重复 / 每组保留最新并清空过期结果（FEAT-2）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'none' } })
+  // file() 只含一个字节 'x'：三个文件字节完全相同，大小分组后进入精确比较
+  api.addFiles([file('dup-a.png'), file('dup-b.png'), file('dup-c.png')])
+  await flush()
+  expect(api.store.items).toHaveLength(3)
+
+  expect(await api.scanFileDuplicates()).toBe(1)
+  expect(api.fileDupeState.status).toBe('done')
+  expect(api.fileDupeState.groups).toBe(1)
+  expect(api.fileDupeState.duplicates).toBe(3)
+
+  api.store.sourceFilter = 'all'
+  api.store.fileDupeOnly = true
+  expect(api.filteredItems.value).toHaveLength(3)
+
+  const removed = api.keepLatestFileDupes()
+  expect(removed).toHaveLength(2)
+  expect(api.store.items).toHaveLength(1)
+  // 清理后扫描结果立即失效，避免「只看完全重复」留下空画廊
+  expect(api.fileDupeState.status).toBe('idle')
+  expect(api.fileDupeCount.value).toBe(0)
+  expect(api.store.fileDupeOnly).toBe(false)
+  expect(api.undoState.value).toEqual({ count: 2 })
 })
 
 it('统计增强：按天出图量与提示词高频词（FEAT-5）', async () => {

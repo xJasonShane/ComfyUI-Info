@@ -439,6 +439,9 @@ export async function buildWorkflowZip(items: ImageItem[]): Promise<Blob | null>
     if (it.source === 'a1111' && it.raw.parameters) {
       entries.push({ name: `${stem}.parameters.txt`, data: encode(it.raw.parameters) })
     }
+    if (it.source === 'fooocus' && it.raw.parameters) {
+      entries.push({ name: `${stem}.fooocus.json`, data: encode(it.raw.parameters) })
+    }
   }
   entries.push({ name: 'manifest.json', data: encoder.encode(buildExportJson(items)) })
   return buildZip(entries)

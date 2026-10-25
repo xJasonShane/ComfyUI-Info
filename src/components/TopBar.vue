@@ -24,10 +24,14 @@ import {
   buildArchiveBackup,
   clearAll,
   clearAllDirBookmarks,
+  cancelFileDupeScan,
   deleteFilterPreset,
   dupeCount,
   favCount,
+  fileDupeCount,
+  fileDupeState,
   filteredItems,
+  keepLatestFileDupes,
   filterPresets,
   forgetRescanHandle,
   getDirectorySourceId,
@@ -40,6 +44,7 @@ import {
   rescanDirectory,
   RESCAN_INTERVALS,
   saveFilterPreset,
+  scanFileDuplicates,
   scanProgress,
   setRescanHandle,
   sortOptions,
@@ -59,6 +64,7 @@ import {
   openFilePickerRequest,
   openFolderPickerRequest,
   randomPickRequest,
+  shortcutsVisible,
   statsVisible,
 } from '../composables/ui'
 
@@ -172,6 +178,21 @@ async function onRescan() {
 function onForgetRescan() {
   forgetRescanHandle()
   message.success(t('msg.forgetDir'))
+}
+
+/* ---------- FEAT-2：完全重复文件扫描 / 清理 ---------- */
+const fileDupeScanning = computed(() => fileDupeState.status === 'scanning')
+
+async function onScanFileDupes() {
+  const groups = await scanFileDuplicates()
+  if (fileDupeState.status !== 'done') return // 被列表变化 / 用户取消作废
+  if (groups) message.success(t('fileDupe.found', { n: groups }))
+  else message.info(t('fileDupe.none'))
+}
+
+function onKeepLatestFileDupes() {
+  const removed = keepLatestFileDupes()
+  if (removed.length) message.success(t('fileDupe.removed', { n: removed.length }))
 }
 
 /* ---------- 多目录书签（FEAT-7）：在记住的目录间切换重扫目标；全部重扫（F3） ---------- */
@@ -309,12 +330,15 @@ async function confirmArchiveImport() {
   if (!pendingArchiveText.value || archiveImporting.value) return
   archiveImporting.value = true
   try {
-    const { n, favs, tags } = await importArchive(pendingArchiveText.value)
+    const { n, favs, tags, presets, history, prefs } = await importArchive(pendingArchiveText.value)
     clearArchivePreview()
     if (n) message.success(t('msg.archiveImported', { n }))
     else message.info(t('msg.archiveAllExists'))
     if (favs) message.success(t('msg.archiveFavsMerged', { n: favs }))
     if (tags) message.success(t('msg.archiveTagsMerged', { n: tags }))
+    if (presets) message.success(t('msg.archivePresetsMerged', { n: presets }))
+    if (history) message.success(t('msg.archiveHistoryMerged', { n: history }))
+    if (prefs) message.success(t('msg.archivePrefsApplied', { n: prefs }))
   } catch (err) {
     message.error(
       t('msg.archiveImportFailed', { msg: err instanceof Error ? err.message : String(err) }),
@@ -493,6 +517,11 @@ function savePreset() {
       clearable
       filterable
       :placeholder="t('topbar.modelPlaceholder')"
+      :aria-label="t('topbar.modelPlaceholder')"
+      :input-props="{
+        placeholder: t('topbar.modelPlaceholder'),
+        'aria-label': t('topbar.modelPlaceholder'),
+      }"
       :options="modelOptions"
       :consistent-menu-width="false"
       style="width: 170px"
@@ -502,6 +531,8 @@ function savePreset() {
       v-model:value="store.sourceFilter"
       size="small"
       :options="sourceOptions"
+      :placeholder="t('topbar.sourceAria')"
+      :aria-label="t('topbar.sourceAria')"
       :consistent-menu-width="false"
       style="width: 140px"
     />
@@ -561,6 +592,8 @@ function savePreset() {
       v-model:value="store.sortMode"
       size="small"
       :options="sortOptions"
+      :placeholder="t('topbar.sortAria')"
+      :aria-label="t('topbar.sortAria')"
       :consistent-menu-width="false"
       style="width: 124px"
     />
@@ -585,9 +618,66 @@ function savePreset() {
           :max="420"
           :step="10"
           :format-tooltip="fmtThumb"
+          :aria-label="t('topbar.thumbSize')"
           style="width: 150px"
         />
         <span class="thumb-size-val">{{ store.thumbSize }}px</span>
+      </div>
+    </NPopover>
+
+    <NPopover v-if="store.items.length > 0" trigger="click" placement="bottom">
+      <template #trigger>
+        <NButton
+          size="small"
+          quaternary
+          circle
+          :aria-label="t('fileDupe.title')"
+          :title="t('fileDupe.title')"
+        >
+          <template #icon><Icon name="copy" :size="15" /></template>
+        </NButton>
+      </template>
+      <div class="file-dupe-pop">
+        <div class="file-dupe-head">{{ t('fileDupe.title') }}</div>
+        <p class="file-dupe-desc">{{ t('fileDupe.desc') }}</p>
+        <div class="file-dupe-actions">
+          <NButton
+            size="small"
+            secondary
+            :loading="fileDupeScanning"
+            :disabled="fileDupeScanning"
+            @click="onScanFileDupes"
+          >
+            {{
+              fileDupeScanning
+                ? t('fileDupe.scanProgress', {
+                    done: fileDupeState.done,
+                    total: fileDupeState.total,
+                  })
+                : fileDupeState.status === 'done'
+                  ? t('fileDupe.rescan')
+                  : t('fileDupe.scan')
+            }}
+          </NButton>
+          <NButton v-if="fileDupeScanning" size="small" quaternary @click="cancelFileDupeScan">
+            {{ t('common.cancel') }}
+          </NButton>
+        </div>
+        <p v-if="fileDupeState.status === 'done'" class="file-dupe-result">
+          {{ t('fileDupe.result', { groups: fileDupeState.groups, n: fileDupeState.duplicates }) }}
+        </p>
+        <template v-if="fileDupeCount && fileDupeState.status === 'done'">
+          <label class="file-dupe-only">
+            <NSwitch v-model:value="store.fileDupeOnly" size="small" />
+            <span>{{ t('fileDupe.only') }}</span>
+          </label>
+          <NPopconfirm @positive-click="onKeepLatestFileDupes">
+            <template #trigger>
+              <NButton size="small" secondary>{{ t('fileDupe.keepLatest') }}</NButton>
+            </template>
+            {{ t('fileDupe.keepLatestConfirm', { n: fileDupeState.duplicates }) }}
+          </NPopconfirm>
+        </template>
       </div>
     </NPopover>
 
@@ -691,6 +781,18 @@ function savePreset() {
       <span style="font-size: 11px; font-weight: 600">{{ locale === 'zh' ? 'EN' : '中' }}</span>
     </NButton>
 
+    <NButton
+      size="small"
+      quaternary
+      circle
+      aria-keyshortcuts="?"
+      :aria-label="t('shortcuts.open')"
+      :title="t('shortcuts.open')"
+      @click="shortcutsVisible = true"
+    >
+      <template #icon><Icon name="help-circle" :size="15" /></template>
+    </NButton>
+
     <div v-if="parsing" class="scan-progress">
       <i :style="{ width: scanProgress + '%' }" />
     </div>
@@ -750,6 +852,14 @@ function savePreset() {
           <strong>{{ archivePreview.tagRecords }}</strong>
           <span>{{ t('archive.previewChangedTagRecords') }}</span>
           <strong>{{ archivePreview.changedTagRecords }}</strong>
+          <span>{{ t('archive.previewPresets') }}</span>
+          <strong>{{ archivePreview.presets }}</strong>
+          <span>{{ t('archive.previewNewPresets') }}</span>
+          <strong>{{ archivePreview.newPresets }}</strong>
+          <span>{{ t('archive.previewSearchHistory') }}</span>
+          <strong>{{ archivePreview.searchHistory }}</strong>
+          <span>{{ t('archive.previewPreferences') }}</span>
+          <strong>{{ archivePreview.preferences }}</strong>
         </div>
       </div>
       <template #footer>

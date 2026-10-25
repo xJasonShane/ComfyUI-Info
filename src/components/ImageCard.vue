@@ -109,6 +109,7 @@ const srcColor = computed(() => {
   if (props.item.status === 'error') return 'var(--danger)'
   if (props.item.source === 'comfyui') return 'var(--accent)'
   if (props.item.source === 'a1111') return 'var(--teal)'
+  if (props.item.source === 'fooocus') return 'var(--violet)'
   return 'var(--gray-src)'
 })
 
@@ -117,6 +118,7 @@ const srcLabel = computed(() => {
   if (props.item.status !== 'done') return t('card.parsing')
   if (props.item.source === 'comfyui') return 'ComfyUI'
   if (props.item.source === 'a1111') return 'A1111'
+  if (props.item.source === 'fooocus') return 'Fooocus'
   return t('src.none')
 })
 

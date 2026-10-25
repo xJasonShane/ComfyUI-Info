@@ -17,10 +17,12 @@ import ImageZoomOverlay from './ImageZoomOverlay.vue'
 import { baseName, copyText, downloadBinary, downloadText, humanBytes } from '../lib/utils'
 import { buildParamsSummary } from '../lib/export'
 import {
+  addFiles,
   allTagNames,
   favoriteFlags,
   filteredItems,
   retryItem,
+  ensureItemThumb,
   ensureItemUrl,
   store,
   tagLists,
@@ -124,7 +126,12 @@ onBeforeUnmount(() => {
 /* ---------- 实际分辨率标注：图片解码完成后读取原始像素尺寸 ---------- */
 const actualDims = ref<{ w: number; h: number } | null>(null)
 
+/** 存档项只有内嵌缩略图时可预览但不能放大，也不把缩略图尺寸当作原图尺寸（FEAT-3） */
+const isThumbOnly = computed(() => !!props.item && !props.item.url && !!props.item.thumb)
+const previewSrc = computed(() => props.item?.url || props.item?.thumb || '')
+
 function onImgLoad(e: Event) {
+  if (isThumbOnly.value) return
   const img = e.target as HTMLImageElement
   actualDims.value = { w: img.naturalWidth, h: img.naturalHeight }
 }
@@ -153,13 +160,35 @@ const dimsTitle = computed(() => {
 })
 
 // P2：详情大图与抽屉浏览同样按需创建预览 URL
+// F2 / FEAT-3：存档项再按需物化内嵌缩略图，无原文件时也能在详情预览
 watch(
   () => props.item?.id,
   () => {
-    if (props.item) ensureItemUrl(props.item)
+    if (!props.item) return
+    ensureItemUrl(props.item)
+    if (props.item.detached) void ensureItemThumb(props.item)
   },
   { immediate: true },
 )
+
+/* ---------- FEAT-3：存档项重新关联原文件 ---------- */
+const reattachInput = ref<HTMLInputElement | null>(null)
+
+function pickReattachFile() {
+  reattachInput.value?.click()
+}
+
+function onReattachFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  const item = props.item
+  if (!file || !item?.detached) return
+  // 沿用存档项已知的相对路径 / 目录来源：用户明确为该卡片选择原文件，
+  // 指纹才能命中并原地回挂（单选文件本身不带路径信息）
+  addFiles([{ file, path: item.path, sourceId: item.sourceId }])
+  message.success(t('detail.reattached'))
+}
 
 const fileTime = computed(() => {
   if (!props.item) return ''
@@ -177,7 +206,8 @@ function availableTabs(item: ImageItem): string[] {
   const tabs: string[] = []
   if (item.raw.parameters) tabs.push('raw')
   if (item.raw.prompt) tabs.push('prompt')
-  if (item.raw.source !== 'a1111') tabs.push('workflow')
+  // Fooocus 的 parameters 是参数 JSON，不是 UI 工作流，避免展示空 workflow 页签
+  if (item.raw.source !== 'a1111' && item.raw.source !== 'fooocus') tabs.push('workflow')
   return tabs
 }
 
@@ -475,14 +505,16 @@ async function copyImage() {
       <div v-if="item" class="detail">
         <div class="detail-view">
           <img
-            v-if="item.url"
-            :src="item.url"
+            v-if="previewSrc"
+            :src="previewSrc"
             :alt="item.name"
-            :title="t('detail.zoomIn')"
+            :class="{ 'thumb-only': isThumbOnly }"
+            :title="isThumbOnly ? t('detail.thumbPreview') : t('detail.zoomIn')"
             @load="onImgLoad"
-            @click="zoomed = true"
+            @click="!isThumbOnly && (zoomed = true)"
           />
-          <div v-if="actualDims" class="img-dims" :title="dimsTitle">
+          <div v-if="isThumbOnly" class="img-dims">{{ t('detail.thumbPreview') }}</div>
+          <div v-else-if="actualDims" class="img-dims" :title="dimsTitle">
             {{ actualDims.w }} × {{ actualDims.h }} px<span v-if="dimsNote"> · {{ dimsNote }}</span>
           </div>
           <button
@@ -525,15 +557,23 @@ async function copyImage() {
               <template #icon><Icon name="download" :size="13" /></template>
             </NButton>
           </div>
-          <div v-else class="detail-noimg">
+          <div v-if="!previewSrc" class="detail-noimg">
             <Icon :name="item.metaOnly ? 'file-text' : 'image'" :size="26" :stroke="1.6" />
             <span>{{
               item.metaOnly ? t('detail.metaFileNoPreview') : t('detail.imageNotLoaded')
             }}</span>
             <span v-if="!item.metaOnly" class="tip">{{ t('detail.reattachHint') }}</span>
+            <NButton v-if="item.detached" size="small" secondary @click="pickReattachFile">{{
+              t('detail.reattach')
+            }}</NButton>
           </div>
         </div>
-        <ImageZoomOverlay v-if="zoomed" :src="item.url" :alt="item.name" @close="zoomed = false" />
+        <ImageZoomOverlay
+          v-if="zoomed && item.url"
+          :src="item.url"
+          :alt="item.name"
+          @close="zoomed = false"
+        />
 
         <div class="detail-panel">
           <div class="fileline">
@@ -549,6 +589,17 @@ async function copyImage() {
               @click="copy(item.path ?? item.name, t('detail.copyPath'))"
             >
               <template #icon><Icon name="copy" :size="12" /></template>
+            </NButton>
+            <NButton
+              v-if="item.detached"
+              size="tiny"
+              quaternary
+              circle
+              :title="t('detail.reattach')"
+              :aria-label="t('detail.reattach')"
+              @click="pickReattachFile"
+            >
+              <template #icon><Icon name="folder" :size="12" /></template>
             </NButton>
             <span :title="new Date(item.mtime).toLocaleString()">{{ fileTime }}</span>
             <span>{{ humanBytes(item.size) }}</span>
@@ -837,7 +888,7 @@ async function copyImage() {
                 </div>
               </NTabPane>
               <NTabPane
-                v-if="item.raw.source !== 'a1111'"
+                v-if="item.raw.source !== 'a1111' && item.raw.source !== 'fooocus'"
                 name="workflow"
                 :tab="t('detail.tabWorkflow')"
               >
@@ -875,5 +926,12 @@ async function copyImage() {
         </div>
       </div>
     </div>
+    <input
+      ref="reattachInput"
+      type="file"
+      accept=".png,.jpg,.jpeg,.webp"
+      hidden
+      @change="onReattachFile"
+    />
   </NDrawer>
 </template>
