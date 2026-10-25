@@ -139,10 +139,19 @@ function isValidRecord(value: unknown): value is PersistRecord {
  * 结果按内容缓存：同工作流批量出图的重复串在一次会话里只需哈希一次。
  */
 const hashCache = new Map<string, string>()
+const HASH_CACHE_MAX_ENTRIES = 8192
+/** 缓存持有完整文本（UTF-16 约 2 字节/字符），按字节设上限而非只限条数（OPT-2） */
+const HASH_CACHE_MAX_BYTES = 8 * 1024 * 1024
+let hashCacheBytes = 0
 
 function contentHash(text: string): string {
   const cached = hashCache.get(text)
-  if (cached) return cached
+  if (cached !== undefined) {
+    // LRU：命中后移到队尾，长时间未用的长文本优先淘汰
+    hashCache.delete(text)
+    hashCache.set(text, cached)
+    return cached
+  }
   let h1 = 0x811c9dc5
   let h2 = 0x01000193
   for (let i = 0; i < text.length; i++) {
@@ -151,9 +160,27 @@ function contentHash(text: string): string {
     h2 = Math.imul(h2 ^ c, 0x85ebca6b)
   }
   const hash = `${(h1 >>> 0).toString(36)}${(h2 ^ text.length).toString(36)}${text.length.toString(36)}`
-  if (hashCache.size > 8192) hashCache.clear() // 防御性上限：内容种类异常膨胀时整体重来
-  hashCache.set(text, hash)
+  const bytes = text.length * 2
+  // 单条超预算的文本不入缓存：缓存它的代价大于重复哈希一次
+  if (bytes <= HASH_CACHE_MAX_BYTES) {
+    hashCache.set(text, hash)
+    hashCacheBytes += bytes
+    while (
+      (hashCache.size > HASH_CACHE_MAX_ENTRIES || hashCacheBytes > HASH_CACHE_MAX_BYTES) &&
+      hashCache.size > 1
+    ) {
+      const oldest = hashCache.keys().next().value as string
+      hashCache.delete(oldest)
+      hashCacheBytes -= oldest.length * 2
+    }
+  }
   return hash
+}
+
+/** 清空内容哈希缓存：清空列表 / 大批移除后回收已不可见的长文本引用（OPT-2） */
+export function clearContentHashCache(): void {
+  hashCache.clear()
+  hashCacheBytes = 0
 }
 
 /** v3 存储记录：大文本字段以内容哈希引用 blobs store，结构化参数已摘除 rawText */
@@ -460,9 +487,14 @@ export async function putPersisted(
   const tx = db.transaction([STORE, BLOB_STORE], 'readwrite')
   const blobStore = tx.objectStore(BLOB_STORE)
   const itemStore = tx.objectStore(STORE)
+  // 跨记录去重（OPT-1）：同一工作流批量出图时，多份记录引用同一内容哈希。
+  // 逐记录 put 会在单次事务里重复提交同一 blob，万级批次造成显著写放大；
+  // 先按哈希归并，再每个唯一内容只提交一次。
+  const uniqueBlobs = new Map<string, BlobRow>()
   for (const { blobs } of splits) {
-    for (const b of blobs) blobStore.put(b)
+    for (const b of blobs) if (!uniqueBlobs.has(b.hash)) uniqueBlobs.set(b.hash, b)
   }
+  for (const b of uniqueBlobs.values()) blobStore.put(b)
   for (const { stored } of splits) itemStore.put(stored)
   await settled(tx)
 }

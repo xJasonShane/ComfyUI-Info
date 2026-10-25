@@ -148,6 +148,10 @@ async function onPickFolder() {
       return
     }
     await setRescanHandle(handle, sourceId)
+  } catch {
+    // 目录被移动 / 删除、权限被撤销、句柄失效等：给出可行动提示，
+    // 不再把异常抛到全局错误横幅（OPT-4）
+    message.error(t('msg.scanFailed', { name: handle.name }))
   } finally {
     scanning.value = false
   }

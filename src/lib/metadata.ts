@@ -152,12 +152,30 @@ export function extractParams(raw: RawMetadata): ParsedParams | undefined {
 
 /* ---------- 主线程侧字符串去重（interning） ---------- */
 const internPool = new Map<string, string>()
+/** 长文本常驻池按字节设预算（OPT-2）：超过后淘汰最久未命中的内容，避免长会话无界增长 */
+const INTERN_MAX_BYTES = 16 * 1024 * 1024
+let internBytes = 0
 
 function intern(s: string | undefined): string | undefined {
   if (s === undefined) return undefined
   const hit = internPool.get(s)
-  if (hit !== undefined) return hit
-  internPool.set(s, s)
+  if (hit !== undefined) {
+    // LRU：命中后移到队尾，最近解析过的内容保持可复用
+    internPool.delete(s)
+    internPool.set(s, hit)
+    return hit
+  }
+  const bytes = s.length * 2
+  // 单条超预算的文本直接返回原串，不进入常驻池
+  if (bytes <= INTERN_MAX_BYTES) {
+    internPool.set(s, s)
+    internBytes += bytes
+    while (internBytes > INTERN_MAX_BYTES && internPool.size > 1) {
+      const oldest = internPool.keys().next().value as string
+      internPool.delete(oldest)
+      internBytes -= oldest.length * 2
+    }
+  }
   return s
 }
 
@@ -177,6 +195,7 @@ export function internParseResult(result: ParseResult): ParseResult {
 /** 清空 intern 池：列表整体清空后所有结果串都不再被引用，池同步释放 */
 export function clearInternPool() {
   internPool.clear()
+  internBytes = 0
 }
 
 export type ImageKind = 'png' | 'jpeg' | 'webp'

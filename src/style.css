@@ -587,6 +587,73 @@ body {
   font-weight: 600;
 }
 
+/* 移除撤销条（FEAT-1）：与批量操作条同处底部，有选择条时上移避让 */
+.undo-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.undo-bar.raised {
+  bottom: 74px;
+}
+
+.undo-bar .undo-text {
+  white-space: nowrap;
+}
+
+.undo-bar .undo-action {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.undo-bar .undo-action:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.undo-bar .undo-dismiss {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.undo-bar .undo-dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.undo-bar .undo-action:focus-visible,
+.undo-bar .undo-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ============ 参数对比 ============ */
 .cmp {
   display: flex;

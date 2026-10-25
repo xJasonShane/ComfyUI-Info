@@ -48,13 +48,14 @@ import EmptyState from './components/EmptyState.vue'
 import Icon from './components/Icon.vue'
 import {
   addFiles,
+  dismissUndo,
   favoriteFlags,
   filteredItems,
   keepLatestOfDupes,
   parsing,
   rangeIds,
-  removeItem,
-  removeItems,
+  removeItemUndoable,
+  removeItemsUndoable,
   retryAllFailed,
   setItemsFavorite,
   setItemsTag,
@@ -62,6 +63,8 @@ import {
   store,
   tagCounts,
   toggleFavorite,
+  undoLastRemoval,
+  undoState,
   removeQueryToken,
   tokenizeQuery,
   type SourceFilter,
@@ -268,9 +271,9 @@ function closeCompareIfRemoved(gone: ReadonlySet<ImageItem>) {
   }
 }
 
-// 单张移除；若移除的正是抽屉里打开的这张，一并收起
+// 单张移除（可撤销）；若移除的正是抽屉里打开的这张，一并收起
 function onRemove(item: ImageItem) {
-  removeItem(item)
+  removeItemUndoable(item)
   selectedIds.value.delete(item.id)
   const gone = new Set([item])
   closeDetailIfRemoved(gone)
@@ -336,7 +339,7 @@ function clearSelection() {
 
 function batchRemove() {
   const removed = [...selectedItems.value]
-  removeItems(removed)
+  removeItemsUndoable(removed)
   clearSelection()
   // 正打开的详情 / 对比图在被移除集合里时收起抽屉，避免裂图残影
   const gone = new Set(removed)
@@ -344,14 +347,20 @@ function batchRemove() {
   closeCompareIfRemoved(gone)
 }
 
-/** G3：重复治理——「每组保留最新」，确认后整批移除各同源组的旧张 */
+/** G3：重复治理——「每组保留最新」，确认后整批移除各同源组的旧张（可撤销） */
 function onKeepLatestDupes() {
-  const removed = keepLatestOfDupes()
+  const removed = keepLatestOfDupes(true)
   if (!removed.length) return
-  appMessage().success(t('msg.dupesRemoved', { n: removed.length }))
   const gone = new Set(removed)
   closeDetailIfRemoved(gone)
   closeCompareIfRemoved(gone)
+}
+
+/** FEAT-1：撤销最近一次移除，恢复条目 / 存档记录 / 预览 */
+function onUndoRemove() {
+  const n = undoLastRemoval()
+  if (n) appMessage().success(t('undo.restored', { n }))
+  else appMessage().info(t('undo.failed'))
 }
 
 async function batchCopyPrompts() {
@@ -459,15 +468,18 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     return
   }
-  // F：收藏 / 取消收藏当前图（与文件行星标按钮同一账本）
-  if (e.key.toLowerCase() === 'f') {
+  // 单键快捷操作不接管带修饰键的组合：Ctrl/⌘+F 属于浏览器查找，
+  // Alt 组合属于系统 / 菜单快捷键，不应被当作收藏或删除（OPT-3）
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  // F：收藏 / 取消收藏当前图（与文件行星标按钮同一账本）；长按重复不反复切换
+  if (!e.repeat && e.key.toLowerCase() === 'f') {
     toggleFavorite(current.value)
     e.preventDefault()
     return
   }
   // Delete：移除当前图并同位置补位前进（不绑 Backspace——语义过于接近「返回」，
-  // 且移除会连带清掉存档记录，须用明确的按键防误触）
-  if (e.key === 'Delete') {
+  // 且移除会连带清掉存档记录，须用明确的按键防误触）；长按重复不连续删图
+  if (!e.repeat && e.key === 'Delete') {
     removeCurrentAndAdvance()
     e.preventDefault()
   }
@@ -479,7 +491,7 @@ function removeCurrentAndAdvance() {
   if (!item) return
   const list = filteredItems.value
   const idx = list.findIndex((i) => i.id === item.id)
-  removeItem(item)
+  removeItemUndoable(item)
   selectedIds.value.delete(item.id)
   const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1]) : undefined
   if (next) current.value = next
@@ -548,13 +560,15 @@ watch(showDetail, (v) => {
       ?.focus({ preventScroll: true })
   }
 })
-// 清空列表时收起详情抽屉，避免展示已撤销 URL 的图片
+// 清空列表时收起详情抽屉并清空选择账本：顶栏「清空」绕过 App 的移除回调，
+// 只关详情会留下已不存在条目的选中 id（OPT-3）
 watch(
   () => store.items.length,
   (len) => {
     if (len === 0) {
       showDetail.value = false
       current.value = null
+      clearSelection()
     }
   },
 )
@@ -613,8 +627,13 @@ async function onDrop(e: DragEvent) {
   depth = 0
   dragging.value = false
   if (!e.dataTransfer) return
-  const files = await collectDroppedFiles(e.dataTransfer)
-  if (files.length) addFiles(files)
+  try {
+    const files = await collectDroppedFiles(e.dataTransfer)
+    if (files.length) addFiles(files)
+  } catch {
+    // 拖拽目录读取失败（权限 / 句柄失效等）：明确提示并可改用按钮入口（OPT-4）
+    appMessage().error(t('msg.dropFailed'))
+  }
 }
 </script>
 
@@ -816,6 +835,29 @@ async function onDrop(e: DragEvent) {
           <NButton size="tiny" quaternary @click="clearSelection">{{
             t('bar.clearSelection')
           }}</NButton>
+        </div>
+
+        <!-- FEAT-1：移除撤销条（10 秒窗口）。有批量选择条时上移，避免遮挡 -->
+        <div
+          v-if="undoState"
+          class="undo-bar"
+          :class="{ raised: selectedItems.length > 0 }"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="undo-text">{{ t('undo.removed', { n: undoState.count }) }}</span>
+          <button type="button" class="undo-action" @click="onUndoRemove">
+            {{ t('undo.action') }}
+          </button>
+          <button
+            type="button"
+            class="undo-dismiss"
+            :title="t('undo.dismiss')"
+            :aria-label="t('undo.dismiss')"
+            @click="dismissUndo"
+          >
+            <Icon name="x" :size="11" :stroke="2.2" />
+          </button>
         </div>
 
         <DetailDrawer

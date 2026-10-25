@@ -128,6 +128,25 @@ test('解析 → 详情 → 统计 → 搜索 → 导出 CSV 全链路', async (
   expect(download.suggestedFilename()).toMatch(/^comfyui-info-\d{4}-\d{2}-\d{2}\.csv$/)
 })
 
+test('详情删除后可从撤销条恢复（FEAT-1）', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('input[type="file"]').first().setInputFiles(PNG_PAYLOAD)
+  const cards = page.locator('.card')
+  await expect(cards).toHaveCount(1, { timeout: 15_000 })
+
+  await cards.first().click()
+  await expect(page.locator('.detail')).toBeVisible()
+  await page.keyboard.press('Delete') // 详情内 Delete：移除当前图
+  await expect(cards).toHaveCount(0)
+
+  const undo = page.locator('.undo-bar')
+  await expect(undo).toBeVisible()
+  await expect(undo).toContainText('已移除 1 项')
+  await undo.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(cards).toHaveCount(1, { timeout: 10_000 })
+  await expect(undo).not.toBeVisible()
+})
+
 test('刷新后解析结果从 IndexedDB 以存档卡片恢复', async ({ page }) => {
   // 持久化降级路径会打 console.warn / pageerror：全部捕获，失败时随断言输出便于定位
   const issues: string[] = []

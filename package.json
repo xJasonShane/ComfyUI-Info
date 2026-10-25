@@ -10,6 +10,7 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "perf": "vitest run tests/perf.test.ts",
     "test:e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write .",

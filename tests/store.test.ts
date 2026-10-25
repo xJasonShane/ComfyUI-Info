@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseA1111Parameters } from '../src/lib/a1111'
-import { deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
+import { clearInternPool } from '../src/lib/metadata'
+import { clearContentHashCache, deletePersisted, putPersisted, recordKey } from '../src/lib/persist'
 import { queryWarnings } from '../src/lib/query'
 import type { ImageItem, ParsedParams } from '../src/types'
 import type { PersistRecord } from '../src/lib/persist'
@@ -11,7 +12,7 @@ vi.mock('../src/lib/metadata', () => ({
   isSupportedImage: (f: File) => /\.(png|jpe?g|webp)$/i.test(f.name),
   isMetaTextFile: (f: File) => /\.(json|txt)$/i.test(f.name),
   hasSupportedSignature: async () => true,
-  clearInternPool: () => {},
+  clearInternPool: vi.fn(),
 }))
 vi.mock('../src/lib/parser', () => ({
   parseImage: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../src/lib/persist', async (importOriginal) => {
     clearDirBookmarks: vi.fn(async () => {}),
     loadDirBookmarks: vi.fn(async () => []),
     importPersisted: vi.fn(async () => []),
+    clearContentHashCache: vi.fn(),
   }
 })
 // 目录扫描 mock：自动重扫用例需要可控的枚举与权限，其余用例不触碰目录扫描
@@ -305,6 +307,36 @@ it('flushPersist 向写库传递批次取消检查，清空列表即在途写库
     expect(guard!()).toBe(false) // 批次仍有效，写库放行
     api.clearAll()
     expect(guard!()).toBe(true) // 清空作废本轮写库，getDb 之后的写入必须放弃
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('撤销会把已删除的存档记录重新写回（FEAT-1）', async () => {
+  // 同前：先让前序用例遗留的 500ms 防抖在真实时钟上走完
+  await new Promise((r) => setTimeout(r, 510))
+  vi.mocked(putPersisted).mockClear()
+  vi.mocked(deletePersisted).mockClear()
+  vi.useFakeTimers()
+  try {
+    vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+    api.addFiles([file('a.png')])
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(500) // 首次写库
+    const item = api.store.items[0]!
+    expect(putPersisted).toHaveBeenCalled()
+
+    api.removeItemUndoable(item)
+    await vi.advanceTimersByTimeAsync(500) // 删除事务
+    expect(deletePersisted).toHaveBeenCalled()
+
+    vi.mocked(putPersisted).mockClear()
+    expect(api.undoLastRemoval()).toBe(1)
+    await vi.advanceTimersByTimeAsync(500) // 撤销后重新 markDirty → 写回
+    const keys = vi
+      .mocked(putPersisted)
+      .mock.calls.flatMap(([records]) => records.map((r) => r.key))
+    expect(keys).toContain(recordKey(item))
   } finally {
     vi.useRealTimers()
   }
@@ -639,6 +671,98 @@ it('移除存档项不动批次计数（从未计入 batchTotal 的项不得减�
   expect(api.store.batchTotal).toBe(0)
   expect(api.store.batchDone).toBe(0)
   expect(api.parsing.value).toBe(false)
+})
+
+it('移除后可撤销：恢复条目、预览 URL、批次计数与撤销窗口（FEAT-1）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  api.addFiles([file('a.png')])
+  await flush()
+  const item = api.store.items[0]!
+  expect(api.store.batchTotal).toBe(1)
+  expect(api.store.batchDone).toBe(1)
+
+  api.removeItemUndoable(item)
+  expect(api.store.items).toHaveLength(0)
+  expect(api.store.batchTotal).toBe(0)
+  expect(api.store.batchDone).toBe(0)
+  expect(api.undoState.value).toEqual({ count: 1 })
+
+  expect(api.undoLastRemoval()).toBe(1)
+  expect(api.store.items).toHaveLength(1)
+  expect(api.store.items[0]).toBe(item)
+  expect(api.store.items[0]!.url).toBe('blob:mock') // 移除时回收的预览 URL 已重建
+  expect(api.store.batchTotal).toBe(1)
+  expect(api.store.batchDone).toBe(1)
+  expect(api.undoState.value).toBeNull()
+  // 重复撤销幂等：窗口已消费，不会再次恢复
+  expect(api.undoLastRemoval()).toBe(0)
+  expect(api.store.items).toHaveLength(1)
+})
+
+it('批量移除后可一次撤销全部条目，计数不重复扣减（FEAT-1）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  api.addFiles([file('a.png'), file('b.png'), file('c.png')])
+  await flush()
+  const [a, b] = api.store.items
+  api.removeItemsUndoable([a!, b!])
+  expect(api.store.items).toHaveLength(1)
+  expect(api.store.batchTotal).toBe(1)
+  expect(api.store.batchDone).toBe(1)
+  expect(api.undoState.value).toEqual({ count: 2 })
+
+  expect(api.undoLastRemoval()).toBe(2)
+  expect(api.store.items.map((i) => i.name).sort()).toEqual(['a.png', 'b.png', 'c.png'])
+  expect(api.store.batchTotal).toBe(3)
+  expect(api.store.batchDone).toBe(3)
+})
+
+it('同位置已重新添加新版本时撤销跳过该项，避免重复卡片（FEAT-1）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  // 目录来源的 path 让位置身份稳定；重新添加的新版本与旧版本共享同一身份
+  const incoming = () => ({ file: new File(['x'], 'a.png'), path: 'v1/a.png' })
+  api.addFiles([incoming()])
+  await flush()
+  api.removeItemUndoable(api.store.items[0]!)
+  api.addFiles([incoming()])
+  await flush()
+  expect(api.store.items).toHaveLength(1)
+  expect(api.undoLastRemoval()).toBe(0)
+  expect(api.store.items).toHaveLength(1)
+})
+
+it('单次移除达到阈值时回收长文本缓存（OPT-2）', () => {
+  const recs: PersistRecord[] = Array.from({ length: 201 }, (_, i) => ({
+    key: `cache/${i}.png|1|${i}`,
+    name: `${i}.png`,
+    path: `cache/${i}.png`,
+    size: 1,
+    mtime: i,
+    status: 'done',
+    source: 'comfyui',
+    raw: { source: 'comfyui' },
+    savedAt: 0,
+  }))
+  api.restoreArchived(recs)
+  expect(api.store.items).toHaveLength(201)
+  vi.mocked(clearInternPool).mockClear()
+  vi.mocked(clearContentHashCache).mockClear()
+
+  // 阈值 200：移除 200 条触发缓存回收；单条 / 小批删除不触发（保留复用价值）
+  api.removeItems(api.store.items.slice(0, 200))
+  expect(clearInternPool).toHaveBeenCalledTimes(1)
+  expect(clearContentHashCache).toHaveBeenCalledTimes(1)
+})
+
+it('清空列表使撤销窗口失效，不会把已清空条目装回（FEAT-1）', async () => {
+  vi.mocked(parser.parseImage).mockResolvedValue({ raw: { source: 'comfyui' } })
+  api.addFiles([file('a.png')])
+  await flush()
+  api.removeItemUndoable(api.store.items[0]!)
+  expect(api.undoState.value).toEqual({ count: 1 })
+  api.clearAll()
+  expect(api.undoState.value).toBeNull()
+  expect(api.undoLastRemoval()).toBe(0)
+  expect(api.store.items).toHaveLength(0)
 })
 
 it('存档 v3：大文本拆分去重与物化往返（OPT-5）', async () => {
@@ -1543,10 +1667,16 @@ it('keepLatestOfDupes：每组保留最新一张，其余整批移除（G3）', 
   api.store.sourceFilter = 'all'
 
   // a 组（同工作流同种子）只留最新的 a2，a1 移除；b1 单张自成一组不动
-  const removed = api.keepLatestOfDupes()
+  const removed = api.keepLatestOfDupes(true)
   expect(removed.map((i) => i.name)).toEqual(['a1.png'])
   expect(api.store.items.map((i) => i.name).sort()).toEqual(['a2.png', 'b1.png'])
   expect(api.dupeCount.value).toBe(0)
+
+  // FEAT-1：重复治理同样可撤销，恢复后同源组重新成立
+  expect(api.undoState.value).toEqual({ count: 1 })
+  expect(api.undoLastRemoval()).toBe(1)
+  expect(api.store.items.map((i) => i.name).sort()).toEqual(['a1.png', 'a2.png', 'b1.png'])
+  expect(api.dupeCount.value).toBe(2)
 })
 
 it('统计增强：按天出图量与提示词高频词（FEAT-5）', async () => {

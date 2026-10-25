@@ -21,6 +21,7 @@ import {
 import { collectDirectoryFiles, ensureReadPermission } from '../lib/fs'
 import { t } from '../locales'
 import {
+  clearContentHashCache,
   clearDirBookmarks as clearPersistedBookmarks,
   clearPersisted,
   contentVersionKey,
@@ -341,6 +342,8 @@ const queue: ImageItem[] = []
 const PARSE_LIMIT = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) * 2))
 // Worker 池整体回退主线程时（B3），全部解析都压在 UI 线程上——并发收敛到不卡交互的水平
 const MAIN_THREAD_PARSE_LIMIT = 3
+// 单次移除达到该数量即回收长文本缓存（OPT-2）：小批删除保留复用价值，大批删除释放内存
+const CACHE_RESET_REMOVAL = 200
 // 清空列表时递增：旧批次的在途解析完成时不再计数，避免污染新批次进度
 let batchEpoch = 0
 // 解析代数：同一位置的文件版本更新时作废旧结果，并让旧任务收尾后只重排最新版本。
@@ -727,8 +730,96 @@ async function acceptBySniff(incoming: IncomingFile) {
   pump()
 }
 
+/** 撤销窗口：移除后 10 秒内可恢复（FEAT-1） */
+const UNDO_WINDOW_MS = 10_000
+
+interface RemovalEntry {
+  item: ImageItem
+  key: string
+  /** 移除时对批次计数的增量（负值）；撤销时取反恢复 */
+  totalDelta: number
+  doneDelta: number
+}
+
+let undoEntries: RemovalEntry[] | null = null
+let undoTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 撤销条状态：非 null 时 App 显示「已移除 N 项 / 撤销」 */
+export const undoState = ref<{ count: number } | null>(null)
+
+/** 关闭撤销窗口（用户主动关闭 / 清空列表 / 新一次移除覆盖旧窗口） */
+export function dismissUndo(): void {
+  if (undoTimer !== null) {
+    clearTimeout(undoTimer)
+    undoTimer = null
+  }
+  undoEntries = null
+  undoState.value = null
+}
+
+function startUndoWindow(entries: RemovalEntry[]) {
+  dismissUndo()
+  undoEntries = entries
+  undoState.value = { count: entries.length }
+  undoTimer = setTimeout(() => {
+    undoTimer = null
+    undoEntries = null
+    undoState.value = null
+  }, UNDO_WINDOW_MS)
+}
+
+/**
+ * 撤销最近一次用户移除（FEAT-1）：恢复条目、索引、预览 URL 与存档记录。
+ * 期间列表已变化（同位置出现新版本 / 同指纹被重新添加）时跳过该项，避免出现重复版本；
+ * 返回实际恢复的条目数。
+ */
+export function undoLastRemoval(): number {
+  const entries = undoEntries
+  dismissUndo()
+  if (!entries?.length) return 0
+  let restored = 0
+  for (const entry of entries) {
+    const { item, key } = entry
+    if (liveIds.has(item.id)) continue
+    // 同位置已有其他版本（扫描 / 拖入在撤销窗口内更新了文件）：不恢复旧版本
+    if ((itemsByIdentityKey.get(fileIdentityKeyOf(item))?.size ?? 0) > 0) continue
+    if (seenKeys.has(key) || detachedByKey.has(key)) continue
+    liveIds.add(item.id)
+    if (item.detached) detachedByKey.set(key, item)
+    else seenKeys.add(key)
+    indexIdentityItem(item)
+    indexLegacyItem(item)
+    state.items.push(item)
+    deletedKeys.delete(key)
+    // 移除时已回收缩略图 URL；存档项由卡片进入视口时按 thumbB64 惰性重建
+    item.thumb = undefined
+    if (item.file && !item.metaOnly && !item.detached) item.url = URL.createObjectURL(item.file)
+    // 恢复移除时扣减的批次账（在途项移除时未动账，增量为 0）
+    state.batchTotal -= entry.totalDelta
+    state.batchDone -= entry.doneDelta
+    if (item.status === 'pending' && !queue.includes(item) && !hasInflight(item.id)) {
+      queue.push(item)
+      // 在途结果若已在移除期间丢弃，需重新计一次总数，避免进度条永远差一项
+      if (entry.totalDelta === 0) state.batchTotal++
+      batchCounted.add(item)
+    }
+    if (persistAvailable) markDirty(item)
+    restored++
+  }
+  if (restored) {
+    pump()
+    schedulePersist()
+  }
+  return restored
+}
+
 export function removeItem(item: ImageItem) {
   removeItems([item])
+}
+
+/** 用户单条移除（可撤销）：卡片移除 / 详情键盘删除共用 */
+export function removeItemUndoable(item: ImageItem) {
+  removeItemsInternal([item], true)
 }
 
 /**
@@ -736,20 +827,31 @@ export function removeItem(item: ImageItem) {
  * （逐条 removeItem 是 O(n·m)，万级列表批量删除会卡顿）。语义与单条移除一致：
  * 不在当前列表中的项跳过；在途项不动计数（完成时对账），排队项整体出队，
  * done / error 两本账一起减。
+ * 用户入口使用 removeItemsUndoable：保留 10 秒撤销窗口；内部清理走本函数。
  */
 export function removeItems(items: ImageItem[]) {
+  removeItemsInternal(items, false)
+}
+
+/** 用户批量移除（可撤销）：批量操作条 / 重复治理共用 */
+export function removeItemsUndoable(items: ImageItem[]): number {
+  return removeItemsInternal(items, true)
+}
+
+function removeItemsInternal(items: ImageItem[], undoable: boolean): number {
   const removing = new Set<ImageItem>(items)
-  if (!removing.size) return
+  if (!removing.size) return 0
   const removedItems: ImageItem[] = []
   const keep: ImageItem[] = []
   for (const it of state.items) {
     if (removing.delete(it)) removedItems.push(it)
     else keep.push(it)
   }
-  if (!removedItems.length) return
+  if (!removedItems.length) return 0
   state.items = keep
   const queuedItems = new Set(queue)
   const queuedIds = new Set<string>()
+  const entries: RemovalEntry[] = []
   for (const it of removedItems) {
     liveIds.delete(it.id)
     const key = recordKeyOf(it)
@@ -763,22 +865,26 @@ export function removeItems(items: ImageItem[]) {
     URL.revokeObjectURL(it.url)
     if (it.thumb) URL.revokeObjectURL(it.thumb)
     const wasQueued = queuedItems.has(it)
+    const counted = batchCounted.has(it)
+    let totalDelta = 0
+    let doneDelta = 0
     if (wasQueued) {
       queuedIds.add(it.id)
-      if (batchCounted.has(it)) state.batchTotal--
+      if (counted) totalDelta = -1
     }
     if (hasInflight(it.id)) {
       // 在途（含结果已入暂存未应用）：无法中断也不动计数，其 batchDone++ 已在完成时
       // 与保留的 batchTotal 对齐；若另有排队的新版本，上面已单独撤销其计数
     } else if (it.status === 'pending') {
-      if (!wasQueued && batchCounted.has(it)) state.batchTotal--
-    } else {
+      if (!wasQueued && counted) totalDelta = -1
+    } else if (counted) {
       // done / error：两本账一起减（仅限已计入批次的项；存档项从未计入，不能动账）
-      if (batchCounted.has(it)) {
-        state.batchTotal--
-        state.batchDone--
-      }
+      totalDelta = -1
+      doneDelta = -1
     }
+    state.batchTotal += totalDelta
+    state.batchDone += doneDelta
+    if (undoable) entries.push({ item: it, key, totalDelta, doneDelta })
   }
   // 排队项一次性出队（逐条 indexOf 是 O(队列长 × 移除数)）
   if (queuedIds.size) {
@@ -788,10 +894,20 @@ export function removeItems(items: ImageItem[]) {
     }
     queue.length = w
   }
+  // 大批移除后清空长文本常驻池（OPT-2）：被删条目的工作流文本通常不会再被命中，
+  // 继续留在池里只会占用内存；清空只释放池引用，不影响列表内其余条目。
+  if (removedItems.length >= CACHE_RESET_REMOVAL) {
+    clearInternPool()
+    clearContentHashCache()
+  }
+  if (undoable && entries.length) startUndoWindow(entries)
   schedulePersist()
+  return removedItems.length
 }
 
 export function clearAll() {
+  // 清空后撤销窗口必须失效：否则撤销会把已清空条目重新装回列表
+  dismissUndo()
   for (const i of state.items) {
     URL.revokeObjectURL(i.url)
     if (i.thumb) URL.revokeObjectURL(i.thumb)
@@ -819,6 +935,7 @@ export function clearAll() {
   state.batchDone = 0
   batchEpoch++ // 在途解析完成后不再计入新批次
   clearInternPool() // 在途解析完成时会把结果串重新入池，无碍
+  clearContentHashCache() // 清空后内容哈希缓存不再有复用价值，回收其持有的长文本
   persistEpoch++ // 作废在途写库批次，历史记录一并清除（所见即所得）
   dirtyItems.clear()
   dirtyThumbs.clear()
@@ -1862,15 +1979,17 @@ export const dupeCount = computed(() => sameSourceIds.value.size)
  * G3：重复治理——每个同源组（同工作流同种子）只保留最新一张（seq 1，组内按
  * mtime 新→旧编号），其余整批移除。作用于全库（组划分与筛选无关），
  * 返回移除的条目数组，供调用方收起正打开的详情 / 对比抽屉。
+ * 用户点击入口传 undoable=true，保留撤销窗口（FEAT-1）。
  */
-export function keepLatestOfDupes(): ImageItem[] {
+export function keepLatestOfDupes(undoable = false): ImageItem[] {
   const groups = sameSourceGroups.value
   const toRemove: ImageItem[] = []
   for (const it of state.items) {
     const info = groups.get(it.id)
     if (info && info.total > 1 && info.seq > 1) toRemove.push(it)
   }
-  removeItems(toRemove)
+  if (undoable) removeItemsUndoable(toRemove)
+  else removeItems(toRemove)
   return toRemove
 }
 

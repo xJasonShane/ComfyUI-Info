@@ -3,9 +3,10 @@
  * 探测 / 建库 / blob 去重 / 目录书签 / v2→v3 迁移等真实库行为在那里覆盖不到，
  * 这里以 fake-indexeddb 走完整读写链路。
  */
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import 'fake-indexeddb/auto'
 import {
+  clearContentHashCache,
   clearDirBookmarks,
   clearPersisted,
   deletePersisted,
@@ -125,6 +126,37 @@ describe('存档读写（真实 IndexedDB）', () => {
 
     // 同内容 prompt 只占一个 blob 行（内容寻址去重）
     expect(await rawCount('blobs')).toBe(2) // bigPrompt + 'cat\nSteps: 20'
+  })
+
+  it('同批同内容记录只提交一次 blob，避免万级批次写放大（OPT-1）', async () => {
+    const putSpy = vi.spyOn(IDBObjectStore.prototype, 'put')
+    try {
+      const prompt = '{"3":{"class_type":"KSampler","inputs":{"seed":42}}}'
+      const records = Array.from({ length: 50 }, (_, i) =>
+        rec({
+          key: `batch/${i}.png|1|1`,
+          name: `${i}.png`,
+          raw: { source: 'comfyui', prompt },
+        }),
+      )
+      await putPersisted(records)
+      const blobPuts = putSpy.mock.calls.filter(
+        ([value]) => typeof (value as { hash?: unknown }).hash === 'string',
+      )
+      expect(blobPuts).toHaveLength(1)
+      expect(await rawCount('items')).toBe(50)
+      expect(await rawCount('blobs')).toBe(1)
+    } finally {
+      putSpy.mockRestore()
+    }
+  })
+
+  it('清空内容哈希缓存后相同内容仍生成同一 blob 引用（OPT-2）', () => {
+    const text = '{"3":{"class_type":"KSampler","inputs":{"seed":7}}}'
+    const first = splitPersistRecord(rec({ raw: { source: 'comfyui', prompt: text } })).stored
+    clearContentHashCache()
+    const second = splitPersistRecord(rec({ raw: { source: 'comfyui', prompt: text } })).stored
+    expect(second.prompt).toBe(first.prompt)
   })
 
   it('删除与清空：deletePersisted 精确删行，clearPersisted 连 blobs 一起清', async () => {
